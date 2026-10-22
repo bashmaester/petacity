@@ -192,17 +192,20 @@ export const TOWER_VERT = /* glsl */ `
 attribute float aSeed;
 attribute vec3 aDims;
 attribute float aKind;
+attribute float aStyle;
 varying vec3 vLocal;
 varying vec3 vN;
 varying vec3 vWorld;
 varying vec3 vDims;
 varying float vSeed;
 varying float vKind;
+varying float vStyle;
 void main() {
   vLocal = position;
   vDims = aDims;
   vSeed = aSeed;
   vKind = aKind;
+  vStyle = aStyle;
   vec3 nrm = mat3(instanceMatrix) * normal;
   vec4 wp = instanceMatrix * vec4(position, 1.0);
   wp = modelMatrix * wp;
@@ -245,6 +248,7 @@ varying vec3 vWorld;
 varying vec3 vDims;
 varying float vSeed;
 varying float vKind;
+varying float vStyle;
 ${GLSL_NOISE}
 ${GLSL_UTIL}
 
@@ -269,6 +273,22 @@ void main() {
     base *= 0.92 + 0.16 * hash12(vec2(vSeed * 13.1, 2.2));
   }
 
+  // facade style per instance: 0 normal, 1 outline-glow, 2 sparse monolith
+  float sty = vStyle;
+  float densMul = 1.0;
+  float edgeBoost = 0.0;
+  float bayMul = 1.0;
+  if (sty > 0.5 && sty < 1.5) {   // wireframe towers: dark body, neon edges
+    base *= 0.10;
+    densMul = 0.0;
+    edgeBoost = 1.6;
+  } else if (sty > 1.5) {          // heavy monoliths: few big windows
+    base *= 0.82;
+    densMul = 0.22;
+    bayMul = 1.7;
+    edgeBoost = 0.35;
+  }
+
   // simple sun + sky/ground ambient
   float dif = max(dot(n, normalize(uSunDir)), 0.0);
   float toonD = floor(dif * 3.0 + 0.5) / 3.0;
@@ -287,11 +307,11 @@ void main() {
 
   if (face < 0.5 || face > 1.5) {
     // windows on side faces
-    float floorH = 3.5;
-    float bayW = 3.9;
-    float dens = uWinDensity;
+    float floorH = 3.5 * bayMul;
+    float bayW = 3.9 * bayMul;
+    float dens = uWinDensity * densMul;
     float glow = uWinGlow;
-    if (vKind > 0.5 && vKind < 1.5) { floorH = 5.2; bayW = 6.2; dens *= 0.3; glow *= 0.6; }
+    if (vKind > 0.5 && vKind < 1.5) { floorH = 5.2 * bayMul; bayW = 6.2 * bayMul; dens *= 0.3; glow *= 0.6; }
     if (vKind > 1.5) dens = 0.0;
 
     vec2 g = uvm / vec2(bayW, floorH);
@@ -325,8 +345,9 @@ void main() {
   else ed = min(ad.x, ad.y);
   float wd = fwidth(ed);
   float edge = 1.0 - smoothstep(0.0, max(wd, 1e-5) * 1.8, ed);
-  col = mix(col, uEdgeCol * (0.55 + uBandGlow * 0.35), edge * min(uEdge, 1.0));
-  col += uEdgeCol * edge * max(uEdge - 1.0, 0.0);
+  float eK = uEdge + edgeBoost;
+  col = mix(col, uEdgeCol * (0.55 + uBandGlow * 0.35), edge * min(eK, 1.0));
+  col += uEdgeCol * edge * max(eK - 1.0, 0.0);
 
   // fog
   float dist = length(vWorld - cameraPosition);
@@ -460,5 +481,73 @@ void main() {
   float across = 1.0 - abs(vUv.y * 2.0 - 1.0);
   float a = along * across * across * uLightK * 0.85;
   gl_FragColor = vec4(vCol * (0.55 + along), a);
+}
+`;
+
+/* ----------------------------------------------------- volumetric beams */
+// Fake-volumetric shafts built from two crossed quads: alpha falls off along
+// the beam (aBeamT) and across its width (aBeamW), with slow noise wobble.
+
+export const BEAM_VERT = /* glsl */ `
+attribute float aBeamT;
+attribute float aBeamW;
+varying float vT;
+varying float vW;
+void main() {
+  vT = aBeamT;
+  vW = aBeamW;
+  vec4 wp = vec4(position, 1.0);
+  #ifdef USE_INSTANCING
+    wp = instanceMatrix * wp;
+  #endif
+  wp = modelMatrix * wp;
+  gl_Position = projectionMatrix * viewMatrix * wp;
+}
+`;
+
+export const BEAM_FRAG = /* glsl */ `
+uniform vec3 uBeamCol;
+uniform float uBeamK;
+uniform float uTime;
+uniform float uLightK;
+varying float vT;
+varying float vW;
+${GLSL_NOISE}
+
+void main() {
+  float core = sin(3.14159 * clamp(vW, 0.0, 1.0));
+  float along = pow(max(1.0 - vT, 0.0), 1.35);
+  float wobble = 0.72 + 0.28 * vnoise(vec2(vT * 5.0, uTime * 0.18));
+  float a = core * along * wobble * uBeamK * max(uLightK, 0.12);
+  gl_FragColor = vec4(uBeamCol * (0.6 + 0.8 * along), a);
+}
+`;
+
+/* --------------------------------------------------------- light pools */
+// Soft warm pools of lamp light lying on the ground.
+
+export const POOL_VERT = /* glsl */ `
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  vec4 wp = vec4(position, 1.0);
+  #ifdef USE_INSTANCING
+    wp = instanceMatrix * wp;
+  #endif
+  wp = modelMatrix * wp;
+  gl_Position = projectionMatrix * viewMatrix * wp;
+}
+`;
+
+export const POOL_FRAG = /* glsl */ `
+uniform vec3 uPoolCol;
+uniform float uPoolK;
+uniform float uLightK;
+varying vec2 vUv;
+void main() {
+  float r = length(vUv - 0.5) * 2.0;
+  float a = 1.0 - smoothstep(0.15, 1.0, r);
+  a *= a * uPoolK * max(uLightK, 0.15);
+  gl_FragColor = vec4(uPoolCol * (0.5 + 0.5 * a), a);
 }
 `;

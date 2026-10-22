@@ -11,6 +11,8 @@ export function streetWidth(idx) {
   return ((idx % 4) + 4) % 4 === 0 ? AVENUE : STREET;
 }
 
+const clamp01 = (x) => Math.max(0, Math.min(1, x));
+
 /**
  * Instance kinds:
  *   0 wall   — windowed facade
@@ -35,6 +37,24 @@ const LM_NAMES = {
 /** Public-space kinds — living, lit, low-rise places (geometry lives in scene.js). */
 export const PLACE_KINDS = ['market', 'plaza', 'park', 'fair'];
 
+/**
+ * District archetypes — 3×3-block quarters that share a character, so the
+ * city has coherent downtown / sparse / monolith / low-town / rift areas
+ * instead of the same randomness everywhere.
+ */
+export const DISTRICT_KINDS = ['dense', 'sparse', 'towers', 'mono', 'lowtown', 'rift'];
+
+const DPARAMS = {
+  // skip: whole-block gap chance · hMul/wMul: size · lots: max lots per axis
+  // styles: facade mix (0 normal, 1 outline-glow, 2 sparse monolith) · mono: slab chance
+  dense:   { skip: 0.10, hMul: 1.00, wMul: 1.00, lots: 3, styles: [0, 0, 0, 0, 1, 2], mono: 0.00, clutter: 1.0 },
+  sparse:  { skip: 0.42, hMul: 0.62, wMul: 1.05, lots: 3, styles: [0, 0, 2, 2, 1, 0], mono: 0.10, clutter: 0.7 },
+  towers:  { skip: 0.20, hMul: 1.38, wMul: 0.72, lots: 2, styles: [0, 0, 0, 1, 0, 1], mono: 0.00, clutter: 0.8 },
+  mono:    { skip: 0.16, hMul: 0.92, wMul: 1.15, lots: 3, styles: [1, 1, 2, 2, 0, 1], mono: 0.75, clutter: 0.5 },
+  lowtown: { skip: 0.06, hMul: 0.20, wMul: 1.00, lots: 4, styles: [0, 0, 2, 0, 2, 0], mono: 0.05, clutter: 1.7 },
+  rift:    { skip: 0.58, hMul: 1.10, wMul: 0.55, lots: 2, styles: [1, 1, 0, 1, 2, 1], mono: 0.12, clutter: 0.35 },
+};
+
 const PLACE_NAMES = {
   market: ['Night Market', 'Lantern Bazaar', 'Spice Row', 'The Exchange', 'Covered Market', 'Ember Stalls'],
   plaza: ['Signal Plaza', 'Founders Square', 'Civic Plaza', 'The Forum', 'Assembly Ground', 'Echo Square'],
@@ -54,10 +74,32 @@ export function generateCity(seed = 4417, radius = 13) {
   const beacons = [];
   let towers = 0;
 
-  const push = (x, y, z, w, h, d, s, kind) => {
-    items.push(x, y, z, w, h, d, s, kind);
+  const push = (x, y, z, w, h, d, s, kind, style = 0) => {
+    items.push(x, y, z, w, h, d, s, kind, style);
   };
   const pushBeacon = (x, y, z, r = 0) => beacons.push({ x, y, z, phase: r, r });
+
+  // Districts: coherent quarters via a smooth noise field + hash jitter.
+  const DS = 3; // blocks per district side
+  const dMap = new Map();
+  const districts = [];
+  const districtOf = (i, j) => {
+    const di = Math.floor((i + 1024) / DS);
+    const dj = Math.floor((j + 1024) / DS);
+    const key = di + ',' + dj;
+    let d = dMap.get(key);
+    if (!d) {
+      const v = clamp01(fbm2D(noise, di * 0.62, dj * 0.62, 2));
+      const jitter = hash2i(di, dj, seed ^ 0x2f1a39);
+      let idx = Math.floor((v * 0.72 + jitter * 0.28) * DISTRICT_KINDS.length);
+      idx = Math.max(0, Math.min(DISTRICT_KINDS.length - 1, idx));
+      const kind = DISTRICT_KINDS[idx];
+      d = { di, dj, kind, ...DPARAMS[kind] };
+      dMap.set(key, d);
+      districts.push({ di, dj, kind });
+    }
+    return d;
+  };
 
   // A few landmark spires, placed by hash so they are stable per seed.
   const spireCells = new Set();
@@ -108,26 +150,29 @@ export function generateCity(seed = 4417, radius = 13) {
       // Per-block RNG: independent of iteration order.
       const rand = mulberry32(hash2i(i, j, seed ^ 0x51ed270b) * 4294967296);
       const h01 = fbm2D(noise, cx / 1150, cz / 1150, 3); // district height field
+      const d = districtOf(i, j);
 
       if (lmCells.has(i + ',' + j)) continue; // landmark block — see landmarks[]
       if (spireCells.has(i + ',' + j)) {
-        addSpire(push, pushBeacon, rand, cx, cz, h01);
+        addSpire(push, pushBeacon, rand, cx, cz, h01, d);
         towers++;
         continue;
       }
+      // sparse / rift quarters leave whole blocks empty — parks, gaps, voids
+      if (rand() < d.skip * 0.55) continue;
 
       // Split the block into lots (jittered grid, 2–4 per axis).
-      const nx = 2 + Math.floor(rand() * (rand() < 0.25 ? 1 : 3));
-      const nz = 2 + Math.floor(rand() * (rand() < 0.25 ? 1 : 3));
+      const nx = 2 + Math.floor(rand() * (rand() < 0.25 ? 1 : Math.max(1, d.lots - 1)));
+      const nz = 2 + Math.floor(rand() * (rand() < 0.25 ? 1 : Math.max(1, d.lots - 1)));
       const xs = splitSpan(x0, x1, nx, rand);
       const zs = splitSpan(z0, z1, nz, rand);
 
       for (let a = 0; a < nx; a++) {
         for (let b = 0; b < nz; b++) {
           // Occasional empty lot -> a gap/plaza in the block.
-          if (a + 1 < nx && rand() < 0.12) continue;
-          if (b + 1 < nz && rand() < 0.12) continue;
-          addTower(push, pushBeacon, rand, xs[a], xs[a + 1], zs[b], zs[b + 1], h01);
+          if (a + 1 < nx && rand() < 0.08 + d.skip * 0.5) continue;
+          if (b + 1 < nz && rand() < 0.08 + d.skip * 0.5) continue;
+          addTower(push, pushBeacon, rand, xs[a], xs[a + 1], zs[b], zs[b + 1], h01, d);
           towers++;
         }
       }
@@ -139,7 +184,7 @@ export function generateCity(seed = 4417, radius = 13) {
     pushBeacon(lm.x, lm.h + 6, lm.z, hash2i(lm.bi + 5, lm.bj + 9, seed));
   }
 
-  const n = items.length / 8;
+  const n = items.length / 9;
   const x = new Float32Array(n);
   const y = new Float32Array(n);
   const z = new Float32Array(n);
@@ -148,22 +193,24 @@ export function generateCity(seed = 4417, radius = 13) {
   const d = new Float32Array(n);
   const s = new Float32Array(n);
   const kind = new Float32Array(n);
+  const style = new Float32Array(n);
   let maxY = 0;
   for (let k = 0; k < n; k++) {
-    x[k] = items[k * 8 + 0];
-    y[k] = items[k * 8 + 1];
-    z[k] = items[k * 8 + 2];
-    w[k] = items[k * 8 + 3];
-    h[k] = items[k * 8 + 4];
-    d[k] = items[k * 8 + 5];
-    s[k] = items[k * 8 + 6];
-    kind[k] = items[k * 8 + 7];
+    x[k] = items[k * 9 + 0];
+    y[k] = items[k * 9 + 1];
+    z[k] = items[k * 9 + 2];
+    w[k] = items[k * 9 + 3];
+    h[k] = items[k * 9 + 4];
+    d[k] = items[k * 9 + 5];
+    s[k] = items[k * 9 + 6];
+    kind[k] = items[k * 9 + 7];
+    style[k] = items[k * 9 + 8];
     maxY = Math.max(maxY, y[k] + h[k] / 2);
   }
 
   const lanes = makeLanes(seed, radius);
   const lamps = makeLamps(seed, radius);
-  return { seed, radius, count: n, towers, maxY, x, y, z, w, h, d, s, kind, landmarks, places, lanes, beacons, lamps };
+  return { seed, radius, count: n, towers, maxY, x, y, z, w, h, d, s, kind, style, districts, landmarks, places, lanes, beacons, lamps };
 }
 
 /** Street lamps along both sides of every avenue — the night grid, lit. */
@@ -297,20 +344,75 @@ function splitSpan(a, b, n, rand) {
   return out;
 }
 
-/** One tower: stacked segments with setbacks, podium, roof clutter, mast. */
-function addTower(push, pushBeacon, rand, x0, x1, z0, z1, h01) {
-  const w = x1 - x0;
-  const d = z1 - z0;
-  if (w < 12 || d < 12) return;
+/**
+ * One building: variant chosen by district archetype —
+ * stepped tower (default), monolith slab, rift spindle, or twin shafts with
+ * a skybridge. Facade style: 0 normal windowed, 1 outline-glow, 2 sparse.
+ */
+function addTower(push, pushBeacon, rand, x0, x1, z0, z1, h01, d) {
+  const w0 = x1 - x0;
+  const d0 = z1 - z0;
+  if (w0 < 12 || d0 < 12) return;
   const cx = (x0 + x1) / 2;
   const cz = (z0 + z1) / 2;
+  const w = Math.max(11, w0 * d.wMul);
+  const dp = Math.max(11, d0 * d.wMul);
+  const style = d.styles[Math.floor(rand() * d.styles.length) % d.styles.length];
 
   const floorH = rand() < 0.3 ? 3.1 : rand() < 0.7 ? 3.6 : 4.4;
-  let H = (24 + 520 * Math.pow(h01, 1.35)) * (0.5 + rand() * 1.05);
+  let H = (24 + 520 * Math.pow(h01, 1.35)) * (0.5 + rand() * 1.05) * d.hMul;
   if (rand() < 0.05) H *= 1.5 + rand() * 0.9; // rare spire-ish
-  H = Math.max(28, Math.min(840, H));
+  H = Math.max(16, Math.min(840, H));
   H = Math.round(H / floorH) * floorH;
 
+  // ---- variant: heavy monolith slab (flat top, sparse windows) ----
+  if (rand() < d.mono) {
+    const mh = Math.max(30, Math.min(520, H * 1.35));
+    push(cx, mh / 2, cz, w * 0.94, mh, dp * 0.94, rand(), KIND.WALL, style >= 1 ? style : 2);
+    push(cx, mh + 2.2, cz, w * 0.66, 4.4, dp * 0.66, rand(), KIND.SLAB, 2);
+    if (rand() < 0.55) {
+      const ah = 10 + rand() * 26;
+      push(cx + (rand() - 0.5) * w * 0.3, mh + 4.4 + ah / 2, cz, 1.8, ah, 1.8, rand(), KIND.MAST, 2);
+      pushBeacon(cx, mh + 4.4 + ah + 1, cz, rand());
+    }
+    addGrit(push, rand, cx, cz, w, dp, d, 1.2);
+    return;
+  }
+
+  // ---- variant: rift spindle — very thin, very tall, often outline ----
+  if (d.kind === 'rift' && rand() < 0.5) {
+    const sw = Math.min(w, dp) * 0.38;
+    const sh = Math.max(120, Math.min(900, H * 1.7));
+    push(cx, sh / 2, cz, sw, sh, sw, rand(), KIND.WALL, style === 0 ? 1 : style);
+    push(cx, sh + 1.5, cz, sw * 1.5, 3, sw * 1.5, rand(), KIND.BAND, 1);
+    const ah = 20 + rand() * 50;
+    push(cx, sh + 3 + ah / 2, cz, 1.4, ah, 1.4, rand(), KIND.MAST, 1);
+    pushBeacon(cx, sh + 3 + ah + 1, cz, rand());
+    return;
+  }
+
+  // ---- variant: twin shafts + skybridge ----
+  if (rand() < 0.16 && w > 34 && dp > 34) {
+    const tw = w * 0.32;
+    const gap = w * 0.16;
+    const th = H * (0.8 + rand() * 0.35);
+    for (const sx of [-1, 1]) {
+      const tx = cx + sx * (tw / 2 + gap);
+      push(tx, th / 2, cz, tw, th, dp * 0.8, rand(), KIND.WALL, style);
+      push(tx, th + 1.2, cz, tw * 0.8, 2.4, dp * 0.6, rand(), KIND.SLAB, style);
+    }
+    // skybridge at ~55% height
+    const bh = 7 + rand() * 6;
+    push(cx, th * 0.55, cz, w * 0.62, bh, Math.min(dp * 0.42, 16), rand(), KIND.SLAB, style);
+    if (th > 150 && rand() < 0.6) {
+      push(cx, th + 2, cz, 1.5, 14 + rand() * 22, 1.5, rand(), KIND.MAST, style);
+      pushBeacon(cx, th + 18, cz, rand());
+    }
+    addGrit(push, rand, cx, cz, w, dp, d, 1);
+    return;
+  }
+
+  // ---- default: stacked segments with setbacks ----
   const nSeg = 2 + Math.floor(rand() * 4);
   const share = [];
   let total = 0;
@@ -332,13 +434,13 @@ function addTower(push, pushBeacon, rand, x0, x1, z0, z1, h01) {
       id += rand() * (3 + t * 14);
     }
     const sw = Math.max(10, w - iw * 2);
-    const sd = Math.max(10, d - id * 2);
-    push(cx, y + segH / 2, cz, sw, segH, sd, rand(), KIND.WALL);
+    const sd = Math.max(10, dp - id * 2);
+    push(cx, y + segH / 2, cz, sw, segH, sd, rand(), KIND.WALL, style);
     y += segH;
 
     // Machine boxes on some segment tops.
-    if (rand() < 0.35) {
-      const m = 1 + Math.floor(rand() * 2);
+    if (rand() < 0.24 + 0.3 * d.clutter) {
+      const m = 1 + Math.floor(rand() * 2 * Math.min(2, d.clutter));
       for (let k = 0; k < m; k++) {
         const mw = 4 + rand() * Math.min(12, sw * 0.3);
         const md = 4 + rand() * Math.min(12, sd * 0.3);
@@ -347,49 +449,74 @@ function addTower(push, pushBeacon, rand, x0, x1, z0, z1, h01) {
           cx + (rand() - 0.5) * Math.max(0, sw - mw - 4),
           y + mh / 2,
           cz + (rand() - 0.5) * Math.max(0, sd - md - 4),
-          mw, mh, md, rand(), KIND.SLAB
+          mw, mh, md, rand(), KIND.SLAB, style
         );
       }
     }
   }
 
   // Street-facing podium.
-  if (rand() < 0.45 && Math.min(w, d) > 22) {
+  if (rand() < 0.45 && Math.min(w, dp) > 22) {
     const ph = 8 + rand() * 13;
-    push(cx, ph / 2, cz, w * 1.02, ph, d * 1.02, rand(), KIND.SLAB);
+    push(cx, ph / 2, cz, w * 1.02, ph, dp * 1.02, rand(), KIND.SLAB, style);
   }
 
   // Roof slab + mast + aviation light.
   const tw = Math.max(10, w - iw * 2) * 0.92;
-  const td = Math.max(10, d - id * 2) * 0.92;
-  push(cx, y + 1.1, cz, tw, 2.2, td, rand(), KIND.SLAB);
+  const td = Math.max(10, dp - id * 2) * 0.92;
+  push(cx, y + 1.1, cz, tw, 2.2, td, rand(), KIND.SLAB, style);
   if (H > 170 && rand() < 0.7) {
     const ah = 12 + rand() * 40;
-    push(cx, y + 2.2 + ah / 2, cz, 1.6, ah, 1.6, rand(), KIND.MAST);
-    push(cx, y + 2.2 + ah + 0.7, cz, 1.1, 1.4, 1.1, rand(), KIND.BAND);
+    push(cx, y + 2.2 + ah / 2, cz, 1.6, ah, 1.6, rand(), KIND.MAST, style);
+    push(cx, y + 2.2 + ah + 0.7, cz, 1.1, 1.4, 1.1, rand(), KIND.BAND, style);
     pushBeacon(cx, y + 2.2 + ah + 1.6, cz, rand());
+  }
+  addGrit(push, rand, cx, cz, w, dp, d, 1);
+}
+
+/** Street-level grit: kiosks, sheds, containers and light poles around a lot. */
+function addGrit(push, rand, cx, cz, w, dp, d, scale = 1) {
+  const n = Math.floor(rand() * 3.2 * d.clutter * scale);
+  for (let k = 0; k < n; k++) {
+    const gw = 3 + rand() * 7;
+    const gd = 3 + rand() * 7;
+    const gh = 2.5 + rand() * 6;
+    push(
+      cx + (rand() - 0.5) * w * 0.98,
+      gh / 2,
+      cz + (rand() - 0.5) * dp * 0.98,
+      gw, gh, gd, rand(), KIND.SLAB, 2
+    );
+  }
+  // occasional light pole with a glowing tip
+  if (rand() < 0.3 * d.clutter) {
+    const px = cx + (rand() - 0.5) * w;
+    const pz = cz + (rand() - 0.5) * dp;
+    push(px, 7, pz, 0.8, 14, 0.8, rand(), KIND.MAST, 0);
+    push(px, 14.6, pz, 1.6, 1.2, 1.6, rand(), KIND.BAND, 0);
   }
 }
 
 /** Landmark: tall tapering stack with emissive bands and a long mast. */
-function addSpire(push, pushBeacon, rand, cx, cz, h01) {
+function addSpire(push, pushBeacon, rand, cx, cz, h01, d = { hMul: 1, clutter: 1 }) {
   const H = 520 + h01 * 380 + rand() * 120;
   const r0 = 22 + rand() * 12;
+  const style = rand() < 0.35 ? 1 : 0;
   const nSeg = 6 + Math.floor(rand() * 3);
   let y = 0;
   for (let i = 0; i < nSeg; i++) {
     const segH = H / nSeg;
     const t = i / (nSeg - 1);
     const r = r0 * (1 - t * 0.62) * (0.92 + rand() * 0.16);
-    push(cx, y + segH / 2, cz, r * 2, segH, r * 2, rand(), KIND.WALL);
+    push(cx, y + segH / 2, cz, r * 2, segH, r * 2, rand(), KIND.WALL, style);
     y += segH;
     if (i % 2 === 1) {
-      push(cx, y + 0.8, cz, r * 2.35, 1.6, r * 2.35, rand(), KIND.BAND);
+      push(cx, y + 0.8, cz, r * 2.35, 1.6, r * 2.35, rand(), KIND.BAND, style);
     }
   }
-  push(cx, y + 2, cz, r0 * 0.9, 4, r0 * 0.9, rand(), KIND.BAND);
+  push(cx, y + 2, cz, r0 * 0.9, 4, r0 * 0.9, rand(), KIND.BAND, style);
   const ah = 60 + rand() * 70;
-  push(cx, y + 4 + ah / 2, cz, 2, ah, 2, rand(), KIND.MAST);
-  push(cx, y + 4 + ah + 1, cz, 1.6, 2, 1.6, rand(), KIND.BAND);
+  push(cx, y + 4 + ah / 2, cz, 2, ah, 2, rand(), KIND.MAST, style);
+  push(cx, y + 4 + ah + 1, cz, 1.6, 2, 1.6, rand(), KIND.BAND, style);
   pushBeacon(cx, y + 4 + ah + 2.2, cz, rand());
 }

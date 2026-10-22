@@ -1,7 +1,7 @@
 // Node smoke tests for the pure-JS city generator. Run: node --test tests/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generateCity, streetWidth, AVENUE, STREET, KIND, LM_KINDS, PLACE_KINDS, CELL } from '../src/city.js';
+import { generateCity, streetWidth, AVENUE, STREET, KIND, LM_KINDS, PLACE_KINDS, DISTRICT_KINDS, CELL } from '../src/city.js';
 import { mulberry32, hash2i, makeNoise2D, fbm2D } from '../src/prng.js';
 
 test('mulberry32 is deterministic and in range', () => {
@@ -142,4 +142,38 @@ test('street lamps line the avenues', () => {
     const onZ = Math.abs(L.z - nearestZ) < 20 && ((Math.round(nearestZ / CELL) % 4) + 4) % 4 === 0;
     assert.ok(onX || onZ, `lamp (${L.x},${L.z}) not near an avenue`);
   }
+});
+
+test('districts give the city coherent, varied quarters', () => {
+  const city = generateCity(4417, 10);
+  assert.ok(city.districts.length >= 25, `districts=${city.districts.length}`);
+  for (const d of city.districts) {
+    assert.ok(DISTRICT_KINDS.includes(d.kind), d.kind);
+    assert.ok(Number.isInteger(d.di) && Number.isInteger(d.dj));
+  }
+  const kinds = new Set(city.districts.map((d) => d.kind));
+  assert.ok(kinds.size >= 3, `only ${kinds.size} district kinds — want variety`);
+  // same seed -> same districts
+  const again = generateCity(4417, 10);
+  assert.deepEqual(again.districts, city.districts);
+});
+
+test('buildings carry facade styles: normal, outline-glow, sparse', () => {
+  const city = generateCity(4417, 10);
+  assert.equal(city.style.length, city.count);
+  const seen = new Set();
+  for (let i = 0; i < city.count; i++) {
+    assert.ok(city.style[i] === 0 || city.style[i] === 1 || city.style[i] === 2);
+    seen.add(city.style[i]);
+  }
+  assert.ok(seen.has(0) && seen.has(1) && seen.has(2), `styles seen: ${[...seen]}`);
+  // low-town districts really are low: district kind is per 3x3 blocks, so just
+  // check the height field bimodality exists overall
+  let tall = 0;
+  let low = 0;
+  for (let i = 0; i < city.count; i++) {
+    if (city.h[i] > 240) tall++;
+    if (city.h[i] < 40) low++;
+  }
+  assert.ok(tall > 20 && low > 20, `tall=${tall} low=${low} — want both`);
 });
