@@ -4,7 +4,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from '../vendor/three.module.js';
 import { LOOKS, LOOK_BY_ID, syncCustomLook } from '../src/looks.js';
+import * as SHADERS from '../src/shaders.js';
 import { WEATHER_VERT, SKY_FRAG } from '../src/shaders.js';
+import * as POST from '../src/post.js';
 import { makePostProcessor, POST_VERT, BRIGHT_FRAG, BLUR_FRAG, COMP_FRAG } from '../src/post.js';
 import {
   makeUniforms, makeWorld, growCity, applyLook, applyTime,
@@ -658,4 +660,50 @@ test('post-processing stack (bloom, lens FX, color grading, old-film) matches sh
 
   post.render(new THREE.Scene(), new THREE.PerspectiveCamera(), 4.2);
   assert.equal(renderCalls, 7, 'scene + bright + 4 separable blur passes + final composite');
+
+  // Bypass fallback renders directly to the screen target instead of going blank
+  let lastTarget = 'unset';
+  const bypassRenderer = {
+    setRenderTarget(rt) { lastTarget = rt; },
+    render() { renderCalls++; },
+  };
+  const post2 = makePostProcessor(bypassRenderer);
+  post2.setBypass(true);
+  renderCalls = 0;
+  post2.render(new THREE.Scene(), new THREE.PerspectiveCamera(), 1.0);
+  assert.equal(renderCalls, 1, 'bypass mode renders scene directly in 1 pass');
+  assert.equal(lastTarget, null, 'bypass mode targets default screen framebuffer');
+});
+
+test('all GLSL shaders avoid ESSL 3.00 (#version 300 es) reserved keywords', () => {
+  // Three.js r170 upgrades ShaderMaterial sources to `#version 300 es` on WebGL 2,
+  // where ESSL 3.00 §3.6/§3.7 keywords such as `active`, `sample`, `smooth`,
+  // `filter`, `common`, `half`, `fixed`, `input`, `output` fail shader compilation.
+  const ESSL300_RESERVED = new Set([
+    'centroid', 'flat', 'smooth', 'case', 'switch', 'default', 'uint',
+    'common', 'partition', 'active', 'asm', 'class', 'union', 'enum', 'typedef',
+    'template', 'this', 'goto', 'inline', 'noinline', 'volatile', 'public',
+    'static', 'extern', 'external', 'interface', 'long', 'short', 'double',
+    'half', 'fixed', 'unsigned', 'superp', 'input', 'output',
+    'hvec2', 'hvec3', 'hvec4', 'dvec2', 'dvec3', 'dvec4', 'fvec2', 'fvec3', 'fvec4',
+    'sampler3DRect', 'filter', 'sizeof', 'cast', 'namespace', 'using',
+    'row_major', 'packed', 'resource', 'sample', 'subroutine', 'coherent',
+    'restrict', 'readonly', 'writeonly', 'patch',
+  ]);
+  const allShaders = [
+    ...Object.entries(SHADERS).filter(([, v]) => typeof v === 'string'),
+    ...Object.entries(POST).filter(([, v]) => typeof v === 'string'),
+  ];
+  assert.ok(allShaders.length >= 28, 'expected all scene and post shaders');
+  for (const [name, src] of allShaders) {
+    const clean = src
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/\/\/[^\n]*/g, ' ');
+    for (const m of clean.matchAll(/\b([A-Za-z_]\w*)\b/g)) {
+      assert.ok(
+        !ESSL300_RESERVED.has(m[1]),
+        `${name} uses ESSL 3.00 reserved keyword "${m[1]}"`
+      );
+    }
+  }
 });

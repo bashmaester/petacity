@@ -69,3 +69,22 @@ test('custom palette, StormyClouds weather styles, dust motes & post-processing 
     assert.ok(html.includes(`id="${id}"`), `#${id} present in index.html`);
   }
 });
+
+test('UI toggle sits in top corner of panel, #keys avoids panel overlap, and glyph buttons carry aria-labels', () => {
+  const panelMatch = html.match(/<aside class="panel">([\s\S]*?)<\/aside>/);
+  assert.ok(panelMatch, 'panel aside exists');
+  assert.ok(panelMatch[1].includes('id="b-ui"'), '#b-ui lives inside .panel');
+  assert.ok(panelMatch[1].includes('class="panel-head"'), 'panel header row exists');
+
+  const keysRule = html.match(/^#keys\s*\{([\s\S]*?)\}/m);
+  assert.ok(keysRule, '#keys CSS rule exists');
+  assert.match(keysRule[1], /right:\s*18px/, '#keys anchored on right so it never overlaps .panel');
+  assert.match(keysRule[1], /left:\s*auto/, '#keys clears left offset');
+
+  for (const id of ['b-ui', 'b-glide', 'b-collide', 'b-new', 'b-link', 'b-seed-pal']) {
+    const tag = html.match(new RegExp(`<button[^>]*id="${id}"[^>]*>`));
+    assert.ok(tag, `button #${id} found`);
+    assert.match(tag[0], /aria-label="[^"]+"/, `#${id} has aria-label`);
+    assert.match(tag[0], /title="[^"]+"/, `#${id} has hover title`);
+  }
+});

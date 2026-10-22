@@ -10,6 +10,7 @@
 import * as THREE from '../vendor/three.module.js';
 
 export const POST_VERT = /* glsl */ `
+// petacity-post-pass
 varying vec2 vUv;
 void main() {
   vUv = uv;
@@ -18,6 +19,7 @@ void main() {
 `;
 
 export const BRIGHT_FRAG = /* glsl */ `
+// petacity-post-pass
 uniform sampler2D tScene;
 uniform float uThresh;
 varying vec2 vUv;
@@ -32,6 +34,7 @@ void main() {
 `;
 
 export const BLUR_FRAG = /* glsl */ `
+// petacity-post-pass
 uniform sampler2D tTex;
 uniform vec2 uDir;
 varying vec2 vUv;
@@ -49,6 +52,7 @@ void main() {
 `;
 
 export const COMP_FRAG = /* glsl */ `
+// petacity-post-pass
 uniform sampler2D tScene;
 uniform sampler2D tBloom;
 uniform vec2 uRes;
@@ -170,11 +174,11 @@ void main() {
     float q14 = floor(uTime * 14.0);
     for (int s = 0; s < 2; s++) {
       float fs = float(s);
-      float active = step(0.42, grainHash(vec2(q14, 17.0 + fs * 9.0)));
+      float scOn = step(0.42, grainHash(vec2(q14, 17.0 + fs * 9.0)));
       float sx = grainHash(vec2(q14 * 0.5 + fs * 31.0, 4.2)) * uRes.x;
       sx += sin(fc.y * 0.018 + uTime * 5.0 + fs * 4.0) * 1.4;
-      float line = (1.0 - smoothstep(0.0, 1.05, abs(fc.x - sx))) * active;
-      float gap = step(0.28, vnoise_lite(fc.y * 0.04 + q14 * 3.0));
+      float line = (1.0 - smoothstep(0.0, 1.05, abs(fc.x - sx))) * scOn;
+      float gap = step(0.28, fract(sin((floor(fc.y * 0.04) + q14 * 3.0) * 91.7) * 43758.5));
       col += vec3(0.85, 0.82, 0.74) * line * gap * fk * 0.28;
     }
 
@@ -189,10 +193,7 @@ void main() {
 
   gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }
-`.replace(
-  'vnoise_lite(fc.y * 0.04 + q14 * 3.0)',
-  'fract(sin((floor(fc.y * 0.04) + q14 * 3.0) * 91.7) * 43758.5)'
-);
+`;
 
 export function makePostProcessor(renderer) {
   const rtOpts = {
@@ -266,6 +267,11 @@ export function makePostProcessor(renderer) {
   const quad = new THREE.Mesh(quadGeo, compMat);
   quad.frustumCulled = false;
   quadScene.add(quad);
+  let bypass = false;
+
+  function setBypass(flag) {
+    bypass = !!flag;
+  }
 
   function setSize(width, height, dpr = 1) {
     w = Math.max(2, Math.floor(width * dpr));
@@ -292,6 +298,11 @@ export function makePostProcessor(renderer) {
   }
 
   function render(scene, camera, time = 0) {
+    if (bypass) {
+      renderer.setRenderTarget(null);
+      renderer.render(scene, camera);
+      return;
+    }
     compMat.uniforms.uTime.value = time;
     // 1. Render main 3D scene into offscreen RT
     renderer.setRenderTarget(sceneRT);
@@ -336,5 +347,5 @@ export function makePostProcessor(renderer) {
     renderer.render(quadScene, quadCam);
   }
 
-  return { sceneRT, bloomA, bloomB, brightMat, blurMat, compMat, setSize, configure, render };
+  return { sceneRT, bloomA, bloomB, brightMat, blurMat, compMat, setSize, setBypass, configure, render };
 }

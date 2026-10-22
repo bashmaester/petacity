@@ -115,6 +115,22 @@ function boot() {
   const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
   renderer.setPixelRatio(dpr);
   const post = makePostProcessor(renderer);
+  if (renderer.debug) {
+    renderer.debug.onShaderError = (gl, program, vs, fs) => {
+      const fsSrc = (fs && gl.getShaderSource && gl.getShaderSource(fs)) || '';
+      const info = [
+        gl.getProgramInfoLog && gl.getProgramInfoLog(program),
+        vs && gl.getShaderInfoLog && gl.getShaderInfoLog(vs),
+        fs && gl.getShaderInfoLog && gl.getShaderInfoLog(fs),
+      ].filter((s) => s && s.trim()).join('\n');
+      if (fsSrc.includes('petacity-post-pass')) {
+        console.warn('Post-processor shader failed to compile; falling back to direct render:\n' + info);
+        post.setBypass(true);
+      } else {
+        fatal(new Error('WebGL shader failed to compile:\n' + (info || 'unknown shader error')));
+      }
+    };
+  }
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(62, 1, 2, 28000);
@@ -400,13 +416,13 @@ function boot() {
     }
   };
 
-  // hide / show the whole interface (H) — clean view for screenshots and flying
+  // hide / show the whole interface (H) — collapses to top-corner glyph button
   const toggleUI = () => {
     const off = document.body.classList.toggle('ui-off');
     const b = $('#b-ui');
-    b.textContent = off ? 'Show UI' : 'Hide UI';
+    b.textContent = off ? '\u2630' : '\u25E7';
     b.setAttribute('aria-pressed', String(!off));
-    b.title = (off ? 'Show' : 'Hide') + ' the interface (H)';
+    b.title = (off ? 'Show' : 'Hide') + ' interface (H)';
   };
   $('#b-ui').onclick = toggleUI;
   window.addEventListener('keydown', (e) => {
@@ -416,8 +432,19 @@ function boot() {
     else if (e.key === 'c' || e.key === 'C') toggleCollision();
   });
 
+  const WEATHER_GLYPHS = [
+    '\u2600\uFE0E Clear',
+    '\u2602\uFE0E Rain',
+    '\u26A1\uFE0E Storm',
+    '\u2744\uFE0E Snow',
+    '\u2668\uFE0E Ash',
+    '\u224B Dust',
+    '\u2338 Film',
+  ];
   function syncWeatherLabel() {
-    $('#weather-label').textContent = WEATHER_NAMES[weatherMode] || 'Clear';
+    const el = $('#weather-label');
+    el.textContent = WEATHER_GLYPHS[weatherMode] || '\u2600\uFE0E Clear';
+    el.title = WEATHER_NAMES[weatherMode] || 'Clear';
   }
 
   function bindSlider(el, fn) {
@@ -503,13 +530,13 @@ function boot() {
     controls.syncFromCamera();
     controls.setGlide(glideOn);
     const b = $('#b-glide');
-    b.textContent = glideOn ? 'Glide: on' : 'Glide mode';
+    b.textContent = '\u2708\uFE0E';
     b.classList.toggle('on', glideOn);
     b.setAttribute('aria-pressed', String(glideOn));
     b.title = (glideOn ? 'Stop' : 'Start') + ' Glide mode — drag to steer, wheel for speed (G)';
     if (glideOn) {
       const n = syncGlideNode();
-      flash(n ? `Glide mode · ${n.name}` : 'Glide mode');
+      flash(n ? `\u2708\uFE0E Glide · ${n.name}` : '\u2708\uFE0E Glide on');
     } else {
       flash('Glide off');
     }
@@ -520,11 +547,11 @@ function boot() {
     controls.collision = collideOn;
     if (vehicles) vehicles.setCollision(collideOn);
     const b = $('#b-collide');
-    b.textContent = collideOn ? 'Collision: on' : 'Collision: off';
+    b.textContent = collideOn ? '\u2B21' : '\u25CC';
     b.classList.toggle('on', collideOn);
     b.setAttribute('aria-pressed', String(collideOn));
-    b.title = (collideOn ? 'Disable' : 'Enable') + ' camera & traffic collision detection (C)';
-    flash(collideOn ? 'Collision on' : 'Collision off (noclip)');
+    b.title = (collideOn ? 'Collision: on — toggle noclip' : 'Collision: off (noclip) — enable collision') + ' (C)';
+    flash(collideOn ? '\u2B21 Collision on' : '\u25CC Noclip');
   }
   $('#b-glide').onclick = toggleGlide;
   $('#b-collide').onclick = toggleCollision;
@@ -543,6 +570,25 @@ function boot() {
     flash(lm.name);
   }
 
+  const POI_GLYPHS = {
+    media: '\u25C8',
+    spire: '\u25B2',
+    obelisk: '\u25B2',
+    pyramid: '\u25B3',
+    ring: '\u25CE',
+    wheel: '\u25CE',
+    dome: '\u25EF',
+    sphere: '\u25CF',
+    arch: '\u2229',
+    bridge: '\u2312',
+    arena: '\u2B21',
+    stadium: '\u2B21',
+    theatre: '\u2726',
+    market: '\u229E',
+    plaza: '\u25C7',
+    station: '\u21C4',
+  };
+
   function buildPois() {
     const box = $('#pois');
     box.innerHTML = '';
@@ -553,8 +599,9 @@ function boot() {
     ];
     for (const lm of spots) {
       const b = document.createElement('button');
-      b.title = `${lm.kind} · fly the camera there`;
-      b.innerHTML = `<i></i>${lm.name}`;
+      b.title = `${lm.kind} · fly to ${lm.name}`;
+      const g = POI_GLYPHS[lm.kind] || '\u25C6';
+      b.innerHTML = `<i aria-hidden="true">${g}</i>${lm.name}`;
       b.onclick = () => flyToLandmark(lm);
       box.appendChild(b);
     }
