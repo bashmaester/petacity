@@ -6,7 +6,8 @@ import * as THREE from '../vendor/three.module.js';
 import { LOOKS, LOOK_BY_ID } from '../src/looks.js';
 import {
   makeUniforms, makeWorld, growCity, applyLook, applyTime,
-  buildLandmarks, buildBeacons, buildPlaces, makeLamps, makeVehicles, makeLandmarkMaterial,
+  buildLandmarks, buildBeacons, buildPlaces, makeLamps, makeLandmarkMaterial,
+  makeVehicles, makeSearchlights, makeLightPools,
 } from '../src/scene.js';
 
 test('every look preset has a complete schema', () => {
@@ -36,7 +37,7 @@ test('shaders only use uniforms the materials actually have', () => {
     for (const m of src.matchAll(/uniform\s+\w+\s+(\w+)/g)) names.add(m[1]);
     return names;
   };
-  const mats = [world.skyMat, world.groundMat, world.towerMat, world.beaconMat, world.lampMat, world.trailMat, makeLandmarkMaterial(U, '#334455')];
+  const mats = [world.skyMat, world.groundMat, world.towerMat, world.beaconMat, world.lampMat, world.trailMat, world.beamMat, world.poolMat, makeLandmarkMaterial(U, '#334455')];
   for (const mat of mats) {
     const used = new Set([...declared(mat.vertexShader), ...declared(mat.fragmentShader)]);
     for (const name of used) {
@@ -55,12 +56,13 @@ test('instancing attributes match the vertex shader contract', () => {
   const { city, mesh } = growCity(4417, 6, world.towerMat);
   assert.ok(mesh.isInstancedMesh);
   assert.equal(mesh.count, city.count);
-  for (const name of ['aSeed', 'aDims', 'aKind']) {
+  for (const name of ['aSeed', 'aDims', 'aKind', 'aStyle']) {
     assert.ok(mesh.geometry.getAttribute(name), name);
   }
   // my vertex shader must NOT redeclare what three injects
   assert.ok(!/attribute\s+mat4\s+instanceMatrix/.test(world.towerMat.vertexShader));
   assert.ok(/attribute\s+float\s+aSeed/.test(world.towerMat.vertexShader));
+  assert.ok(/attribute\s+float\s+aStyle/.test(world.towerMat.vertexShader));
 
   // matrices round-trip
   const m = new THREE.Matrix4();
@@ -191,9 +193,20 @@ test('landmarks, places, beacons, lamps and vehicles build against real three.js
   assert.equal(lamps.geometry.getAttribute('position').count, city.lamps.length);
 
   const veh = makeVehicles(city, world.trailMat, 60);
+  assert.ok(veh.group.isGroup);
+  assert.equal(veh.bodies.length, 3, 'pods, skimmers, haulers');
+  assert.equal(veh.beams.length, 3, 'headlight beam per class');
   assert.ok(veh.mesh.isInstancedMesh && veh.trails.isInstancedMesh);
-  assert.ok(veh.mesh.count <= 60);
   assert.ok(veh.trails.geometry.getAttribute('aColor'));
+  // merged silhouettes carry vertex colours (hull/canopy/lights)
+  for (const b of veh.bodies) {
+    assert.ok(b.geometry.getAttribute('color'), 'vertex colours on bodies');
+    assert.ok(b.geometry.getAttribute('position').count >= 10 * 6, 'multi-part merged body');
+    assert.ok(b.instanceColor, 'per-instance tint');
+  }
+  for (const b of veh.beams) {
+    assert.ok(b.geometry.getAttribute('aBeamT') && b.geometry.getAttribute('aBeamW'), 'beam falloff attrs');
+  }
   const m = new THREE.Matrix4();
   veh.mesh.getMatrixAt(0, m);
   const p = new THREE.Vector3();
@@ -205,5 +218,32 @@ test('landmarks, places, beacons, lamps and vehicles build against real three.js
   m.decompose(p, new THREE.Quaternion(), new THREE.Vector3());
   assert.ok(p.distanceTo(before) > 0.01, 'vehicles move when updated');
   veh.update(0, 0.1);
-  assert.equal(veh.mesh.count, 6, 'traffic slider thins the swarm');
+  const totalActive = veh.bodies.reduce((a, b) => a + b.count, 0);
+  assert.equal(totalActive, 6, 'traffic slider thins the swarm');
+});
+
+test('searchlights sweep and light pools cover the lamps', () => {
+  const U = makeUniforms();
+  const world = makeWorld(U);
+  const { city } = growCity(4417, 5, world.towerMat);
+
+  const sl = makeSearchlights(city, world.beamMat);
+  assert.ok(sl.group.isGroup);
+  assert.ok(sl.group.children.length >= 2, 'at least two shafts');
+  let beamMeshes = 0;
+  sl.group.traverse((o) => { if (o.isMesh) beamMeshes++; });
+  assert.equal(beamMeshes, sl.group.children.length);
+  const pivot = sl.group.children[0];
+  const rotY = pivot.rotation.y;
+  sl.update(1);
+  assert.notEqual(pivot.rotation.y, rotY, 'searchlights sweep slowly');
+
+  const pools = makeLightPools(city, world.poolMat);
+  assert.ok(pools.isInstancedMesh);
+  assert.equal(pools.count, city.lamps.length);
+  const m = new THREE.Matrix4();
+  const p = new THREE.Vector3();
+  pools.getMatrixAt(0, m);
+  m.decompose(p, new THREE.Quaternion(), new THREE.Vector3());
+  assert.ok(p.y > 0 && p.y < 10, 'pools hug the ground');
 });

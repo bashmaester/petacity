@@ -54,17 +54,23 @@ a specific city + style + hour (the Copy link button does this for you).
 
 ## What's in the city
 
+- **Districts** — the city grows coherent quarters (dense downtown, sparse
+  edges, tower spines, monolith wards, low towns, rifts) instead of one
+  uniform randomness everywhere.
 - **Streets & towers** — a seeded grid of blocks, lots and stacked tower
-  segments with setbacks, podiums and roof clutter.
+  segments with setbacks, podiums, roof clutter and street-level grit;
+  facades vary per building: windowed, outline-glow wireframes, sparse
+  monoliths.
 - **Monumental landmarks** — named POIs (Meridian Gate arch, spires, domes,
   masts, crowns, needles) with halos, cantilevers and strange companions,
   plus a fly-to list in the panel.
 - **Public spaces** — markets, plazas, parks and fairs with stalls, canopies,
   light trees and tent rings, ringed by string lights.
-- **Vehicles** — fast pods, streaks and heavy haulers with additive
-  light-trails looping along air corridors and avenues.
-- **Atmospheric lights** — street lamps on every avenue, blinking aviation
-  beacons, night window glow, sun haze and street glow.
+- **Vehicles** — pods, skimmers and haulers with real silhouettes (hulls,
+  canopies, fins, containers), head/tail lights, headlight beams and
+  additive light-trails.
+- **Volumetric lights** — sweeping searchlight shafts over the skyline,
+  street-lamp light pools, blinking aviation beacons, night window glow.
 - **Parametric atmospherics** — cloud deck (lit tops, silver lining), sun
   disc + glow, horizon haze and vibrance are all sliders; the horizon
   dissolves into the sky so the world has no square edges.

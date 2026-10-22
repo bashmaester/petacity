@@ -5,6 +5,7 @@ import { generateCity, CELL, AVENUE, STREET } from './city.js';
 import {
   SKY_VERT, SKY_FRAG, GROUND_VERT, GROUND_FRAG, TOWER_VERT, TOWER_FRAG,
   LANDMARK_VERT, LANDMARK_FRAG, BEACON_VERT, BEACON_FRAG, TRAIL_VERT, TRAIL_FRAG,
+  BEAM_VERT, BEAM_FRAG, POOL_VERT, POOL_FRAG,
 } from './shaders.js';
 
 export const col = (hex) => new THREE.Color(hex);
@@ -62,6 +63,10 @@ export function makeUniforms() {
     uSunGlow: { value: 0.65 },
     uSat: { value: 1 },
     uSteady: { value: 0 },
+    uBeamCol: { value: col('#bcd9ff') },
+    uBeamK: { value: 0.16 },
+    uPoolCol: { value: col('#ffc27a') },
+    uPoolK: { value: 0.5 },
   };
 }
 
@@ -141,7 +146,28 @@ export function makeWorld(U) {
     side: THREE.DoubleSide,
   });
 
-  return { sky, skyMat, ground, groundMat, towerMat, beaconMat, lampMat, trailMat };
+  // fake-volumetric searchlight shafts
+  const beamMat = new THREE.ShaderMaterial({
+    vertexShader: BEAM_VERT,
+    fragmentShader: BEAM_FRAG,
+    uniforms: pick(U, ['uBeamCol', 'uBeamK', 'uTime', 'uLightK']),
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+  });
+
+  // warm pools of lamp light on the ground
+  const poolMat = new THREE.ShaderMaterial({
+    vertexShader: POOL_VERT,
+    fragmentShader: POOL_FRAG,
+    uniforms: pick(U, ['uPoolCol', 'uPoolK', 'uLightK']),
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+
+  return { sky, skyMat, ground, groundMat, towerMat, beaconMat, lampMat, trailMat, beamMat, poolMat };
 }
 
 /** One landmark material — shared look vocabulary with the towers. */
@@ -185,6 +211,7 @@ export function buildCityMesh(city, towerMat) {
   geo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(city.s, 1));
   geo.setAttribute('aDims', new THREE.InstancedBufferAttribute(dims, 3));
   geo.setAttribute('aKind', new THREE.InstancedBufferAttribute(city.kind, 1));
+  geo.setAttribute('aStyle', new THREE.InstancedBufferAttribute(city.style, 1));
   mesh.frustumCulled = false;
   return mesh;
 }
@@ -540,32 +567,216 @@ export function buildPlaces(city, U) {
 
 const VEHICLE_COLORS = ['#ffe8c8', '#ffe8c8', '#ff4038', '#86f2ff', '#ffb347'];
 
+/* ------------------------------------------------- geometry helpers */
+
+/** Merge coloured boxes into one non-indexed geometry (position/normal/color). */
+function mergeParts(parts) {
+  let total = 0;
+  const built = [];
+  for (const pt of parts) {
+    const g = new THREE.BoxGeometry(pt.w, pt.h, pt.d).toNonIndexed();
+    const m = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(pt.rx || 0, pt.ry || 0, pt.rz || 0));
+    m.setPosition(pt.x || 0, pt.y || 0, pt.z || 0);
+    g.applyMatrix4(m);
+    const n = g.getAttribute('position').count;
+    const cols = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      cols[i * 3] = pt.c[0];
+      cols[i * 3 + 1] = pt.c[1];
+      cols[i * 3 + 2] = pt.c[2];
+    }
+    g.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+    built.push(g);
+    total += n;
+  }
+  const pos = new Float32Array(total * 3);
+  const nrm = new Float32Array(total * 3);
+  const col = new Float32Array(total * 3);
+  let off = 0;
+  for (const g of built) {
+    const n = g.getAttribute('position').count;
+    pos.set(g.getAttribute('position').array, off * 3);
+    nrm.set(g.getAttribute('normal').array, off * 3);
+    col.set(g.getAttribute('color').array, off * 3);
+    off += n;
+    g.dispose();
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  out.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+  out.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  return out;
+}
+
 /**
- * Light-streak vehicles looping along the city lanes: fast pods, streaks and
- * heavy haulers, each with an additive gradient trail behind it.
- * Returns { mesh, trails, update(dt, density) }.
+ * Fake-volumetric shaft: two crossed quads along +Y with soft falloff
+ * attributes (aBeamT 0→1 along the beam, aBeamW 0→1 across it).
+ */
+function beamGeometry(length, width) {
+  const hw = width / 2;
+  const pos = [];
+  const bt = [];
+  const bw = [];
+  const quad = (corners) => {
+    // corners: [p0, p1, p2, p3] ccw; t0/t1 along, w at each corner
+    const idx = [0, 1, 2, 0, 2, 3];
+    for (const k of idx) {
+      pos.push(...corners[k].p);
+      bt.push(corners[k].t);
+      bw.push(corners[k].w);
+    }
+  };
+  // quad A: spans z (width)
+  quad([
+    { p: [0, 0, -hw], t: 0, w: 0 },
+    { p: [0, 0, hw], t: 0, w: 1 },
+    { p: [0, length, hw], t: 1, w: 1 },
+    { p: [0, length, -hw], t: 1, w: 0 },
+  ]);
+  // quad B: spans x (width)
+  quad([
+    { p: [-hw, 0, 0], t: 0, w: 0 },
+    { p: [hw, 0, 0], t: 0, w: 1 },
+    { p: [hw, length, 0], t: 1, w: 1 },
+    { p: [-hw, length, 0], t: 1, w: 0 },
+  ]);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  g.setAttribute('aBeamT', new THREE.BufferAttribute(new Float32Array(bt), 1));
+  g.setAttribute('aBeamW', new THREE.BufferAttribute(new Float32Array(bw), 1));
+  return g;
+}
+
+// vehicle part colours (multiplied by per-instance tint)
+const HULL = [1, 1, 1];
+const GLASS = [0.14, 0.17, 0.23];
+const TRIM = [0.52, 0.55, 0.65];
+const HEAD = [1, 0.97, 0.82];
+const TAIL = [1, 0.16, 0.12];
+const GLOW = [0.32, 0.7, 1];
+
+/** Sleek pod — the common commuter. ~22 m long. */
+function podParts() {
+  return [
+    { w: 22, h: 2.6, d: 4.4, y: 0, c: HULL },
+    { w: 6, h: 1.5, d: 3.1, x: 12.6, y: 0.35, c: HULL },
+    { w: 8, h: 1.5, d: 3, x: 1.5, y: 1.95, c: GLASS },
+    { w: 7, h: 0.35, d: 1.5, x: -7, y: 0.7, z: 2.5, c: TRIM },
+    { w: 7, h: 0.35, d: 1.5, x: -7, y: 0.7, z: -2.5, c: TRIM },
+    { w: 1.1, h: 0.75, d: 0.85, x: 16.1, y: 0.15, z: 1.35, c: HEAD },
+    { w: 1.1, h: 0.75, d: 0.85, x: 16.1, y: 0.15, z: -1.35, c: HEAD },
+    { w: 0.85, h: 0.8, d: 1, x: -11.2, y: 0.15, z: 1.3, c: TAIL },
+    { w: 0.85, h: 0.8, d: 1, x: -11.2, y: 0.15, z: -1.3, c: TAIL },
+    { w: 15, h: 0.22, d: 3, x: -1, y: -1.32, c: GLOW },
+  ];
+}
+
+/** Flat skimmer — the fast courier. ~26 m long. */
+function skimmerParts() {
+  return [
+    { w: 26, h: 1.8, d: 7, y: 0, c: HULL },
+    { w: 12, h: 1.4, d: 5, x: -5, y: 1.5, c: TRIM },
+    { w: 7, h: 1.3, d: 2.6, x: 6, y: 1.55, c: GLASS },
+    { w: 8, h: 0.3, d: 2.4, x: -2, y: 0.2, z: 4.5, c: TRIM, rz: 0.08 },
+    { w: 8, h: 0.3, d: 2.4, x: -2, y: 0.2, z: -4.5, c: TRIM, rz: -0.08 },
+    { w: 1, h: 0.6, d: 1, x: 13.2, y: 0.15, z: 2.2, c: HEAD },
+    { w: 1, h: 0.6, d: 1, x: 13.2, y: 0.15, z: -2.2, c: HEAD },
+    { w: 0.8, h: 0.7, d: 3.8, x: -13.2, y: 0.2, c: TAIL },
+    { w: 18, h: 0.2, d: 4.6, x: -1, y: -1.05, c: GLOW },
+  ];
+}
+
+/** Heavy hauler — the freight backbone. ~88 m long. */
+function haulerParts() {
+  return [
+    { w: 88, h: 5, d: 9, y: 0, c: HULL },
+    { w: 12, h: 4.5, d: 8, x: 41, y: 3.4, c: TRIM },
+    { w: 8, h: 1.8, d: 6, x: 41, y: 6.4, c: GLASS },
+    { w: 22, h: 4.2, d: 8, x: -26, y: 4.7, c: TRIM },
+    { w: 22, h: 4.2, d: 8, x: -2, y: 4.7, c: HULL },
+    { w: 22, h: 4.2, d: 8, x: 22, y: 4.7, c: TRIM },
+    { w: 1.2, h: 1, d: 1.2, x: 44.6, y: 1.4, z: 3.1, c: HEAD },
+    { w: 1.2, h: 1, d: 1.2, x: 44.6, y: 1.4, z: -3.1, c: HEAD },
+    { w: 1, h: 1, d: 2, x: -44.6, y: 1.6, z: 3, c: TAIL },
+    { w: 1, h: 1, d: 2, x: -44.6, y: 1.6, z: -3, c: TAIL },
+    { w: 80, h: 0.28, d: 0.35, x: -2, y: 2.2, z: 4.6, c: GLOW },
+    { w: 80, h: 0.28, d: 0.35, x: -2, y: 2.2, z: -4.6, c: GLOW },
+  ];
+}
+
+const VEHICLE_CLASSES = [
+  { parts: podParts, len: 22, wid: 4.4, beamLen: 26, beamW: 5.5, spd: 0.006, spdJit: 0.0005, scale: 0.85 },
+  { parts: skimmerParts, len: 26, wid: 7, beamLen: 30, beamW: 7, spd: 0.0045, spdJit: 0.0004, scale: 0.9 },
+  { parts: haulerParts, len: 88, wid: 9, beamLen: 40, beamW: 9, spd: 0.0022, spdJit: 0.00025, scale: 0.92 },
+];
+
+/**
+ * The traffic fleet: pods, skimmers and haulers with proper silhouettes
+ * (hull, canopy, fins, containers), head/tail lights, an additive headlight
+ * beam and a gradient trail. All instanced.
+ * Returns { group, mesh, bodies, beams, trails, update(dt, density) }.
  */
 export function makeVehicles(city, trailMat, count = 220) {
   const lanes = city.lanes.length ? city.lanes : [{ x1: -400, z1: 0, x2: 400, z2: 0, y: 90, speed: 100 }];
   const total = Math.min(count, 480);
-  const geo = new THREE.BoxGeometry(1, 1, 1);
-  const mat = new THREE.MeshBasicMaterial({ toneMapped: false });
-  const mesh = new THREE.InstancedMesh(geo, mat, total);
-  mesh.frustumCulled = false;
+  const group = new THREE.Group();
 
-  // trail instances: long thin streaks with per-instance colour
+  const classOf = new Int32Array(total);
+  const local = new Int32Array(total);
+  const classCount = [0, 0, 0];
+  for (let i = 0; i < total; i++) {
+    const cls = i % 10;
+    classOf[i] = cls < 5 ? 0 : cls < 8 ? 1 : 2;
+    local[i] = classCount[classOf[i]]++;
+  }
+
+  const bodyMat = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false });
+  const beamMat = new THREE.ShaderMaterial({
+    vertexShader: BEAM_VERT,
+    fragmentShader: BEAM_FRAG,
+    uniforms: {
+      uBeamCol: { value: col('#fff3d8') },
+      uBeamK: { value: 0.55 },
+      uTime: { value: 0 },
+      uLightK: { value: 1 },
+    },
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+  });
+
+  const bodies = [];
+  const beams = [];
+  for (let c = 0; c < 3; c++) {
+    const V = VEHICLE_CLASSES[c];
+    const bg = mergeParts(V.parts());
+    const body = new THREE.InstancedMesh(bg, bodyMat, Math.max(1, classCount[c]));
+    body.frustumCulled = false;
+    bodies.push(body);
+    group.add(body);
+
+    const bgeo = beamGeometry(V.beamLen, V.beamW).rotateZ(-Math.PI / 2); // +Y -> +X (nose)
+    bgeo.translate(V.len / 2 + 1.5, 0, 0);
+    const beam = new THREE.InstancedMesh(bgeo, beamMat, Math.max(1, classCount[c]));
+    beam.frustumCulled = false;
+    beams.push(beam);
+    group.add(beam);
+  }
+
+  // trails: one shared instanced mesh indexed globally
   const trailGeo = new THREE.BoxGeometry(1, 1, 1);
   const aColor = new Float32Array(total * 3);
   trailGeo.setAttribute('aColor', new THREE.InstancedBufferAttribute(aColor, 3));
   const trails = new THREE.InstancedMesh(trailGeo, trailMat, total);
   trails.frustumCulled = false;
+  group.add(trails);
 
   const laneIdx = new Int32Array(total);
   const t = new Float32Array(total);
   const dir = new Float32Array(total);
   const spd = new Float32Array(total);
-  const len = new Float32Array(total);
-  const wid = new Float32Array(total);
+  const scl = new Float32Array(total);
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const e = new THREE.Euler();
@@ -573,72 +784,135 @@ export function makeVehicles(city, trailMat, count = 220) {
   const s = new THREE.Vector3();
   const c = new THREE.Color();
 
-  const place = (i, target, stretch = 1) => {
+  const place = (i, target, localIdx, stretch = 1, wMul = 1) => {
     const L = lanes[laneIdx[i]];
+    const V = VEHICLE_CLASSES[classOf[i]];
     p.set(L.x1 + (L.x2 - L.x1) * t[i], L.y, L.z1 + (L.z2 - L.z1) * t[i]);
     e.set(0, Math.atan2(L.x2 - L.x1, L.z2 - L.z1) + (dir[i] < 0 ? Math.PI : 0), 0);
     q.setFromEuler(e);
-    s.set(len[i] * stretch, wid[i] * 0.5, wid[i] * (stretch > 1 ? 0.55 : 1));
+    s.set(scl[i] * stretch, scl[i], scl[i] * wMul);
     m.compose(p, q, s);
-    target.setMatrixAt(i, m);
+    target.setMatrixAt(localIdx, m);
+    return V;
   };
 
   for (let i = 0; i < total; i++) {
     laneIdx[i] = i % lanes.length;
     t[i] = (i * 0.618034) % 1;
     dir[i] = i % 2 === 0 ? 1 : -1;
-    const cls = i % 10;
-    if (cls < 6) { // fast pod
-      len[i] = 16 + ((i * 53) % 17) * 1.6;
-      wid[i] = 3.2;
-      spd[i] = 0.006 + ((i * 37) % 13) * 0.0005;
-    } else if (cls < 9) { // streak
-      len[i] = 34 + ((i * 29) % 23) * 2.4;
-      wid[i] = 3.6;
-      spd[i] = 0.0045 + ((i * 17) % 11) * 0.0004;
-    } else { // heavy hauler
-      len[i] = 92 + ((i * 13) % 27) * 3.2;
-      wid[i] = 8.5;
-      spd[i] = 0.0022 + ((i * 7) % 9) * 0.00025;
-    }
+    const V = VEHICLE_CLASSES[classOf[i]];
+    spd[i] = V.spd + ((i * 37) % 13) * V.spdJit;
+    scl[i] = V.scale + ((i * 53) % 17) * 0.017;
     c.set(VEHICLE_COLORS[i % VEHICLE_COLORS.length]);
-    mesh.setColorAt(i, c);
+    bodies[classOf[i]].setColorAt(local[i], c);
     aColor[i * 3] = c.r;
     aColor[i * 3 + 1] = c.g;
     aColor[i * 3 + 2] = c.b;
-    place(i, mesh);
+    place(i, bodies[classOf[i]], local[i]);
+    place(i, beams[classOf[i]], local[i]);
     // trail sits behind the body along the lane
     const savedT = t[i];
-    t[i] = savedT - dir[i] * (len[i] * 1.7) / Math.max(60, Math.hypot(lanes[laneIdx[i]].x2 - lanes[laneIdx[i]].x1, lanes[laneIdx[i]].z2 - lanes[laneIdx[i]].z1));
-    place(i, trails, 2.4);
+    t[i] = savedT - dir[i] * (V.len * 1.7) / Math.max(60, Math.hypot(lanes[laneIdx[i]].x2 - lanes[laneIdx[i]].x1, lanes[laneIdx[i]].z2 - lanes[laneIdx[i]].z1));
+    place(i, trails, i, 2.4, 0.75);
     t[i] = savedT;
   }
-  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  mesh.instanceMatrix.needsUpdate = true;
+  for (const b of bodies) {
+    if (b.instanceColor) b.instanceColor.needsUpdate = true;
+    b.instanceMatrix.needsUpdate = true;
+  }
+  for (const b of beams) b.instanceMatrix.needsUpdate = true;
   trails.instanceMatrix.needsUpdate = true;
   trailGeo.getAttribute('aColor').needsUpdate = true;
 
   function update(dt, density = 1) {
     const n = Math.max(0, Math.min(total, Math.round(total * density)));
-    mesh.count = n;
-    trails.count = n;
+    const active = [0, 0, 0];
     for (let i = 0; i < n; i++) {
       const L = lanes[laneIdx[i]];
+      const V = VEHICLE_CLASSES[classOf[i]];
       const span = Math.max(60, Math.hypot(L.x2 - L.x1, L.z2 - L.z1));
       t[i] += spd[i] * dt * dir[i] * Math.max(20, L.speed) * 0.055;
       if (t[i] > 1) t[i] -= 1;
       if (t[i] < 0) t[i] += 1;
-      place(i, mesh);
+      place(i, bodies[classOf[i]], local[i]);
+      place(i, beams[classOf[i]], local[i]);
+      active[classOf[i]]++;
       const savedT = t[i];
-      t[i] = savedT - dir[i] * (len[i] * 1.7) / span;
-      place(i, trails, 2.4);
+      t[i] = savedT - dir[i] * (V.len * 1.7) / span;
+      place(i, trails, i, 2.4, 0.75);
       t[i] = savedT;
     }
-    mesh.instanceMatrix.needsUpdate = true;
+    for (let c = 0; c < 3; c++) {
+      bodies[c].count = active[c];
+      beams[c].count = active[c];
+      bodies[c].instanceMatrix.needsUpdate = true;
+      beams[c].instanceMatrix.needsUpdate = true;
+    }
+    trails.count = n;
     trails.instanceMatrix.needsUpdate = true;
   }
 
-  return { mesh, trails, update };
+  return { group, mesh: bodies[0], bodies, beams, trails, update };
+}
+
+/* ------------------------------------------------- searchlights & pools */
+
+/**
+ * Slow-sweeping volumetric searchlight shafts rising from landmarks and the
+ * tallest towers — the city's signature night beams.
+ */
+export function makeSearchlights(city, beamMat, count = 8) {
+  const group = new THREE.Group();
+  const spots = [];
+  for (const lm of city.landmarks) {
+    spots.push({ x: lm.x, y: lm.h * 0.86, z: lm.z, r: lm.colorSeed });
+  }
+  for (let i = 0; i < city.count && spots.length < count + 4; i += 53) {
+    const top = city.y[i] + city.h[i] / 2;
+    if (top > 240) spots.push({ x: city.x[i], y: top, z: city.z[i], r: city.s[i] });
+  }
+  const pivots = [];
+  const use = spots.slice(0, Math.max(2, count));
+  for (let k = 0; k < use.length; k++) {
+    const sp = use[k];
+    const pivot = new THREE.Group();
+    pivot.position.set(sp.x, sp.y, sp.z);
+    pivot.rotation.y = sp.r * Math.PI * 2;
+    const len = 750 + sp.r * 750;
+    const geo = beamGeometry(len, 110 + sp.r * 130);
+    const mesh = new THREE.Mesh(geo, beamMat);
+    mesh.rotation.z = 0.04 + sp.r * 0.3;
+    mesh.frustumCulled = false;
+    pivot.add(mesh);
+    group.add(pivot);
+    pivots.push({ pivot, speed: (sp.r - 0.5) * 0.16 });
+  }
+  function update(dt) {
+    for (const pv of pivots) pv.pivot.rotation.y += pv.speed * dt;
+  }
+  return { group, update };
+}
+
+/** Soft warm light pools lying on the ground under the street lamps. */
+export function makeLightPools(city, poolMat) {
+  const n = city.lamps.length;
+  const geo = new THREE.CircleGeometry(1, 20).rotateX(-Math.PI / 2);
+  const mesh = new THREE.InstancedMesh(geo, poolMat, Math.max(1, n));
+  mesh.frustumCulled = false;
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const p = new THREE.Vector3();
+  const s = new THREE.Vector3();
+  for (let i = 0; i < n; i++) {
+    const L = city.lamps[i];
+    const r = 11 + ((i * 73) % 17) * 0.7;
+    p.set(L.x, 2.4, L.z);
+    s.set(r, 1, r);
+    m.compose(p, q, s);
+    mesh.setMatrixAt(i, m);
+  }
+  mesh.instanceMatrix.needsUpdate = true;
+  return mesh;
 }
 
 /**

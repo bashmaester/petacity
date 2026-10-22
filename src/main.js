@@ -3,7 +3,8 @@ import * as THREE from '../vendor/three.module.js';
 import { LOOKS, LOOK_BY_ID } from './looks.js';
 import {
   makeUniforms, makeWorld, growCity, applyLook, applyTime,
-  buildLandmarks, buildBeacons, buildPlaces, makeLamps, makeVehicles,
+  buildLandmarks, buildBeacons, buildPlaces, makeLamps,
+  makeVehicles, makeSearchlights, makeLightPools,
 } from './scene.js';
 import { FlyControls } from './controls.js';
 
@@ -98,6 +99,8 @@ function boot() {
   let placeGroup = null;
   let beacons = null;
   let lamps = null;
+  let pools = null;
+  let searchlights = null;
   let vehicles = null;
   let city = null;
 
@@ -113,14 +116,17 @@ function boot() {
     placeGroup = buildPlaces(city, U);
     beacons = buildBeacons(city, world.beaconMat);
     lamps = makeLamps(city, world.lampMat);
+    pools = makeLightPools(city, world.poolMat);
+    searchlights = makeSearchlights(city, world.beamMat);
     vehicles = makeVehicles(city, world.trailMat);
     cityGroup.add(cityMesh);
     cityGroup.add(landmarkGroup);
     cityGroup.add(placeGroup);
     cityGroup.add(beacons);
     cityGroup.add(lamps);
-    cityGroup.add(vehicles.mesh);
-    cityGroup.add(vehicles.trails);
+    cityGroup.add(pools);
+    cityGroup.add(searchlights.group);
+    cityGroup.add(vehicles.group);
     applyHeight();
 
     $('#stat-towers').textContent = city.towers.toLocaleString('en-US');
@@ -292,6 +298,7 @@ function boot() {
         controls.update(dt);
       }
       if (vehicles) vehicles.update(dt, tune.traffic);
+      if (searchlights) searchlights.update(dt);
       world.sky.position.copy(camera.position);
       renderer.render(scene, camera);
       requestAnimationFrame(animate);
