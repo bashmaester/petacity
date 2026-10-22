@@ -1,0 +1,14 @@
+{
+  "name": "petacity",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Procedural city scaffolding with swap-able looks (Blade Runner, 2000s anime, abstract, Tron, ...)",
+  "scripts": {
+    "test": "node --test tests/city.test.mjs tests/scene.test.mjs tests/ui-contract.test.mjs tests/boot.test.mjs",
+    "serve": "python3 -m http.server 8000 --bind 0.0.0.0"
+  },
+  "devDependencies": {
+    "jsdom": "^30.1.3"
+  }
+}
