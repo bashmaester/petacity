@@ -102,8 +102,10 @@ test('main.js boots end-to-end (jsdom + fake WebGL)', { skip: JSDOM ? false : 'j
   const loading = window.document.querySelector('#loading');
   assert.equal(loading.className.includes('out'), true, 'loading overlay should fade out (init completed)');
   assert.equal(loading.querySelector('.boot-error'), null, `boot error overlay should be empty, got: ${loading.textContent}`);
-  assert.equal(window.document.querySelectorAll('#chips button').length, LOOKS_EXPECTED, 'all look chips built');
-  assert.ok(window.document.querySelectorAll('#pois button').length >= 1, 'POI buttons built');
+  assert.equal(window.document.querySelectorAll('#sel-look option').length, LOOKS_EXPECTED, 'all look dropdown options built');
+  assert.ok(window.document.querySelectorAll('#sel-poi option').length >= 2, 'Places dropdown options built');
+  assert.ok(window.document.querySelectorAll('#sel-preset option').length >= 6, 'Whole-config preset options built');
+  assert.ok(window.document.querySelectorAll('#sel-bookmark option').length >= 3, 'Default place bookmarks built');
   assert.ok(window.document.querySelector('#stat-towers').textContent.length > 0, 'stats filled');
   assert.ok(window.document.querySelector('#stat-boxes').textContent.length > 0, 'stats filled');
   assert.deepEqual(pageErrors, [], 'no page errors');

@@ -73,9 +73,10 @@ const MEDIA_NAMES = [
  * Grow the city.
  * @param {number} seed
  * @param {number} radius blocks each way from the centre
+ * @param {number} suburbReach horizon suburb extent multiplier (0 = none, 1 = default horizon sprawl, 2 = vast)
  * @returns flat instance arrays + landmarks (POIs) + vehicle lanes + beacon lights
  */
-export function generateCity(seed = 4417, radius = 13) {
+export function generateCity(seed = 4417, radius = 13, suburbReach = 1.0) {
   const noise = makeNoise2D(seed ^ 0x9e3779b9);
   const items = [];
   const beacons = [];
@@ -325,6 +326,26 @@ export function generateCity(seed = 4417, radius = 13) {
     }
   }
 
+  // Procedural suburbs stretching far off toward the horizon: radial commuter
+  // arterials, satellite town sub-centres, residential house tracts, yards &
+  // distant hamlets tapering organically into the mist.
+  const subLamps = [];
+  const subTrees = [];
+  const effSubReach = Math.max(0, Math.min(2.5, Number.isFinite(suburbReach) ? suburbReach : 1.0));
+  const suburbSpan = effSubReach > 0.02
+    ? Math.round((Math.max(4400, coreSpan * 4.4 + 1900)) * effSubReach)
+    : Math.round(coreSpan + outSpan * 0.85);
+  let suburbCount = 0;
+  if (effSubReach > 0.02) {
+    suburbCount = addHorizonSuburbs({
+      seed, noise, coreSpan, outSpan, suburbSpan, reach: effSubReach,
+      inWater, push, pushBeacon,
+      pushSign: (sg) => signs.push(sg),
+      pushLamp: (lp) => subLamps.push(lp),
+      pushTree: (tr) => subTrees.push(tr),
+    });
+  }
+
   // Landmark top beacons.
   for (const lm of landmarks) {
     pushBeacon(lm.x, lm.h + 6, lm.z, hash2i(lm.bi + 5, lm.bj + 9, seed));
@@ -403,9 +424,12 @@ export function generateCity(seed = 4417, radius = 13) {
   const collider = makeCityCollider({ count: n, x, y, z, w, h, d, rot, landmarks, places });
   const lanes = makeLanes(seed, radius, boulevards, collider);
   const lamps = makeLamps(seed, radius, boulevards, mediaZone);
+  for (let i = 0; i < subLamps.length; i++) lamps.push(subLamps[i]);
   const trees = makeTrees(seed, radius, water, lmCells, places, boulevards);
+  for (let i = 0; i < subTrees.length; i++) trees.push(subTrees[i]);
   return {
-    seed, radius, count: n, towers, maxY, x, y, z, w, h, d, s, kind, style, rot,
+    seed, radius, suburbReach: effSubReach, suburbSpan, suburbCount,
+    count: n, towers, maxY, x, y, z, w, h, d, s, kind, style, rot,
     districts, landmarks, places, mediaZone, lanes, beacons, lamps,
     sites, water, boulevards, trees, bills, signs, holos,
   };
@@ -1157,6 +1181,193 @@ function addOutskirts(push, pushBeacon, pushSign, rand, x0, x1, z0, z1, fade) {
       push(px, 0.45, pz, 24 + rand() * 38, 0.9, 24 + rand() * 38, rand(), KIND.SLAB, 2, rot);
     }
   }
+}
+
+/**
+ * Procedural horizon suburbs: multi-ring residential sprawl, commuter arterial
+ * roads, satellite town sub-centres, pitched-roof cottages, rowhouses, gardens
+ * and streetlamps stretching km after km out toward the horizon.
+ */
+function addHorizonSuburbs({
+  seed, noise, coreSpan, outSpan, suburbSpan, reach,
+  inWater, push, pushBeacon, pushSign, pushLamp, pushTree,
+}) {
+  let added = 0;
+  const rStart = coreSpan + outSpan * 0.42;
+  if (suburbSpan <= rStart + 80) return 0;
+
+  // 6–8 radial commuter arterials snaking outward from the city core
+  const spokeCount = 6 + (Math.floor(hash2i(41, 83, seed) * 3) % 3);
+  const spokes = [];
+  for (let k = 0; k < spokeCount; k++) {
+    const baseAng = (k / spokeCount) * Math.PI * 2 + (hash2i(k, 89, seed) - 0.5) * 0.45;
+    spokes.push({
+      ang: baseAng,
+      wobble: 0.08 + hash2i(k, 97, seed) * 0.10,
+      phase: hash2i(k, 103, seed) * Math.PI * 2,
+    });
+  }
+
+  const spokeAngleAt = (sp, r) => sp.ang + Math.sin(r * 0.00085 + sp.phase) * sp.wobble;
+
+  // Satellite suburban town sub-centres along arterials
+  const towns = [];
+  for (let k = 0; k < spokeCount; k++) {
+    if (hash2i(k, 109, seed) < 0.22) continue;
+    const sp = spokes[k];
+    const tr = rStart + (suburbSpan - rStart) * (0.18 + hash2i(k, 113, seed) * 0.46);
+    const a = spokeAngleAt(sp, tr);
+    towns.push({
+      x: Math.cos(a) * tr,
+      z: Math.sin(a) * tr,
+      r: 220 + hash2i(k, 127, seed) * 190,
+      rot: -a,
+    });
+  }
+
+  // Lamp & roadside retail ribbons along commuter arterials
+  for (let k = 0; k < spokes.length; k++) {
+    const sp = spokes[k];
+    const step = 115;
+    for (let r = rStart * 0.88; r < suburbSpan * 0.94; r += step) {
+      const a = spokeAngleAt(sp, r);
+      const cx = Math.cos(a) * r;
+      const cz = Math.sin(a) * r;
+      if (inWater(cx, cz)) continue;
+      const nx = -Math.sin(a);
+      const nz = Math.cos(a);
+      const tFade = clamp01(1 - (r - rStart) / Math.max(200, suburbSpan - rStart));
+      if (tFade > 0.12) {
+        pushLamp({ x: cx + nx * 15, y: 6.8, z: cz + nz * 15 });
+        if (tFade > 0.42) pushLamp({ x: cx - nx * 15, y: 6.8, z: cz - nz * 15 });
+      }
+      const rand = mulberry32(hash2i(k * 97 + Math.round(r * 0.1), 521, seed) * 4294967296);
+      if (rand() < 0.52 * tFade + 0.08) {
+        const side = rand() < 0.5 ? -1 : 1;
+        const bx = cx + nx * side * (30 + rand() * 18);
+        const bz = cz + nz * side * (30 + rand() * 18);
+        const rot = -a + (rand() - 0.5) * 0.15;
+        const bw = 15 + rand() * 20;
+        const bd = 11 + rand() * 13;
+        const bh = 5.5 + rand() * 9.5 * (0.4 + 0.6 * tFade);
+        push(bx, bh * 0.5, bz, bw, bh, bd, rand(), KIND.WALL, rand() < 0.45 ? 4 : 0, rot);
+        push(bx, bh + 0.55, bz, bw * 0.92, 1.1, bd * 0.92, rand(), KIND.SLAB, 2, rot);
+        added += 2;
+        if (rand() < 0.36 * tFade) {
+          pushSign({ x: bx, y: bh + 2.8, z: bz, w: Math.min(14, bw * 0.6), h: 2.6, d: 1.4, rot, seed: rand() });
+        }
+      }
+    }
+  }
+
+  // Satellite suburban town sub-centres: mid-rise apartments, civic halls & water tower
+  for (let tIdx = 0; tIdx < towns.length; tIdx++) {
+    const tn = towns[tIdx];
+    const rand = mulberry32(hash2i(tIdx, 613, seed) * 4294967296);
+    const bCount = 12 + Math.floor(rand() * 10);
+    for (let b = 0; b < bCount; b++) {
+      const ang = rand() * Math.PI * 2;
+      const rr = Math.pow(rand(), 0.65) * tn.r;
+      const bx = tn.x + Math.cos(ang) * rr;
+      const bz = tn.z + Math.sin(ang) * rr;
+      if (inWater(bx, bz)) continue;
+      const centerT = 1 - rr / (tn.r + 1);
+      const bh = 8 + centerT * 26 + rand() * 14;
+      const bw = 13 + rand() * 16;
+      const bd = 12 + rand() * 15;
+      const rot = tn.rot + (rand() - 0.5) * 0.28;
+      push(bx, bh * 0.5, bz, bw, bh, bd, rand(), KIND.WALL, centerT > 0.55 ? 4 : 0, rot);
+      push(bx, bh + 0.7, bz, bw * 0.84, 1.4, bd * 0.84, rand(), KIND.SLAB, 2, rot);
+      added += 2;
+      if (centerT > 0.5 && rand() < 0.38) {
+        pushSign({ x: bx, y: Math.min(bh - 2, 9.5), z: bz, w: bw * 0.55, h: 2.8, d: 1.5, rot, seed: rand() });
+      }
+      if (b % 3 === 0) {
+        pushLamp({ x: bx + 11, y: 6.8, z: bz });
+        pushTree({ x: bx - 10, z: bz + 6, h: 7 + rand() * 6, seed: rand() });
+      }
+    }
+    // Town water tower / relay mast with aviation beacon
+    const wh = 26 + rand() * 18;
+    push(tn.x, wh * 0.5, tn.z, 2.2, wh, 2.2, rand(), KIND.MAST, 2, 0);
+    push(tn.x, wh + 3.5, tn.z, 9.5, 7.0, 9.5, rand(), KIND.WALL, 2, 0);
+    push(tn.x, wh + 3.5, tn.z, 9.5, 7.0, 9.5, rand(), KIND.WALL, 2, Math.PI * 0.25);
+    pushBeacon(tn.x, wh + 8.5, tn.z, rand());
+    added += 3;
+  }
+
+  // Concentric polar neighbourhood rings stretching all the way to the horizon
+  let rCur = rStart;
+  let ringIdx = 0;
+  while (rCur < suburbSpan) {
+    const tNorm = clamp01((rCur - rStart) / Math.max(1, suburbSpan - rStart));
+    // Progressive spatial step so near suburbs are tight neighbourhoods & far horizon stays fast
+    const radialStep = 135 + tNorm * 225;
+    const arcStep = 130 + tNorm * 220;
+    const segs = Math.max(16, Math.round((2 * Math.PI * rCur) / arcStep));
+    const densityFade = Math.pow(1 - tNorm * 0.88, 1.25);
+
+    for (let sIdx = 0; sIdx < segs; sIdx++) {
+      const hRoll = hash2i(ringIdx * 131 + sIdx, 733, seed);
+      const a = ((sIdx + (hash2i(sIdx, ringIdx + 739, seed) - 0.5) * 0.65) / segs) * Math.PI * 2;
+      const rJit = rCur + (hash2i(sIdx + 17, ringIdx + 743, seed) - 0.5) * radialStep * 0.72;
+      const cx = Math.cos(a) * rJit;
+      const cz = Math.sin(a) * rJit;
+      if (inWater(cx, cz)) continue;
+
+      // Coherent greenbelts vs residential tracts via 2D FBM noise
+      const patch = fbm2D(noise, cx / 920 + 11.4, cz / 920 - 6.8, 2);
+      if (hRoll > (0.14 + patch * 0.88) * densityFade) continue;
+
+      const rand = mulberry32(hash2i(ringIdx * 313 + sIdx, 751, seed) * 4294967296);
+      const streetRot = -a + (Math.floor(rand() * 4) * Math.PI * 0.5) + (rand() - 0.5) * 0.16;
+      // Number of houses in this residential cul-de-sac / street parcel
+      const houses = tNorm < 0.38 ? (3 + Math.floor(rand() * 4)) : tNorm < 0.72 ? (2 + Math.floor(rand() * 3)) : (1 + Math.floor(rand() * 2));
+      const lotSpan = 42 + tNorm * 28;
+
+      for (let h = 0; h < houses; h++) {
+        const ox = ((h % 2) - 0.5) * lotSpan * (0.55 + rand() * 0.45);
+        const oz = (Math.floor(h / 2) - 0.5) * 26 + (rand() - 0.5) * 10;
+        const [hx, hz] = rotOff(cx, cz, ox, oz, streetRot);
+        const kindRoll = rand();
+        if (kindRoll < 0.68) {
+          // Detached / semi-detached suburban house with stepped pitched-roof ridge
+          const hw = 9.5 + rand() * 8.5;
+          const hd = 8.5 + rand() * 7.5;
+          const hh = 4.8 + rand() * 5.2 * (1 - tNorm * 0.25);
+          push(hx, hh * 0.5, hz, hw, hh, hd, rand(), KIND.WALL, 0, streetRot);
+          push(hx, hh + 1.15, hz, hw * 0.76, 2.3, hd * 0.68, rand(), KIND.SLAB, 2, streetRot);
+          added += 2;
+        } else if (kindRoll < 0.88) {
+          // Terraced rowhouse / garden apartment block
+          const hw = 18 + rand() * 14;
+          const hd = 9 + rand() * 5;
+          const hh = 7.2 + rand() * 6.8 * (1 - tNorm * 0.35);
+          push(hx, hh * 0.5, hz, hw, hh, hd, rand(), KIND.WALL, 0, streetRot);
+          push(hx, hh + 0.6, hz, hw * 0.92, 1.2, hd * 0.88, rand(), KIND.SLAB, 2, streetRot);
+          added += 2;
+        } else {
+          // Suburban greenhouse / barn / community pavilion
+          const hw = 14 + rand() * 16;
+          const hd = 10 + rand() * 10;
+          const hh = 4.2 + rand() * 4.0;
+          push(hx, hh * 0.5, hz, hw, hh, hd, rand(), KIND.SLAB, 2, streetRot);
+          added += 1;
+        }
+      }
+
+      if (tNorm < 0.55 && rand() < 0.36 * densityFade) {
+        pushTree({ x: cx + (rand() - 0.5) * 28, z: cz + (rand() - 0.5) * 28, h: 6.5 + rand() * 6.5, seed: rand() });
+      }
+      if (tNorm < 0.62 && rand() < 0.22 * densityFade) {
+        pushLamp({ x: cx, y: 6.2, z: cz });
+      }
+    }
+
+    rCur += radialStep / Math.max(0.55, Math.min(1.35, reach));
+    ringIdx++;
+  }
+  return added;
 }
 
 /**

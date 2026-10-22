@@ -14,6 +14,8 @@ export class FlyControls {
     this.collision = true;
     this.collider = null;
     this.heightScale = 1;
+    this.worldCurve = 0;
+    this.planetR = 2100;
     this.keys = new Set();
     this.yaw = 0;
     this.pitch = 0;
@@ -83,11 +85,62 @@ export class FlyControls {
 
   _resolve() {
     const p = this.camera.position;
+    if (this.worldCurve >= 0.0005) {
+      if (!this.collision) return false;
+      const R = this.planetR / Math.max(this.worldCurve, 0.0005);
+      const vx = p.x;
+      const vy = p.y + R;
+      const vz = p.z;
+      const rho = Math.hypot(vx, vy, vz);
+      if (rho < 1e-3) {
+        p.set(0, 12, 0);
+        return true;
+      }
+      const horiz = Math.hypot(vx, vz);
+      const cosT = Math.max(-1, Math.min(1, vy / rho));
+      const theta = Math.acos(cosT);
+      const flatR = R * theta;
+      const fx = horiz > 1e-4 ? (vx / horiz) * flatR : 0;
+      const fz = horiz > 1e-4 ? (vz / horiz) * flatR : 0;
+      let roof = 0;
+      if (this.collider && theta < 3.08) {
+        roof = this.collider.maxHeightNear(fx, fz, 11) * this.heightScale;
+      }
+      const minRho = R + Math.max(7, roof + 10);
+      if (rho < minRho) {
+        const s = minRho / rho;
+        p.set(vx * s, vy * s - R, vz * s);
+        return true;
+      }
+      return false;
+    }
     if (this.collision && this.collider) {
       return this.collider.resolveSphere(p, 9, this.heightScale);
     }
     p.y = Math.max(2, p.y);
     return false;
+  }
+
+  getPose() {
+    const p = this.camera.position;
+    return {
+      x: Math.round(p.x * 100) / 100,
+      y: Math.round(p.y * 100) / 100,
+      z: Math.round(p.z * 100) / 100,
+      yaw: Math.round(this.yaw * 10000) / 10000,
+      pitch: Math.round(this.pitch * 10000) / 10000,
+    };
+  }
+
+  setPose(pose) {
+    if (!pose || typeof pose !== 'object') return;
+    if (Number.isFinite(pose.x) && Number.isFinite(pose.y) && Number.isFinite(pose.z)) {
+      this.camera.position.set(pose.x, pose.y, pose.z);
+    }
+    if (Number.isFinite(pose.yaw)) this.yaw = pose.yaw;
+    if (Number.isFinite(pose.pitch)) this.pitch = Math.max(-1.45, Math.min(1.45, pose.pitch));
+    this.roll = 0;
+    this.camera.quaternion.setFromEuler(new THREE.Euler(this.pitch, this.yaw, 0, 'YXZ'));
   }
 
   setGlide(on) {

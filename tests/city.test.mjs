@@ -303,3 +303,31 @@ test('lane glide profiles lift air lanes over rooftops (no building clipping)', 
   assert.equal(pushed, true, 'sphere inside building gets pushed out');
   assert.equal(collider.hitsPoint(inside.x, inside.y, inside.z, 2), false, 'resolved point is clear');
 });
+
+test('horizon suburbs extend procedurally into the distance and scale with suburbReach', () => {
+  const cNone = generateCity(4417, 5, 0);
+  const cMid = generateCity(4417, 5, 1.0);
+  const cWide = generateCity(4417, 5, 1.4);
+
+  assert.equal(cNone.suburbCount, 0, 'suburbReach=0 disables horizon suburbs');
+  assert.ok(cMid.suburbCount > 1500, `expected >1500 suburban structures, got ${cMid.suburbCount}`);
+  assert.ok(cWide.suburbSpan > cMid.suburbSpan, 'larger suburbReach extends suburbSpan further toward horizon');
+  assert.ok(cMid.suburbSpan >= 4500, `expected suburbSpan >= 4500m, got ${cMid.suburbSpan}`);
+
+  // Verify structures exist across near, mid, and far horizon rings (> 3.5 km from core)
+  let ringNear = 0;
+  let ringFar = 0;
+  for (let i = 0; i < cMid.count; i++) {
+    const r = Math.hypot(cMid.x[i], cMid.z[i]);
+    if (r > 1200 && r <= 2800) ringNear++;
+    if (r > 3500) ringFar++;
+  }
+  assert.ok(ringNear > 400, `expected >400 inner-suburb structures, got ${ringNear}`);
+  assert.ok(ringFar > 200, `expected >200 far-horizon structures (>3.5km), got ${ringFar}`);
+
+  // Deterministic across runs
+  const cMid2 = generateCity(4417, 5, 1.0);
+  assert.equal(cMid.count, cMid2.count);
+  assert.equal(cMid.suburbCount, cMid2.suburbCount);
+});
+

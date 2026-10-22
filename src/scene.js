@@ -2,9 +2,12 @@
 // layer runs (and is tested) in Node against real three.js.
 import * as THREE from '../vendor/three.module.js';
 import { generateCity, makeCityCollider, CELL, AVENUE, STREET } from './city.js';
+import { hash2i } from './prng.js';
 import {
-  SKY_VERT, SKY_FRAG, GROUND_VERT, GROUND_FRAG, TOWER_VERT, TOWER_FRAG,
-  LANDMARK_VERT, LANDMARK_FRAG, BEACON_VERT, BEACON_FRAG, TRAIL_VERT, TRAIL_FRAG,
+  SKY_VERT, SKY_FRAG, CLOUD_VERT, CLOUD_FRAG,
+  GROUND_VERT, GROUND_FRAG, TOWER_VERT, TOWER_FRAG,
+  LANDMARK_VERT, LANDMARK_FRAG, SOLID_CURVED_VERT, SOLID_CURVED_FRAG,
+  BEACON_VERT, BEACON_FRAG, TRAIL_VERT, TRAIL_FRAG,
   BEAM_VERT, BEAM_FRAG, POOL_VERT, POOL_FRAG,
   WATER_VERT, WATER_FRAG, BILL_VERT, BILL_FRAG, WEATHER_VERT, WEATHER_FRAG,
   DUST_VERT, DUST_FRAG,
@@ -12,6 +15,28 @@ import {
 } from './shaders.js';
 
 export const col = (hex) => new THREE.Color(hex);
+
+/**
+ * Pure-JS mirror of GLSL `bendWorld(vec3 p)`: maps flat city coordinates
+ * `(x, y, z)` onto the curved world (0 = flat plane, 1 = full planetoid sphere
+ * of radius `planetR` centred at `(0, -planetR, 0)`).
+ */
+export function bendWorldPoint(x, y, z, curve = 0, planetR = 1800) {
+  if (!(curve >= 0.0005)) return { x, y, z };
+  const R = planetR / Math.max(curve, 0.0005);
+  const r = Math.hypot(x, z);
+  const dx = r > 1e-4 ? x / r : 1;
+  const dz = r > 1e-4 ? z / r : 0;
+  const theta = Math.min(r / R, 3.10);
+  const st = Math.sin(theta);
+  const ct = Math.cos(theta);
+  const rad = R + y;
+  return {
+    x: dx * st * rad,
+    y: -R + ct * rad,
+    z: dz * st * rad,
+  };
+}
 
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
 const smoothstep = (a, b, x) => {
@@ -63,6 +88,10 @@ export function makeUniforms() {
     uAve: { value: AVENUE },
     uSt: { value: STREET },
     uCitySpan: { value: CELL * 5 },
+    uSuburbSpan: { value: 5200 },
+    uGroundRadius: { value: 13500 },
+    uWorldCurve: { value: 0 },
+    uPlanetR: { value: 2100 },
     uWetness: { value: 0 },
     uLightK: { value: 1 },
     uBeaconCol: { value: col('#ff3b30') },
@@ -94,31 +123,178 @@ const pick = (U, names) => {
   return o;
 };
 
-/** Sky dome, ground grid and the instanced tower material + meshes. */
+/**
+ * Polar radial disc geometry in XZ: zero square corners, fine rings near the
+ * core & suburbs, and smooth tessellation for Plane <-> Sphere world bending.
+ */
+export function makeGroundDiscGeometry(maxR = 13500, rings = 68, segs = 96, y = 0, withRimSeed = false) {
+  const vertCount = 1 + rings * (segs + 1);
+  const pos = new Float32Array(vertCount * 3);
+  const nrm = new Float32Array(vertCount * 3);
+  const seeds = withRimSeed ? new Float32Array(vertCount) : null;
+  pos[0] = 0; pos[1] = y; pos[2] = 0;
+  nrm[0] = 0; nrm[1] = 1; nrm[2] = 0;
+  if (seeds) seeds[0] = -0.001;
+
+  let ptr = 1;
+  for (let rIdx = 1; rIdx <= rings; rIdx++) {
+    const t = rIdx / rings;
+    const rad = maxR * Math.pow(t, 1.55);
+    for (let sIdx = 0; sIdx <= segs; sIdx++) {
+      const a = (sIdx / segs) * Math.PI * 2;
+      pos[ptr * 3 + 0] = Math.cos(a) * rad;
+      pos[ptr * 3 + 1] = y;
+      pos[ptr * 3 + 2] = Math.sin(a) * rad;
+      nrm[ptr * 3 + 0] = 0;
+      nrm[ptr * 3 + 1] = 1;
+      nrm[ptr * 3 + 2] = 0;
+      if (seeds) seeds[ptr] = -Math.max(0.001, t);
+      ptr++;
+    }
+  }
+
+  const idx = [];
+  for (let sIdx = 0; sIdx < segs; sIdx++) {
+    idx.push(0, 1 + sIdx + 1, 1 + sIdx);
+  }
+  const stride = segs + 1;
+  for (let rIdx = 1; rIdx < rings; rIdx++) {
+    const row0 = 1 + (rIdx - 1) * stride;
+    const row1 = 1 + rIdx * stride;
+    for (let sIdx = 0; sIdx < segs; sIdx++) {
+      const a = row0 + sIdx;
+      const b = row0 + sIdx + 1;
+      const c = row1 + sIdx;
+      const d = row1 + sIdx + 1;
+      idx.push(a, b, c, b, d, c);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+  if (seeds) geo.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 1));
+  geo.setIndex(idx);
+  return geo;
+}
+
+/** Unlit curved ShaderMaterial (with `.color` THREE.Color accessor) for hulls, trees & road stripes. */
+export function makeCurvedBasicMaterial(U, hex = '#ffffff', { vertexColors = false } = {}) {
+  const uCurve = (U && U.uWorldCurve) || { value: 0 };
+  const uPlanet = (U && U.uPlanetR) || { value: 2100 };
+  const cVal = col(hex);
+  const mat = new THREE.ShaderMaterial({
+    vertexShader: SOLID_CURVED_VERT,
+    fragmentShader: SOLID_CURVED_FRAG,
+    uniforms: {
+      uColor: { value: cVal },
+      uWorldCurve: uCurve,
+      uPlanetR: uPlanet,
+    },
+    vertexColors,
+  });
+  Object.defineProperty(mat, 'color', {
+    get: () => mat.uniforms.uColor.value,
+    enumerable: true,
+  });
+  return mat;
+}
+
+/**
+ * Multi-layer 3D scene cloud geometry: two concentric curved 3D cloud strata
+ * domes + 160 sculpted 3D cumulus volumes floating across the skyline & suburbs.
+ */
+export function buildCloudLayers(cloudMat, seed = 4417) {
+  const group = new THREE.Group();
+
+  // Two concentric curved 3D cloud-deck shells (you can fly under, through & above)
+  for (const [alt, span] of [[440, 8800], [630, 9600]]) {
+    const shellGeo = makeGroundDiscGeometry(span, 42, 72, alt, true);
+    const shell = new THREE.Mesh(shellGeo, cloudMat);
+    shell.frustumCulled = false;
+    shell.renderOrder = 2;
+    group.add(shell);
+  }
+
+  // Sculpted 3D cumulus cloud volumes distributed across city & horizon suburbs
+  const puffCount = 160;
+  const puffGeo = new THREE.IcosahedronGeometry(1, 2);
+  const puffSeeds = new Float32Array(puffCount);
+  const puffs = new THREE.InstancedMesh(puffGeo, cloudMat, puffCount);
+  puffs.frustumCulled = false;
+  puffs.renderOrder = 3;
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const p = new THREE.Vector3();
+  const s = new THREE.Vector3();
+  const yAxis = new THREE.Vector3(0, 1, 0);
+  for (let i = 0; i < puffCount; i++) {
+    const r01 = hash2i(i, 17, seed ^ 0x3c91);
+    const a01 = hash2i(i, 29, seed ^ 0x3c91);
+    const h01 = hash2i(i, 43, seed ^ 0x3c91);
+    const dist = 260 + Math.pow(r01, 0.78) * 5200;
+    const ang = a01 * Math.PI * 2;
+    const alt = 340 + h01 * 420;
+    const w = 150 + hash2i(i, 53, seed ^ 0x3c91) * 280;
+    const h = 42 + hash2i(i, 61, seed ^ 0x3c91) * 72;
+    const d = 130 + hash2i(i, 71, seed ^ 0x3c91) * 250;
+    p.set(Math.cos(ang) * dist, alt, Math.sin(ang) * dist);
+    q.setFromAxisAngle(yAxis, hash2i(i, 83, seed ^ 0x3c91) * Math.PI * 2);
+    s.set(w, h, d);
+    m.compose(p, q, s);
+    puffs.setMatrixAt(i, m);
+    puffSeeds[i] = 0.05 + hash2i(i, 97, seed ^ 0x3c91) * 0.94;
+  }
+  puffs.instanceMatrix.needsUpdate = true;
+  puffGeo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(puffSeeds, 1));
+  group.add(puffs);
+  return group;
+}
+
+/** Sky dome, alpha-feathered polar ground, 3D cloud deck and instanced tower material + meshes. */
 export function makeWorld(U) {
-  // The sky dome must fully contain the ground plane (half-diagonal ~17k),
-  // or its square corners stick out past the horizon — the "square world" bug.
   const skyMat = new THREE.ShaderMaterial({
     vertexShader: SKY_VERT,
     fragmentShader: SKY_FRAG,
-    uniforms: pick(U, ['uZen', 'uHor', 'uSkySunCol', 'uSunDir', 'uCloudCol', 'uStars', 'uCloud', 'uCloudStyle', 'uHaze', 'uTime', 'uSunGlow', 'uSat', 'uMoonDir', 'uMoonSize', 'uMoonGlow', 'uMoonPhase', 'uFlash']),
+    uniforms: pick(U, [
+      'uZen', 'uHor', 'uSkySunCol', 'uSunDir', 'uCloudCol', 'uStars', 'uCloud', 'uCloudStyle',
+      'uHaze', 'uTime', 'uSunGlow', 'uSat', 'uMoonDir', 'uMoonSize', 'uMoonGlow', 'uMoonPhase',
+      'uFlash', 'uWorldCurve',
+    ]),
     side: THREE.BackSide,
     depthWrite: false,
   });
-  const sky = new THREE.Mesh(new THREE.SphereGeometry(20000, 48, 24), skyMat);
+  const sky = new THREE.Mesh(new THREE.SphereGeometry(22000, 56, 32), skyMat);
   sky.frustumCulled = false;
 
   const groundMat = new THREE.ShaderMaterial({
     vertexShader: GROUND_VERT,
     fragmentShader: GROUND_FRAG,
     uniforms: pick(U, [
-      'uGStreet', 'uGBlock', 'uGLine', 'uGLineGlow', 'uCell', 'uAve', 'uSt', 'uCitySpan',
+      'uGStreet', 'uGBlock', 'uGLine', 'uGLineGlow', 'uCell', 'uAve', 'uSt',
+      'uCitySpan', 'uSuburbSpan', 'uGroundRadius', 'uWorldCurve', 'uPlanetR',
       'uSunDir', 'uFogCol', 'uSunFogCol', 'uFogDensity', 'uFogHeight', 'uHazeSun', 'uSat',
       'uWetness', 'uPoolCol', 'uBillA', 'uLightK',
     ]),
+    transparent: true,
+    depthWrite: true,
+    side: THREE.DoubleSide,
   });
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(24000, 24000).rotateX(-Math.PI / 2), groundMat);
+  const ground = new THREE.Mesh(makeGroundDiscGeometry(13500, 68, 96, 0, false), groundMat);
   ground.frustumCulled = false;
+  ground.renderOrder = -1;
+
+  const cloudMat = new THREE.ShaderMaterial({
+    vertexShader: CLOUD_VERT,
+    fragmentShader: CLOUD_FRAG,
+    uniforms: pick(U, [
+      'uCloudCol', 'uSkySunCol', 'uSunDir', 'uFogCol', 'uSunFogCol', 'uHazeSun',
+      'uCloud', 'uCloudStyle', 'uSunGlow', 'uTime', 'uSat', 'uWorldCurve', 'uPlanetR',
+    ]),
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const clouds = buildCloudLayers(cloudMat);
 
   const towerMat = new THREE.ShaderMaterial({
     vertexShader: TOWER_VERT,
@@ -129,13 +305,14 @@ export function makeWorld(U) {
       'uEdge', 'uEdgeCol', 'uBandGlow', 'uToon', 'uFlat',
       'uFogCol', 'uSunFogCol', 'uFogDensity', 'uFogHeight', 'uHazeSun', 'uTime', 'uSat',
       'uBillA', 'uBillB', 'uBillK', 'uBillMono', 'uPoolCol', 'uLightK',
+      'uWorldCurve', 'uPlanetR',
     ]),
   });
 
   const beaconMat = new THREE.ShaderMaterial({
     vertexShader: BEACON_VERT,
     fragmentShader: BEACON_FRAG,
-    uniforms: pick(U, ['uTime', 'uLightK', 'uBeaconCol', 'uSteady']),
+    uniforms: pick(U, ['uTime', 'uLightK', 'uBeaconCol', 'uSteady', 'uWorldCurve', 'uPlanetR']),
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
@@ -150,6 +327,8 @@ export function makeWorld(U) {
       uLightK: U.uLightK,
       uBeaconCol: U.uLampCol,
       uSteady: { value: 1 },
+      uWorldCurve: U.uWorldCurve,
+      uPlanetR: U.uPlanetR,
     },
     transparent: true,
     depthWrite: false,
@@ -159,7 +338,7 @@ export function makeWorld(U) {
   const trailMat = new THREE.ShaderMaterial({
     vertexShader: TRAIL_VERT,
     fragmentShader: TRAIL_FRAG,
-    uniforms: pick(U, ['uLightK']),
+    uniforms: pick(U, ['uLightK', 'uWorldCurve', 'uPlanetR']),
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
@@ -170,7 +349,7 @@ export function makeWorld(U) {
   const beamMat = new THREE.ShaderMaterial({
     vertexShader: BEAM_VERT,
     fragmentShader: BEAM_FRAG,
-    uniforms: pick(U, ['uBeamCol', 'uBeamK', 'uTime', 'uLightK']),
+    uniforms: pick(U, ['uBeamCol', 'uBeamK', 'uTime', 'uLightK', 'uWorldCurve', 'uPlanetR']),
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
@@ -181,7 +360,7 @@ export function makeWorld(U) {
   const poolMat = new THREE.ShaderMaterial({
     vertexShader: POOL_VERT,
     fragmentShader: POOL_FRAG,
-    uniforms: pick(U, ['uPoolCol', 'uPoolK', 'uLightK']),
+    uniforms: pick(U, ['uPoolCol', 'uPoolK', 'uLightK', 'uWorldCurve', 'uPlanetR']),
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
@@ -190,27 +369,33 @@ export function makeWorld(U) {
   const waterMat = new THREE.ShaderMaterial({
     vertexShader: WATER_VERT,
     fragmentShader: WATER_FRAG,
-    uniforms: pick(U, ['uWaterDeep', 'uWaterShallow', 'uSunDir', 'uSkySunCol', 'uFogCol', 'uSunFogCol', 'uHazeSun', 'uTime', 'uSat']),
+    uniforms: pick(U, [
+      'uWaterDeep', 'uWaterShallow', 'uSunDir', 'uSkySunCol', 'uFogCol', 'uSunFogCol',
+      'uHazeSun', 'uTime', 'uSat', 'uWorldCurve', 'uPlanetR',
+    ]),
     side: THREE.DoubleSide,
   });
 
   const billMat = new THREE.ShaderMaterial({
     vertexShader: BILL_VERT,
     fragmentShader: BILL_FRAG,
-    uniforms: pick(U, ['uBillA', 'uBillB', 'uBillK', 'uBillMono', 'uTime', 'uLightK', 'uSat']),
+    uniforms: pick(U, ['uBillA', 'uBillB', 'uBillK', 'uBillMono', 'uTime', 'uLightK', 'uSat', 'uWorldCurve', 'uPlanetR']),
   });
 
   const holoMat = new THREE.ShaderMaterial({
     vertexShader: HOLO_VERT,
     fragmentShader: HOLO_FRAG,
-    uniforms: pick(U, ['uBillA', 'uBillB', 'uBillK', 'uBillMono', 'uTime', 'uLightK', 'uSat']),
+    uniforms: pick(U, ['uBillA', 'uBillB', 'uBillK', 'uBillMono', 'uTime', 'uLightK', 'uSat', 'uWorldCurve', 'uPlanetR']),
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
     side: THREE.DoubleSide,
   });
 
-  return { sky, skyMat, ground, groundMat, towerMat, beaconMat, lampMat, trailMat, beamMat, poolMat, waterMat, billMat, holoMat };
+  return {
+    sky, skyMat, ground, groundMat, clouds, cloudMat,
+    towerMat, beaconMat, lampMat, trailMat, beamMat, poolMat, waterMat, billMat, holoMat,
+  };
 }
 
 /** One landmark material — shared look vocabulary with the towers. */
@@ -224,6 +409,7 @@ export function makeLandmarkMaterial(U, hex) {
         'uSunDir', 'uSunCol', 'uSunK', 'uAmb', 'uAmbG', 'uWinDensity', 'uWinGlow',
         'uWinA', 'uWinB', 'uEdge', 'uEdgeCol',
         'uFogCol', 'uSunFogCol', 'uFogDensity', 'uFogHeight', 'uHazeSun', 'uTime', 'uSat',
+        'uWorldCurve', 'uPlanetR',
       ]),
     },
   });
@@ -263,9 +449,9 @@ export function buildCityMesh(city, towerMat) {
   return mesh;
 }
 
-/** Grow a city and return { city, mesh } — caller swaps the mesh in the scene. */
-export function growCity(seed, radius, towerMat) {
-  const city = generateCity(seed, radius);
+/** Grow a city and return { city, mesh, collider } — caller swaps the mesh in the scene. */
+export function growCity(seed, radius, towerMat, suburbReach = 1.0) {
+  const city = generateCity(seed, radius, suburbReach);
   return { city, mesh: buildCityMesh(city, towerMat), collider: makeCityCollider(city) };
 }
 
@@ -444,6 +630,7 @@ export function buildLandmarks(city, U) {
         }
       }
     }
+    m.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
     group.add(m);
   }
   return group;
@@ -698,6 +885,7 @@ export function buildPlaces(city, U) {
         m.add(lamp);
       }
     }
+    m.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
     group.add(m);
   }
   return group;
@@ -1109,7 +1297,8 @@ export function makeVehicles(city, trailMat, count = 260, collider = null) {
     local[i] = classCount[cc]++;
   }
 
-  const bodyMat = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false });
+  const curveU = trailMat && trailMat.uniforms ? trailMat.uniforms : null;
+  const bodyMat = makeCurvedBasicMaterial(curveU, '#ffffff', { vertexColors: true });
   const beamMat = new THREE.ShaderMaterial({
     vertexShader: BEAM_VERT,
     fragmentShader: BEAM_FRAG,
@@ -1118,6 +1307,8 @@ export function makeVehicles(city, trailMat, count = 260, collider = null) {
       uBeamK: { value: 0.55 },
       uTime: { value: 0 },
       uLightK: { value: 1 },
+      uWorldCurve: (curveU && curveU.uWorldCurve) || { value: 0 },
+      uPlanetR: (curveU && curveU.uPlanetR) || { value: 2100 },
     },
     transparent: true,
     depthWrite: false,
@@ -1550,15 +1741,31 @@ export function makeLightPools(city, poolMat) {
 
 /* ------------------------------------------------- water, trees, signs */
 
-/** Bodies of water — irregular polygon lakes with a ripple shader. */
+/** Bodies of water — irregular polygon lakes with radial rings for spherical bending. */
 export function buildWater(city, waterMat) {
   const group = new THREE.Group();
+  const rings = 6;
   for (const w of city.water) {
     const pos = [];
     for (let i = 0; i < w.pts.length; i++) {
       const [x1, z1] = w.pts[i];
       const [x2, z2] = w.pts[(i + 1) % w.pts.length];
-      pos.push(x1, 2.2, z1, x2, 2.2, z2, w.x, 2.2, w.z);
+      for (let rIdx = 0; rIdx < rings; rIdx++) {
+        const t0 = rIdx / rings;
+        const t1 = (rIdx + 1) / rings;
+        const ax0 = w.x + (x1 - w.x) * t0, az0 = w.z + (z1 - w.z) * t0;
+        const bx0 = w.x + (x2 - w.x) * t0, bz0 = w.z + (z2 - w.z) * t0;
+        const ax1 = w.x + (x1 - w.x) * t1, az1 = w.z + (z1 - w.z) * t1;
+        const bx1 = w.x + (x2 - w.x) * t1, bz1 = w.z + (z2 - w.z) * t1;
+        if (rIdx === 0) {
+          pos.push(ax1, 2.2, az1, bx1, 2.2, bz1, w.x, 2.2, w.z);
+        } else {
+          pos.push(
+            ax1, 2.2, az1, bx1, 2.2, bz1, ax0, 2.2, az0,
+            bx1, 2.2, bz1, bx0, 2.2, bz0, ax0, 2.2, az0
+          );
+        }
+      }
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
@@ -1574,19 +1781,20 @@ export function buildWater(city, waterMat) {
 export function buildBoulevards(city, U) {
   const group = new THREE.Group();
   const roadMat = makeLandmarkMaterial(U, '#161824');
-  const lineMat = new THREE.MeshBasicMaterial({ color: '#ffd28a', toneMapped: false });
+  const lineMat = makeCurvedBasicMaterial(U, '#ffd28a');
   group.userData.lineMat = lineMat;
   for (const b of city.boulevards || []) {
     const dx = b.x2 - b.x1;
     const dz = b.z2 - b.z1;
     const len = Math.hypot(dx, dz) || 1;
     const ang = Math.atan2(dx, dz);
-    const road = new THREE.Mesh(new THREE.BoxGeometry(36, 0.5, len), roadMat);
+    const segs = Math.max(24, Math.min(72, Math.ceil(len / 90)));
+    const road = new THREE.Mesh(new THREE.BoxGeometry(36, 0.5, len, 1, 1, segs), roadMat);
     road.position.set((b.x1 + b.x2) * 0.5, 0.35, (b.z1 + b.z2) * 0.5);
     road.rotation.y = ang;
     road.frustumCulled = false;
     group.add(road);
-    const stripe = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.65, len), lineMat);
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.65, len, 1, 1, segs), lineMat);
     stripe.position.set((b.x1 + b.x2) * 0.5, 0.42, (b.z1 + b.z2) * 0.5);
     stripe.rotation.y = ang;
     stripe.frustumCulled = false;
@@ -1724,17 +1932,17 @@ export function buildHolos(city, holoMat, beamMat) {
  * Trees — organic trees in some looks, sybernetic bioelectric illuminators
  * in others. Both variants are built; setNature(look) switches and re-tints.
  */
-export function buildTrees(city) {
+export function buildTrees(city, U = null) {
   const group = new THREE.Group();
   const organic = new THREE.Group();
   const cyber = new THREE.Group();
   const n = Math.max(1, city.trees.length);
 
-  const trunkMatO = new THREE.MeshBasicMaterial({ color: '#7a5a3a', toneMapped: false });
-  const canopyMatO = new THREE.MeshBasicMaterial({ color: '#4a9c5d', toneMapped: false });
-  const trunkMatC = new THREE.MeshBasicMaterial({ color: '#141210', toneMapped: false });
-  const canopyMatC = new THREE.MeshBasicMaterial({ color: '#e8d9b0', toneMapped: false });
-  const glowMatC = new THREE.MeshBasicMaterial({ color: '#e8d9b0', toneMapped: false });
+  const trunkMatO = makeCurvedBasicMaterial(U, '#7a5a3a');
+  const canopyMatO = makeCurvedBasicMaterial(U, '#4a9c5d');
+  const trunkMatC = makeCurvedBasicMaterial(U, '#141210');
+  const canopyMatC = makeCurvedBasicMaterial(U, '#e8d9b0');
+  const glowMatC = makeCurvedBasicMaterial(U, '#e8d9b0');
 
   const trunkGeo = new THREE.CylinderGeometry(0.55, 1, 1, 6);
   const canopyGeo = new THREE.SphereGeometry(0.5, 8, 6);

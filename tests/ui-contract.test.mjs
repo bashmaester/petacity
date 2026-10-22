@@ -33,11 +33,11 @@ test('every $() call uses a #-prefixed string literal (no selector typos)', () =
 
 test('script and stylesheet hooks line up', () => {
   assert.ok(html.includes('src="./src/main.js"'));
-  // chips are built dynamically in JS
-  assert.ok(main.includes("document.createElement('button')"), 'chips are created dynamically');
-  // CSS hooks main.js toggles
-  for (const cls of ['grain', 'scan', 'vig', 'loading', 'hint-flash', 'look-blurb', 'chips']) {
-    assert.ok(html.includes(cls), `.${cls} hook missing from html`);
+  // dropdown options for looks, presets, places & bookmarks are built dynamically in JS
+  assert.ok(main.includes("document.createElement('option')"), 'dropdown options are created dynamically');
+  // CSS & DOM hooks main.js toggles
+  for (const cls of ['grain', 'scan', 'vig', 'loading', 'hint-flash', 'look-blurb', 'sel-look', 'sel-poi', 'sel-preset', 'sel-bookmark', 'export-box']) {
+    assert.ok(html.includes(cls), `${cls} hook missing from html`);
   }
 });
 
@@ -81,10 +81,30 @@ test('UI toggle sits in top corner of panel, #keys avoids panel overlap, and gly
   assert.match(keysRule[1], /right:\s*18px/, '#keys anchored on right so it never overlaps .panel');
   assert.match(keysRule[1], /left:\s*auto/, '#keys clears left offset');
 
-  for (const id of ['b-ui', 'b-glide', 'b-collide', 'b-new', 'b-link', 'b-seed-pal']) {
+  for (const id of [
+    'b-ui', 'b-glide', 'b-collide', 'b-export',
+    'b-new', 'b-link', 'b-seed-pal',
+    'b-preset-save', 'b-preset-del', 'b-poi-go', 'b-bm-go', 'b-bm-add', 'b-bm-del',
+  ]) {
     const tag = html.match(new RegExp(`<button[^>]*id="${id}"[^>]*>`));
     assert.ok(tag, `button #${id} found`);
     assert.match(tag[0], /aria-label="[^"]+"/, `#${id} has aria-label`);
     assert.match(tag[0], /title="[^"]+"/, `#${id} has hover title`);
   }
+});
+
+test('Phase-7 dropdowns, whole-config presets, place bookmarks, curvature, suburbs & exact-state export exist', () => {
+  for (const id of [
+    'sel-look', 'sel-poi', 'b-poi-go',
+    'sel-preset', 'b-preset-save', 'b-preset-del', 'preset-save-row', 'preset-name', 'b-preset-ok',
+    'sel-bookmark', 'b-bm-go', 'b-bm-add', 'b-bm-del', 'bm-save-row', 'bm-name', 'b-bm-ok',
+    'b-export', 'export-box', 'export-text', 'b-copy-exact', 'b-dl-json', 'b-apply-state',
+    'sl-curve', 'curve-label', 'sl-suburbs',
+  ]) {
+    assert.ok(html.includes(`id="${id}"`), `#${id} present in index.html`);
+  }
+  assert.match(html, /<select[^>]*id="sel-look"/, 'Looks is a <select> dropdown');
+  assert.match(html, /<select[^>]*id="sel-poi"/, 'Places is a <select> dropdown');
+  assert.match(html, /<select[^>]*id="sel-preset"/, 'Whole-config Presets is a <select> dropdown');
+  assert.match(html, /<select[^>]*id="sel-bookmark"/, 'Bookmarks has its own <select> dropdown');
 });

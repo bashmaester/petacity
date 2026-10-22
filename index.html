@@ -5,11 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#0b0f1a">
 <title>Petacity — city scaffolding looks lab</title>
-<meta name="description" content="A procedural city grown from one seed, with swap-able looks: Blade Runner, 2000s anime, abstract geometry, Tron and more.">
+<meta name="description" content="A procedural city grown from one seed, with swap-able looks, horizon suburbs, adjustable plane-to-sphere world geometry, presets, bookmarks, and exact-state sharing.">
 <style>
 :root {
   --accent: #ff6a4d;
-  --panel: rgba(10, 14, 24, 0.74);
+  --panel: rgba(10, 14, 24, 0.76);
   --line: rgba(255, 255, 255, 0.09);
   --text: #e8eef9;
   --mute: #93a0ba;
@@ -55,7 +55,7 @@ body {
 
 .panel {
   position: fixed; z-index: 6;
-  left: 18px; top: 18px; width: 304px;
+  left: 18px; top: 18px; width: 312px;
   max-height: calc(100vh - 36px); overflow-y: auto;
   padding: 12px 14px 13px;
   border-radius: 16px;
@@ -87,6 +87,7 @@ body {
 }
 .icon-btn:hover { background: rgba(255, 255, 255, 0.15); color: var(--text); }
 .icon-btn:active { transform: scale(0.95); }
+.icon-btn:disabled { opacity: 0.35; cursor: default; pointer-events: none; }
 .icon-btn.on {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 22%, rgba(255, 255, 255, 0.08));
@@ -107,7 +108,8 @@ body.ui-off .panel {
 body.ui-off .panel-body,
 body.ui-off .brand,
 body.ui-off #b-glide,
-body.ui-off #b-collide {
+body.ui-off #b-collide,
+body.ui-off #b-export {
   display: none;
 }
 body.ui-off #b-ui {
@@ -125,39 +127,52 @@ body.ui-off #keys {
 }
 
 .lab {
-  display: block; margin: 10px 2px 5px;
+  display: block; margin: 9px 2px 4px;
   font-size: 9px; font-weight: 700; letter-spacing: 0.16em;
   text-transform: uppercase; color: var(--mute);
 }
-#chips { display: flex; flex-wrap: wrap; gap: 5px; }
-#chips button {
-  display: inline-flex; align-items: center; gap: 6px;
-  height: 27px; padding: 0 9px; border-radius: 999px;
-  border: 1px solid var(--line); background: rgba(255, 255, 255, 0.05);
-  color: var(--text); font-size: 11px; font-weight: 600; cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, transform 0.1s;
-}
-#chips button:hover { background: rgba(255, 255, 255, 0.12); }
-#chips button:active { transform: scale(0.97); }
-#chips button.on {
-  background: rgba(255, 255, 255, 0.92); color: #12172a; border-color: transparent;
-}
-#chips i { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
-#look-blurb { margin: 6px 2px 0; font-size: 10.5px; color: var(--mute); font-style: italic; }
 
-#pois { display: flex; flex-wrap: wrap; gap: 5px; max-height: 98px; overflow-y: auto; }
-#pois button {
-  display: inline-flex; align-items: center; gap: 5px;
-  height: 25px; padding: 0 9px; border-radius: 999px;
-  border: 1px solid var(--line); background: rgba(255, 255, 255, 0.05);
-  color: var(--text); font-size: 10.5px; font-weight: 600; cursor: pointer;
-  transition: background 0.15s;
+.drop-row {
+  display: flex; align-items: center; gap: 5px; min-width: 0;
 }
-#pois button:hover { background: rgba(255, 255, 255, 0.14); }
-#pois button i {
-  font-style: normal; font-size: 10.5px; color: var(--accent);
-  font-variant-emoji: text; flex: none;
+.drop-row select {
+  flex: 1; min-width: 0; height: 28px; padding: 0 8px;
+  border-radius: 8px; border: 1px solid var(--line);
+  background: rgba(20, 26, 42, 0.88); color: var(--text);
+  font-size: 11.5px; font-weight: 600; cursor: pointer;
 }
+.drop-row select:focus { outline: 1px solid var(--accent); }
+.swatch-dot {
+  width: 10px; height: 10px; border-radius: 50%; flex: none;
+  background: var(--accent); box-shadow: 0 0 8px var(--accent);
+}
+#look-blurb { margin: 5px 2px 0; font-size: 10.5px; color: var(--mute); font-style: italic; }
+
+.mini-drawer {
+  display: none; align-items: center; gap: 5px; margin-top: 5px;
+}
+.mini-drawer.on { display: flex; }
+.mini-drawer input[type="text"] {
+  flex: 1; min-width: 0; height: 27px; padding: 0 8px;
+  border-radius: 7px; border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.08); color: var(--text);
+  font-size: 11px;
+}
+
+#export-box {
+  display: none; margin-top: 7px; padding: 7px 8px;
+  border-radius: 10px; background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--line);
+}
+#export-box.on { display: block; }
+#export-text {
+  width: 100%; height: 26px; padding: 0 7px; margin-bottom: 5px;
+  border-radius: 6px; border: 1px solid var(--line);
+  background: rgba(12, 16, 28, 0.85); color: var(--text);
+  font: 10.5px ui-monospace, Menlo, Consolas, monospace;
+}
+.export-actions { display: flex; gap: 5px; }
+.export-actions button { flex: 1; height: 25px; font-size: 11px; }
 
 .slider-grid {
   display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; margin: 2px;
@@ -179,12 +194,12 @@ body.ui-off #keys {
 }
 .slider-row em {
   font-style: normal; font-size: 10px; color: var(--text);
-  min-width: 68px; text-align: right; white-space: nowrap;
+  min-width: 66px; text-align: right; white-space: nowrap;
   font-variant-emoji: text;
 }
 
 #custom-box {
-  display: none; margin: 8px 2px 3px; padding: 8px 9px;
+  display: none; margin: 7px 2px 3px; padding: 8px 9px;
   border-radius: 12px; background: rgba(255, 255, 255, 0.045);
   border: 1px solid var(--line);
 }
@@ -229,17 +244,17 @@ body.ui-off #keys {
 .slider-row input[type="range"]::-moz-range-track { height: 4px; border-radius: 3px; background: rgba(255, 255, 255, 0.16); }
 .slider-row input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border: 0; border-radius: 50%; background: var(--accent); }
 
-.seed-row { display: flex; gap: 6px; margin-top: 10px; align-items: center; }
+.seed-row { display: flex; gap: 5px; margin-top: 9px; align-items: center; }
 #seed-input {
-  flex: 1; min-width: 0; height: 30px; padding: 0 9px;
+  flex: 1; min-width: 0; height: 29px; padding: 0 9px;
   border-radius: 8px; border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.07); color: var(--text);
   font: 600 12px ui-monospace, Menlo, Consolas, monospace;
 }
 button.action {
   display: inline-grid; place-items: center;
-  min-width: 32px; height: 30px; padding: 0 9px; border: 0; border-radius: 8px; cursor: pointer;
-  font-size: 14px; font-weight: 700; color: #12172a; background: var(--accent);
+  min-width: 30px; height: 29px; padding: 0 8px; border: 0; border-radius: 8px; cursor: pointer;
+  font-size: 13px; font-weight: 700; color: #12172a; background: var(--accent);
   font-variant-emoji: text;
 }
 button.action.ghost {
@@ -248,11 +263,11 @@ button.action.ghost {
 button.action:hover { filter: brightness(1.12); }
 
 .stats {
-  display: flex; gap: 6px; margin-top: 9px;
+  display: flex; gap: 6px; margin-top: 8px;
 }
 .stat {
-  flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px;
-  padding: 5px 8px; border-radius: 9px;
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px;
+  padding: 5px 7px; border-radius: 9px;
   background: rgba(255, 255, 255, 0.05); border: 1px solid var(--line);
 }
 .stat i {
@@ -260,7 +275,7 @@ button.action:hover { filter: brightness(1.12); }
   font-variant-emoji: text; flex: none;
 }
 .stat b {
-  font-size: 12px; font-weight: 600;
+  font-size: 11.5px; font-weight: 600;
   font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--text);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
@@ -269,7 +284,7 @@ button.action:hover { filter: brightness(1.12); }
 #keys {
   position: fixed; z-index: 5; right: 18px; bottom: 16px; left: auto;
   display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px 11px;
-  max-width: calc(100vw - 356px);
+  max-width: calc(100vw - 364px);
   padding: 7px 11px; border-radius: 12px;
   background: var(--panel); border: 1px solid var(--line);
   backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
@@ -331,17 +346,41 @@ button.action:hover { filter: brightness(1.12); }
 
 <aside class="panel">
   <div class="panel-head">
-    <div class="brand" title="One seed grows the whole city — swap the look to re-theme the world">Peta<b>city</b></div>
+    <div class="brand" title="One seed grows the whole city — swap the look or bend the world into a globe">Peta<b>city</b></div>
     <div class="head-actions">
       <button id="b-glide" class="icon-btn" type="button" aria-pressed="false" aria-label="Glide mode" title="Start Glide mode — drag to steer, wheel for speed (G)">&#x2708;&#xFE0E;</button>
       <button id="b-collide" class="icon-btn on" type="button" aria-pressed="true" aria-label="Toggle collision detection" title="Collision: on — toggle noclip (C)">&#x2B21;</button>
+      <button id="b-export" class="icon-btn" type="button" aria-pressed="false" aria-label="Export or share exact state" title="Export / share exact state (URL &amp; JSON)">&#x2912;</button>
       <button id="b-ui" class="icon-btn" type="button" aria-pressed="true" aria-label="Toggle interface" title="Hide interface (H)">&#x25E7;</button>
     </div>
   </div>
 
   <div class="panel-body">
+    <div id="export-box" aria-label="Exact state export and import">
+      <input id="export-text" type="text" spellcheck="false" aria-label="Exact state share link or JSON" placeholder="Exact state URL or JSON…">
+      <div class="export-actions">
+        <button id="b-copy-exact" type="button" class="action" aria-label="Copy exact state share URL" title="Copy exact state share URL">&#x2398; URL</button>
+        <button id="b-dl-json" type="button" class="action ghost" aria-label="Download exact state JSON" title="Download exact state JSON file">&#x2913; JSON</button>
+        <button id="b-apply-state" type="button" class="action ghost" aria-label="Import state from text field" title="Load pasted URL or JSON state">&#x21B5; Load</button>
+      </div>
+    </div>
+
+    <span class="lab">World Preset</span>
+    <div class="drop-row">
+      <select id="sel-preset" aria-label="Whole configuration preset" title="Load a full-world configuration preset"></select>
+      <button id="b-preset-save" type="button" class="icon-btn" aria-label="Save current configuration as preset" title="Save whole configuration as preset">&#xFF0B;</button>
+      <button id="b-preset-del" type="button" class="icon-btn" aria-label="Delete saved preset" title="Delete selected custom preset" disabled>&#x2715;</button>
+    </div>
+    <div id="preset-save-row" class="mini-drawer">
+      <input id="preset-name" type="text" maxlength="40" placeholder="Name this configuration…" aria-label="New preset name">
+      <button id="b-preset-ok" type="button" class="action" aria-label="Confirm save preset" title="Save preset">&#x2713;</button>
+    </div>
+
     <span class="lab">Look</span>
-    <div id="chips" role="group" aria-label="Visual look"></div>
+    <div class="drop-row">
+      <i id="look-dot" class="swatch-dot" aria-hidden="true"></i>
+      <select id="sel-look" aria-label="Visual look" title="Choose visual look style"></select>
+    </div>
     <p id="look-blurb"></p>
 
     <div id="custom-box" aria-label="Custom palette editor">
@@ -364,11 +403,45 @@ button.action:hover { filter: brightness(1.12); }
       </div>
     </div>
 
-    <span class="lab">Tuning</span>
+    <span class="lab">World Geometry &amp; Scale</span>
+    <div class="slider-grid">
+      <div class="slider-row wide" title="World geometry curvature (Plane ↔ Sphere)">
+        <span>&#x25D4;</span>
+        <input id="sl-curve" type="range" min="0" max="1" step="0.01" value="0" aria-label="World curvature plane to sphere">
+        <em id="curve-label">Plane</em>
+      </div>
+      <div class="slider-row" title="City core size (radius)"><span>&#x2B1A;</span><input id="sl-radius" type="range" min="1" max="15" step="1" value="5" aria-label="City size"></div>
+      <div class="slider-row" title="Horizon suburbs reach"><span>&#x2302;</span><input id="sl-suburbs" type="range" min="0" max="1.6" step="0.05" value="1" aria-label="Horizon suburbs reach"></div>
+      <div class="slider-row" title="Building height scale"><span>&#x2195;</span><input id="sl-height" type="range" min="0.5" max="2" step="0.02" value="1" aria-label="Height scale"></div>
+      <div class="slider-row" title="Aerial traffic density"><span>&#x21C4;</span><input id="sl-traffic" type="range" min="0" max="1.5" step="0.02" value="1" aria-label="Traffic density"></div>
+    </div>
+
+    <span class="lab">Places &amp; Bookmarks</span>
+    <div class="drop-row" title="Procedural city landmarks &amp; districts">
+      <select id="sel-poi" aria-label="Places of interest" title="Select a procedural place to visit"></select>
+      <button id="b-poi-go" type="button" class="icon-btn" aria-label="Fly to selected place" title="Fly to selected place">&#x27A4;</button>
+    </div>
+    <div class="drop-row" style="margin-top: 5px;" title="Saved camera viewpoint bookmarks">
+      <select id="sel-bookmark" aria-label="Saved place bookmarks" title="Saved camera bookmarks"></select>
+      <button id="b-bm-go" type="button" class="icon-btn" aria-label="Fly to selected bookmark" title="Fly to selected bookmark">&#x27A4;</button>
+      <button id="b-bm-add" type="button" class="icon-btn" aria-label="Bookmark current camera viewpoint" title="Bookmark current camera viewpoint">&#x2606;</button>
+      <button id="b-bm-del" type="button" class="icon-btn" aria-label="Delete selected bookmark" title="Delete selected bookmark">&#x2715;</button>
+    </div>
+    <div id="bm-save-row" class="mini-drawer">
+      <input id="bm-name" type="text" maxlength="40" placeholder="Bookmark viewpoint name…" aria-label="New bookmark name">
+      <button id="b-bm-ok" type="button" class="action" aria-label="Confirm save bookmark" title="Save bookmark">&#x2713;</button>
+    </div>
+
+    <span class="lab">Tuning &amp; Atmosphere</span>
     <div class="slider-grid">
       <div class="slider-row" title="Window density"><span>&#x229E;</span><input id="sl-win" type="range" min="0" max="2" step="0.02" value="1" aria-label="Window density"></div>
       <div class="slider-row" title="Window &amp; sign glow"><span>&#x273A;</span><input id="sl-glow" type="range" min="0" max="2.5" step="0.02" value="1" aria-label="Window glow"></div>
-      <div class="slider-row wide" title="Atmospheric fog"><span>&#x224B;</span><input id="sl-fog" type="range" min="0" max="2.5" step="0.02" value="1" aria-label="Fog"></div>
+      <div class="slider-row" title="Atmospheric fog"><span>&#x224B;</span><input id="sl-fog" type="range" min="0" max="2.5" step="0.02" value="1" aria-label="Fog"></div>
+      <div class="slider-row" title="Street, beacon &amp; searchlight intensity"><span>&#x2726;</span><input id="sl-lights" type="range" min="0" max="2" step="0.02" value="1" aria-label="Atmospheric lights"></div>
+      <div class="slider-row" title="3D Cloud cover"><span>&#x2601;&#xFE0E;</span><input id="sl-clouds" type="range" min="0" max="1.6" step="0.02" value="1" aria-label="Cloud cover"></div>
+      <div class="slider-row" title="Horizon haze"><span>&#x2261;</span><input id="sl-haze" type="range" min="0" max="2" step="0.02" value="1" aria-label="Horizon haze"></div>
+      <div class="slider-row" title="Sun glow"><span>&#x263C;</span><input id="sl-sun" type="range" min="0" max="2" step="0.02" value="1" aria-label="Sun glow"></div>
+      <div class="slider-row" title="Colour vibrance"><span>&#x25C8;</span><input id="sl-vib" type="range" min="0.4" max="1.6" step="0.02" value="1" aria-label="Colour vibrance"></div>
     </div>
 
     <span class="lab">Environment &amp; Weather</span>
@@ -376,10 +449,10 @@ button.action:hover { filter: brightness(1.12); }
       <div class="slider-row" title="Time of day (0–24h)"><span>&#x2600;&#xFE0E;</span><input id="sl-time" type="range" min="0" max="24" step="0.1" value="18.2" aria-label="Time of day"></div>
       <div class="slider-row" title="Ambient dust motes"><span>&#x2726;</span><input id="sl-dust" type="range" min="0" max="1.8" step="0.02" value="0.6" aria-label="Ambient dust motes"></div>
       <div class="slider-row wide" title="Weather mode"><span>&#x2602;&#xFE0E;</span><input id="sl-weather" type="range" min="0" max="6" step="1" value="0" aria-label="Weather mode"><em id="weather-label">&#x2600;&#xFE0E; Clear</em></div>
-      <div class="slider-row wide" title="StormyClouds sky rendering style">
+      <div class="slider-row wide" title="StormyClouds 3D sky &amp; cloud rendering style">
         <span>&#x2601;&#xFE0E;</span>
         <select id="sel-cloudstyle" aria-label="StormyClouds sky rendering style">
-          <option value="0">Volumetric painted</option>
+          <option value="0">Volumetric painted (3D)</option>
           <option value="1">StormyClouds · Film grain</option>
           <option value="2">StormyClouds · Spray &amp; drips</option>
           <option value="3">StormyClouds · Mezzotint</option>
@@ -402,31 +475,16 @@ button.action:hover { filter: brightness(1.12); }
       <div class="slider-row wide" title="Old-film grain, specks &amp; scratches"><span>&#x2338;</span><input id="sl-film" type="range" min="0" max="1.5" step="0.02" value="0.16" aria-label="Old film grain, dust specks and scratches"></div>
     </div>
 
-    <span class="lab">Scale &amp; Atmosphere</span>
-    <div class="slider-grid">
-      <div class="slider-row" title="City size (radius)"><span>&#x2B1A;</span><input id="sl-radius" type="range" min="1" max="15" step="1" value="5" aria-label="City size"></div>
-      <div class="slider-row" title="Building height scale"><span>&#x2195;</span><input id="sl-height" type="range" min="0.5" max="2" step="0.02" value="1" aria-label="Height scale"></div>
-      <div class="slider-row" title="Aerial traffic density"><span>&#x21C4;</span><input id="sl-traffic" type="range" min="0" max="1.5" step="0.02" value="1" aria-label="Traffic density"></div>
-      <div class="slider-row" title="Cloud cover"><span>&#x2601;&#xFE0E;</span><input id="sl-clouds" type="range" min="0" max="1.6" step="0.02" value="1" aria-label="Cloud cover"></div>
-      <div class="slider-row" title="Horizon haze"><span>&#x2261;</span><input id="sl-haze" type="range" min="0" max="2" step="0.02" value="1" aria-label="Horizon haze"></div>
-      <div class="slider-row" title="Sun glow"><span>&#x263C;</span><input id="sl-sun" type="range" min="0" max="2" step="0.02" value="1" aria-label="Sun glow"></div>
-      <div class="slider-row" title="Colour vibrance"><span>&#x25C8;</span><input id="sl-vib" type="range" min="0.4" max="1.6" step="0.02" value="1" aria-label="Colour vibrance"></div>
-      <div class="slider-row" title="Street, beacon &amp; searchlight intensity"><span>&#x2726;</span><input id="sl-lights" type="range" min="0" max="2" step="0.02" value="1" aria-label="Atmospheric lights"></div>
-    </div>
-
-    <span class="lab">Places</span>
-    <div id="pois" role="group" aria-label="Places of interest"></div>
-
     <div class="seed-row">
       <input id="seed-input" type="number" min="1" max="999999999" aria-label="City seed" title="City seed">
       <button class="action" id="b-new" type="button" aria-label="New random city" title="New random city">&#x21BB;</button>
-      <button class="action ghost" id="b-link" type="button" aria-label="Copy shareable link" title="Copy shareable link">&#x2398;</button>
+      <button class="action ghost" id="b-link" type="button" aria-label="Share exact state link" title="Copy exact state shareable link">&#x2398;</button>
     </div>
 
     <div class="stats">
       <div class="stat" title="City seed"><i aria-hidden="true">#</i><b id="stat-seed">—</b></div>
-      <div class="stat" title="Tower count"><i aria-hidden="true">&#x25AE;</i><b id="stat-towers">—</b></div>
-      <div class="stat" title="Instanced boxes"><i aria-hidden="true">&#x25A3;</i><b id="stat-boxes">—</b></div>
+      <div class="stat" title="Core towers"><i aria-hidden="true">&#x25AE;</i><b id="stat-towers">—</b></div>
+      <div class="stat" title="Total buildings &amp; suburbs"><i aria-hidden="true">&#x25A3;</i><b id="stat-boxes">—</b></div>
     </div>
   </div>
 </aside>

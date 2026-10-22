@@ -5,16 +5,19 @@ import assert from 'node:assert/strict';
 import * as THREE from '../vendor/three.module.js';
 import { LOOKS, LOOK_BY_ID, syncCustomLook } from '../src/looks.js';
 import * as SHADERS from '../src/shaders.js';
-import { WEATHER_VERT, SKY_FRAG } from '../src/shaders.js';
+import { WEATHER_VERT, SKY_FRAG, GROUND_FRAG, CLOUD_VERT, CLOUD_FRAG } from '../src/shaders.js';
 import * as POST from '../src/post.js';
 import { makePostProcessor, POST_VERT, BRIGHT_FRAG, BLUR_FRAG, COMP_FRAG } from '../src/post.js';
 import {
-  makeUniforms, makeWorld, growCity, applyLook, applyTime,
+  makeUniforms, makeWorld, growCity, applyLook, applyTime, bendWorldPoint,
   buildLandmarks, buildBeacons, buildPlaces, makeLamps, makeLandmarkMaterial,
   makeVehicles, makeSearchlights, makeLightPools,
   buildWater, buildBoulevards, buildBillboards, buildTrees, buildSculptures,
   makeWeather, WEATHER_NAMES, buildSigns, buildHolos,
 } from '../src/scene.js';
+import {
+  WORLD_PRESETS, DEFAULT_BOOKMARKS, encodeExactState, decodeExactState,
+} from '../src/presets.js';
 import { FlyControls } from '../src/controls.js';
 
 test('every look preset has a complete schema', () => {
@@ -707,3 +710,126 @@ test('all GLSL shaders avoid ESSL 3.00 (#version 300 es) reserved keywords', () 
     }
   }
 });
+
+test('ground is a polar radial disc whose edge disappears smoothly via alpha', () => {
+  const U = makeUniforms();
+  const world = makeWorld(U);
+  assert.equal(world.groundMat.transparent, true, 'groundMat uses alpha blending for feathering');
+  assert.match(GROUND_FRAG, /edgeAlpha/, 'GROUND_FRAG computes radial edgeAlpha');
+  assert.match(GROUND_FRAG, /gl_FragColor\s*=\s*vec4\([\s\S]+?,\s*edgeAlpha\s*\)/, 'GROUND_FRAG outputs feathered edgeAlpha');
+
+  const pos = world.ground.geometry.getAttribute('position');
+  const maxR = U.uGroundRadius.value;
+  let maxDist = 0;
+  for (let i = 0; i < pos.count; i++) {
+    const d = Math.hypot(pos.getX(i), pos.getZ(i));
+    if (d > maxDist) maxDist = d;
+  }
+  assert.ok(Math.abs(maxDist - maxR) < 1, `polar ground disc outer radius=${maxDist} matches uGroundRadius=${maxR} (no square corners)`);
+});
+
+test('clouds live on 3D curved strata domes + instanced 3D cumulus puffs and spherical sky dome (not flat sky plane)', () => {
+  const U = makeUniforms();
+  const world = makeWorld(U);
+  assert.ok(world.clouds && world.clouds.isGroup, 'world.clouds 3D group exists');
+  assert.equal(world.clouds.children.length, 3, '2 curved 3D strata shells + 1 instanced 3D cumulus volume mesh');
+  const puffs = world.clouds.children[2];
+  assert.ok(puffs.isInstancedMesh && puffs.count >= 120, 'instanced 3D cumulus cloud volumes built');
+  assert.ok(CLOUD_VERT.includes('bendWorld') && CLOUD_FRAG.includes('evalStormyPlate'), '3D cloud shaders bend with world & support StormyClouds plates');
+  const skyCodeOnly = SKY_FRAG.replace(/\/\/[^\n]*/g, '');
+  assert.equal(/d\.xz\s*\/\s*\(?d\.y/.test(skyCodeOnly), false, 'SKY_FRAG no longer projects clouds onto a flat d.xz / d.y plane');
+});
+
+test('world curvature smoothly morphs Plane <-> Sphere and FlyControls resolves radially around globe', () => {
+  const flat = bendWorldPoint(900, 120, -600, 0, 2000);
+  assert.deepEqual(flat, { x: 900, y: 120, z: -600 }, 'curve=0 is exact flat-plane identity');
+
+  const p0 = bendWorldPoint(0, 50, 0, 1, 2000);
+  assert.ok(Math.abs(p0.x) < 1e-6 && Math.abs(p0.y - 50) < 1e-6 && Math.abs(p0.z) < 1e-6, 'origin stays tangent at (0, y, 0)');
+
+  // Halfway around the globe (arc length = pi * R / 2 => equator y = -R)
+  const R = 2000;
+  const eq = bendWorldPoint((Math.PI * 0.5) * R, 80, 0, 1, R);
+  assert.ok(Math.abs(eq.x - (R + 80)) < 1e-3, `equator x=${eq.x}`);
+  assert.ok(Math.abs(eq.y - (-R)) < 1e-3, `equator y=${eq.y}`);
+
+  // Spherical camera collision allows southern hemisphere flight while keeping camera outside planet surface
+  const cam = new THREE.PerspectiveCamera(60, 1, 2, 30000);
+  const fakeDom = { addEventListener() {}, setPointerCapture() {} };
+  const prevWin = globalThis.window;
+  globalThis.window = { addEventListener() {} };
+  try {
+    const ctl = new FlyControls(cam, fakeDom);
+    ctl.worldCurve = 1;
+    ctl.planetR = R;
+    ctl.collision = true;
+    // Place camera near south pole slightly inside planet surface (centre is (0, -2000, 0))
+    cam.position.set(0, -3995, 0); // rho = 1995 < R+7
+    const hit = ctl._resolve();
+    assert.equal(hit, true, 'camera inside southern hemisphere surface pushed radially outward');
+    assert.ok(cam.position.y < -4000, `southern hemisphere camera pushed outward to y=${cam.position.y} (not clamped to y>=2!)`);
+  } finally {
+    globalThis.window = prevWin;
+  }
+});
+
+test('whole-config presets and exact-state export/decode roundtrip losslessly', () => {
+  assert.ok(WORLD_PRESETS.length >= 6, 'curated whole-config world presets exist');
+  const hasGlobePreset = WORLD_PRESETS.some((p) => p.state.worldCurve >= 0.9);
+  assert.equal(hasGlobePreset, true, 'includes an orbital sphere preset');
+  assert.ok(DEFAULT_BOOKMARKS.length >= 3, 'starter place bookmarks exist');
+
+  const sample = {
+    seed: 987654,
+    lookId: 'custom',
+    cityRadius: 7,
+    suburbReach: 1.35,
+    worldCurve: 0.72,
+    heightScale: 1.24,
+    timeOfDay: 21.4,
+    weatherMode: 2,
+    dustLevel: 0.92,
+    glide: true,
+    collide: false,
+    tune: {
+      win: 1.3, glow: 1.6, fog: 0.85, lights: 1.4, traffic: 1.15,
+      clouds: 1.25, cloudStyle: 5, haze: 1.1, sun: 0.9, vib: 1.22,
+      moon: 1.4, moonsz: 1.3, moonph: 0.42,
+    },
+    post: { bloom: 1.18, lens: 0.64, contrast: 1.14, temp: -0.22, film: 0.34 },
+    custom: {
+      zen: '#0a1428', hor: '#e05a44', base: '#1a263a',
+      win: '#ffd468', accent: '#08dca4', sec: '#4ecaf2',
+      style: 'toon', mono: true,
+    },
+    camera: { x: 412.35, y: 288.5, z: -615.8, yaw: -2.4123, pitch: -0.2145 },
+    bookmarks: [
+      { name: 'Custom Spire', x: 120.5, y: 340, z: -210.25, yaw: 0.52, pitch: -0.18 },
+    ],
+  };
+
+  const token = encodeExactState(sample);
+  assert.ok(typeof token === 'string' && token.length > 20, 'encoded Base64URL token produced');
+  const back = decodeExactState(token);
+  assert.ok(back, 'token decoded');
+  assert.equal(back.seed, 987654);
+  assert.equal(back.lookId, 'custom');
+  assert.equal(back.cityRadius, 7);
+  assert.ok(Math.abs(back.suburbReach - 1.35) < 1e-3);
+  assert.ok(Math.abs(back.worldCurve - 0.72) < 1e-3);
+  assert.equal(back.glide, true);
+  assert.equal(back.collide, false);
+  assert.equal(back.tune.cloudStyle, 5);
+  assert.equal(back.custom.accent, '#08dca4');
+  assert.equal(back.custom.mono, true);
+  assert.ok(Math.abs(back.camera.x - 412.35) < 0.05);
+  assert.ok(Math.abs(back.camera.yaw - -2.4123) < 0.001);
+  assert.equal(back.bookmarks.length, 1);
+  assert.equal(back.bookmarks[0].name, 'Custom Spire');
+
+  // Raw JSON string also decodes cleanly
+  const fromJson = decodeExactState(JSON.stringify(sample));
+  assert.equal(fromJson.seed, 987654);
+  assert.equal(fromJson.bookmarks[0].name, 'Custom Spire');
+});
+
