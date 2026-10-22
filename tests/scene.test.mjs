@@ -3,13 +3,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from '../vendor/three.module.js';
-import { LOOKS, LOOK_BY_ID } from '../src/looks.js';
+import { LOOKS, LOOK_BY_ID, syncCustomLook } from '../src/looks.js';
+import { WEATHER_VERT, SKY_FRAG } from '../src/shaders.js';
+import { makePostProcessor, POST_VERT, BRIGHT_FRAG, BLUR_FRAG, COMP_FRAG } from '../src/post.js';
 import {
   makeUniforms, makeWorld, growCity, applyLook, applyTime,
   buildLandmarks, buildBeacons, buildPlaces, makeLamps, makeLandmarkMaterial,
   makeVehicles, makeSearchlights, makeLightPools,
-  buildWater, buildBoulevards, buildBillboards, buildTrees, buildSculptures, makeWeather,
-  buildSigns, buildHolos,
+  buildWater, buildBoulevards, buildBillboards, buildTrees, buildSculptures,
+  makeWeather, WEATHER_NAMES, buildSigns, buildHolos,
 } from '../src/scene.js';
 import { FlyControls } from '../src/controls.js';
 
@@ -40,7 +42,7 @@ test('shaders only use uniforms the materials actually have', () => {
     for (const m of src.matchAll(/uniform\s+\w+\s+(\w+)/g)) names.add(m[1]);
     return names;
   };
-  const mats = [world.skyMat, world.groundMat, world.towerMat, world.beaconMat, world.lampMat, world.trailMat, world.beamMat, world.poolMat, world.waterMat, world.billMat, makeLandmarkMaterial(U, '#334455')];
+  const mats = [world.skyMat, world.groundMat, world.towerMat, world.beaconMat, world.lampMat, world.trailMat, world.beamMat, world.poolMat, world.waterMat, world.billMat, world.holoMat, makeLandmarkMaterial(U, '#334455')];
   for (const mat of mats) {
     const used = new Set([...declared(mat.vertexShader), ...declared(mat.fragmentShader)]);
     for (const name of used) {
@@ -528,4 +530,132 @@ test('FlyControls glide mode cruises toward scenic nodes and respects collision 
   } finally {
     globalThis.window = prevWin;
   }
+});
+
+test('theme-consistent lights, billboards & vehicles: Metropolis is strictly monochrome, Custom theme updates live', () => {
+  const U = makeUniforms();
+  const world = makeWorld(U);
+  const { city, collider } = growCity(4417, 4, world.towerMat);
+  const veh = makeVehicles(city, world.trailMat, 80, collider);
+
+  // Metropolis: uBillMono = 1, warm silver/ivory palette, zero saturated neon colours
+  applyLook(U, LOOK_BY_ID.metropolis);
+  assert.equal(U.uBillMono.value, 1, 'Metropolis enforces monochrome billboards & holograms');
+  const chromaOf = (c) => Math.max(c.r, c.g, c.b) - Math.min(c.r, c.g, c.b);
+  assert.ok(chromaOf(U.uBillA.value) < 0.22, `Metropolis uBillA chroma=${chromaOf(U.uBillA.value)}`);
+  assert.ok(chromaOf(U.uBillB.value) < 0.22, `Metropolis uBillB chroma=${chromaOf(U.uBillB.value)}`);
+  assert.ok(chromaOf(U.uBeamCol.value) < 0.22, 'Metropolis searchlights stay silver/tungsten');
+  assert.ok(chromaOf(U.uLampCol.value) < 0.28, 'Metropolis streetlamps stay warm tungsten');
+
+  veh.setPalette(LOOK_BY_ID.metropolis);
+  const trailCol = veh.trails.geometry.getAttribute('aColor');
+  for (let i = 0; i < 40; i++) {
+    const r = trailCol.getX(i);
+    const g = trailCol.getY(i);
+    const b = trailCol.getZ(i);
+    assert.ok(Math.max(r, g, b) - Math.min(r, g, b) < 0.28, `Metropolis vehicle#${i} had saturated colour (${r},${g},${b})`);
+  }
+
+  // Custom palette updates sky, towers, billboards & monochrome option in-place
+  const custom = syncCustomLook({
+    zen: '#102030', hor: '#e06040', base: '#1a2536',
+    win: '#ffd060', accent: '#20e0a0', sec: '#40b0ff',
+    style: 'toon', mono: false,
+  });
+  applyLook(U, custom);
+  assert.equal(U.uZen.value.getHexString(), '102030');
+  assert.equal(U.uBillA.value.getHexString(), '20e0a0');
+  assert.equal(U.uBillMono.value, 0);
+  assert.equal(U.uToon.value, 1);
+
+  syncCustomLook({ mono: true });
+  applyLook(U, LOOK_BY_ID.custom);
+  assert.equal(U.uBillMono.value, 1, 'Custom mono toggle locks signs to monochrome');
+});
+
+test('weather falls downward (never upward), carries 3D dust motes & StormyClouds sky styles', () => {
+  // Verify WEATHER_VERT subtracts uTime * aSpeed so positive speeds move -Y (downward)
+  assert.match(WEATHER_VERT, /-\s*uTime\s*\*\s*aSpeed/, 'precipitation must subtract uTime * aSpeed to fall downward');
+
+  const U = makeUniforms();
+  const w = makeWeather(U);
+  assert.equal(WEATHER_NAMES.length, 7);
+  assert.ok(w.dust && w.dust.isPoints, '3D ambient dust motes Points cloud exists');
+
+  // Verify positive speeds on rain, snow & ash, and confirm y decreases as time advances
+  for (const sys of [w.rain, w.snow, w.ash]) {
+    const spd = sys.geometry.getAttribute('aSpeed').array;
+    const off = sys.geometry.getAttribute('aOff').array;
+    const fallH = sys.material.uniforms.uFallH.value;
+    assert.ok(spd[0] > 0, 'particle speed > 0');
+    const mod = (x, m) => ((x % m) + m) % m;
+    const yAt = (time) => mod(off[0] - time * spd[0], fallH) - fallH * 0.5;
+    // Choose a time window away from wrap seam and verify dy < 0
+    const t0 = ((off[0] - fallH * 0.6) / spd[0]) + 10 * (fallH / spd[0]);
+    const y0 = yAt(t0);
+    const y1 = yAt(t0 + 0.05);
+    assert.ok(y1 < y0, `expected downward motion y1(${y1}) < y0(${y0})`);
+  }
+
+  // Modes 0..6 toggle rain/snow/ash, street wetness & dust motes
+  w.setMode(1);
+  assert.equal(w.rain.visible, true);
+  assert.ok(U.uWetness.value > 0.5, 'rain wets the streets');
+  w.setMode(2);
+  assert.equal(U.uWetness.value, 1.0, 'storm maximizes street wetness');
+  w.setMode(5);
+  assert.equal(w.rain.visible, false);
+  assert.equal(w.dust.visible, true, 'dust haze boosts motes');
+  w.setMode(6);
+  assert.equal(w.rain.visible, true, 'old-film storm drives rain');
+  w.setDust(0);
+  assert.equal(w.dust.visible, false, 'dust slider at 0 hides motes');
+  w.setDust(0.8);
+  assert.equal(w.dust.visible, true);
+
+  // StormyClouds styles 0..6 are wired through applyLook/applyTime & SKY_FRAG
+  assert.match(SKY_FRAG, /uCloudStyle/);
+  assert.match(SKY_FRAG, /filmGrainSky/);
+  assert.match(SKY_FRAG, /mezzotintArc/);
+  applyLook(U, LOOK_BY_ID.metropolis, { win: 1, glow: 1, fog: 1, cloudStyle: 3 });
+  assert.equal(U.uCloudStyle.value, 3);
+  applyTime(U, LOOK_BY_ID.metropolis, 21.4, { cloudStyle: 5 });
+  assert.equal(U.uCloudStyle.value, 5);
+});
+
+test('post-processing stack (bloom, lens FX, color grading, old-film) matches shader contracts', () => {
+  const declared = (src) => {
+    const names = new Set();
+    for (const m of src.matchAll(/uniform\s+\w+\s+(\w+)/g)) names.add(m[1]);
+    return names;
+  };
+  let renderCalls = 0;
+  const fakeRenderer = {
+    setRenderTarget() {},
+    render() { renderCalls++; },
+  };
+  const post = makePostProcessor(fakeRenderer);
+  for (const mat of [post.brightMat, post.blurMat, post.compMat]) {
+    const used = new Set([...declared(mat.vertexShader), ...declared(mat.fragmentShader)]);
+    for (const name of used) assert.ok(mat.uniforms[name], `${name} missing on post material`);
+    for (const name of Object.keys(mat.uniforms)) assert.ok(used.has(name), `${name} unused in post shader`);
+  }
+  assert.equal(post.brightMat.vertexShader, POST_VERT);
+  assert.equal(post.brightMat.fragmentShader, BRIGHT_FRAG);
+  assert.equal(post.blurMat.fragmentShader, BLUR_FRAG);
+  assert.equal(post.compMat.fragmentShader, COMP_FRAG);
+
+  post.setSize(1280, 720, 1.25);
+  assert.equal(post.sceneRT.width, 1600);
+  assert.equal(post.sceneRT.height, 900);
+
+  post.configure({ bloom: 1.2, lens: 0.7, contrast: 1.15, temp: -0.2, sat: 1.1, vignette: 0.6, film: 0.45, tint: '#00e5ff' });
+  assert.equal(post.compMat.uniforms.uBloom.value, 1.2);
+  assert.equal(post.compMat.uniforms.uLens.value, 0.7);
+  assert.equal(post.compMat.uniforms.uContrast.value, 1.15);
+  assert.equal(post.compMat.uniforms.uTemp.value, -0.2);
+  assert.equal(post.compMat.uniforms.uFilm.value, 0.45);
+
+  post.render(new THREE.Scene(), new THREE.PerspectiveCamera(), 4.2);
+  assert.equal(renderCalls, 7, 'scene + bright + 4 separable blur passes + final composite');
 });

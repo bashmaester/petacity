@@ -3,9 +3,15 @@
 // Skips when jsdom is not installed (it is a devDependency: npm install).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { LOOKS } from '../src/looks.js';
 
 const LOOKS_EXPECTED = LOOKS.length;
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const realHtml = readFileSync(join(root, 'index.html'), 'utf8')
+  .replace(/<script\b[^>]*src=["']\.\/src\/main\.js["'][^>]*><\/script>/i, '');
 
 let JSDOM = null;
 try {
@@ -15,24 +21,7 @@ try {
 }
 
 test('main.js boots end-to-end (jsdom + fake WebGL)', { skip: JSDOM ? false : 'jsdom not installed (npm install)' }, async () => {
-  const dom = new JSDOM(`<!doctype html><html><body>
-    <canvas id="stage"></canvas>
-    <div id="vig"></div><div id="grain"></div><div id="scan"></div>
-    <div id="chips"></div><p id="look-blurb"></p>
-    <input id="sl-win" type="range"><input id="sl-glow" type="range"><input id="sl-fog" type="range">
-    <input id="sl-time" type="range"><input id="sl-radius" type="range"><input id="sl-height" type="range">
-    <input id="sl-traffic" type="range"><input id="sl-lights" type="range">
-    <input id="sl-clouds" type="range"><input id="sl-haze" type="range">
-    <input id="sl-sun" type="range"><input id="sl-vib" type="range">
-    <input id="sl-weather" type="range"><input id="sl-moon" type="range">
-    <input id="sl-moonsz" type="range"><input id="sl-moonph" type="range">
-    <div id="pois"></div>
-    <input id="seed-input" type="number">
-    <button id="b-new"></button><button id="b-link"></button><button id="b-ui"></button>
-    <button id="b-glide"></button><button id="b-collide"></button>
-    <b id="stat-seed"></b><b id="stat-towers"></b><b id="stat-boxes"></b>
-    <div id="hint-flash"></div><div id="loading">Growing the city…</div>
-    </body></html>`, { url: 'http://localhost/?seed=42&look=tron', pretendToBeVisual: true });
+  const dom = new JSDOM(realHtml, { url: 'http://localhost/?seed=42&look=tron', pretendToBeVisual: true });
 
   const { window } = dom;
   const defineGlobal = (key, value) => Object.defineProperty(globalThis, key, { value, configurable: true, writable: true });

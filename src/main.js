@@ -1,14 +1,15 @@
 // Petacity — procedural city scaffolding with swap-able looks.
 import * as THREE from '../vendor/three.module.js';
-import { LOOKS, LOOK_BY_ID } from './looks.js';
+import { LOOKS, LOOK_BY_ID, DEFAULT_CUSTOM, syncCustomLook } from './looks.js';
 import { CELL } from './city.js';
 import {
   makeUniforms, makeWorld, growCity, applyLook, applyTime,
   buildLandmarks, buildBeacons, buildPlaces, makeLamps,
   makeVehicles, makeSearchlights, makeLightPools,
-  buildWater, buildBoulevards, buildBillboards, buildTrees, buildSculptures, makeWeather,
-  buildSigns, buildHolos,
+  buildWater, buildBoulevards, buildBillboards, buildTrees, buildSculptures,
+  makeWeather, WEATHER_NAMES, buildSigns, buildHolos,
 } from './scene.js';
+import { makePostProcessor } from './post.js';
 import { FlyControls } from './controls.js';
 
 // Colours are authored as plain sRGB and written straight out — keep THREE's
@@ -49,8 +50,26 @@ window.addEventListener('error', (e) => fatal(e.error || e.message));
 window.addEventListener('unhandledrejection', (e) => fatal(e.reason));
 
 const params = new URLSearchParams(location.search);
+if (params.get('pal')) {
+  const parts = params.get('pal').split(',');
+  if (parts.length >= 6) {
+    const normHex = (s, fb) => (/^[0-9a-fA-F]{6}$/.test(s) ? `#${s}` : fb);
+    syncCustomLook({
+      zen: normHex(parts[0], DEFAULT_CUSTOM.zen),
+      hor: normHex(parts[1], DEFAULT_CUSTOM.hor),
+      base: normHex(parts[2], DEFAULT_CUSTOM.base),
+      win: normHex(parts[3], DEFAULT_CUSTOM.win),
+      accent: normHex(parts[4], DEFAULT_CUSTOM.accent),
+      sec: normHex(parts[5], DEFAULT_CUSTOM.sec),
+      style: ['lit', 'toon', 'flat'].includes(parts[6]) ? parts[6] : 'lit',
+      mono: parts[7] === '1',
+    });
+  }
+}
+
 let seed = clampInt(params.get('seed'), 1, 999999999, 4417);
 let lookId = LOOK_BY_ID[params.get('look')] ? params.get('look') : 'bladerunner';
+let prevPresetId = lookId === 'custom' ? 'bladerunner' : lookId;
 // Deliberately small by default so the app stays fast while we test and debug.
 // Grow it with ?r=13 (or the City size slider) when we want the full skyline.
 let cityRadius = clampInt(params.get('r'), 1, 15, 5);
@@ -59,17 +78,27 @@ let timeOfDay = params.get('t') !== null
   : LOOK_BY_ID[lookId].defTime;
 let heightScale = 1;
 const tune = {
-  win: 1, glow: 1, fog: 1, lights: 1, traffic: 1, clouds: 1, haze: 1, sun: 1, vib: 1,
+  win: 1, glow: 1, fog: 1, lights: 1, traffic: 1,
+  clouds: 1, cloudStyle: clampInt(params.get('cs'), 0, 6, 0),
+  haze: 1, sun: 1, vib: 1,
   moon: 1, moonsz: 1, moonph: 0.85,
 };
-let weatherMode = 0;
+let weatherMode = clampInt(params.get('w'), 0, 6, 0);
+let dustLevel = 0.6;
+const initGrade = LOOK_BY_ID[lookId].grade || { bloom: 0.85, lens: 0.45, contrast: 1.06, temp: 0, film: 0.16 };
+const postState = {
+  bloom: initGrade.bloom,
+  lens: initGrade.lens,
+  contrast: initGrade.contrast,
+  temp: initGrade.temp,
+  film: initGrade.film,
+};
 
 function createRenderer(canvas) {
   try {
     return new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
   } catch (e1) {
     try {
-      // some environments reject the preferred attributes but still give a context
       return new THREE.WebGLRenderer({ canvas });
     } catch (e2) {
       throw new Error('Could not create a WebGL context — this preview needs WebGL 2. ' + ((e2 && e2.message) || ''));
@@ -83,7 +112,9 @@ function boot() {
   const canvas = $('#stage');
   const renderer = createRenderer(canvas);
   renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+  renderer.setPixelRatio(dpr);
+  const post = makePostProcessor(renderer);
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(62, 1, 2, 28000);
@@ -99,8 +130,10 @@ function boot() {
   const cityGroup = new THREE.Group();
   scene.add(cityGroup);
 
-  // weather follows the camera, not the city
+  // weather & 3D ambient dust motes follow the camera
   const weather = makeWeather(U);
+  weather.setDust(dustLevel);
+  weather.setMode(weatherMode);
   scene.add(weather.group);
 
   const controls = new FlyControls(camera, canvas);
@@ -139,6 +172,7 @@ function boot() {
       const ch = cityGroup.children.pop();
       ch.traverse?.((o) => o.geometry && o.geometry.dispose());
     }
+    const look = LOOK_BY_ID[lookId];
     cityMesh = grown.mesh;
     landmarkGroup = buildLandmarks(city, U);
     placeGroup = buildPlaces(city, U);
@@ -148,6 +182,7 @@ function boot() {
     searchlights = makeSearchlights(city, world.beamMat);
     vehicles = makeVehicles(city, world.trailMat, 260, cityCollider);
     vehicles.setCollision(collideOn);
+    vehicles.setPalette(look);
     waterGroup = buildWater(city, world.waterMat);
     boulevardGroup = buildBoulevards(city, U);
     billboards = buildBillboards(city, world.billMat);
@@ -155,9 +190,10 @@ function boot() {
     holoGroup = buildHolos(city, world.holoMat, world.beamMat);
     trees = buildTrees(city);
     sculptures = buildSculptures(city, world.beaconMat, world.lampMat);
-    if (trees) trees.setNature(LOOK_BY_ID[lookId]);
+    trees.setNature(look);
+    weather.setTint(look);
     if (boulevardGroup && boulevardGroup.userData.lineMat) {
-      boulevardGroup.userData.lineMat.color.set(LOOK_BY_ID[lookId].ground.line);
+      boulevardGroup.userData.lineMat.color.set(look.ground.line);
     }
     cityGroup.add(cityMesh);
     cityGroup.add(landmarkGroup);
@@ -193,24 +229,76 @@ function boot() {
 
   /* ------------------------------------------------------------- look */
 
-  function refreshLook() {
+  function syncPostSliders() {
+    $('#sl-bloom').value = String(postState.bloom);
+    $('#sl-lens').value = String(postState.lens);
+    $('#sl-contrast').value = String(postState.contrast);
+    $('#sl-temp').value = String(postState.temp);
+    $('#sl-film').value = String(postState.film);
+  }
+
+  function syncPostUniforms(look) {
+    const filmActive = weatherMode === 6 ? Math.max(postState.film, 0.78) : postState.film;
+    post.configure({
+      bloom: postState.bloom,
+      lens: postState.lens,
+      contrast: postState.contrast,
+      temp: postState.temp,
+      sat: tune.vib,
+      vignette: look.post.vignette,
+      film: filmActive,
+      tint: look.accent,
+    });
+  }
+
+  function syncCustomInputs() {
+    const cfg = LOOK_BY_ID.custom.customConfig || DEFAULT_CUSTOM;
+    $('#cp-zen').value = cfg.zen;
+    $('#cp-hor').value = cfg.hor;
+    $('#cp-base').value = cfg.base;
+    $('#cp-win').value = cfg.win;
+    $('#cp-accent').value = cfg.accent;
+    $('#cp-sec').value = cfg.sec;
+    $('#cp-style').value = cfg.style;
+    $('#cp-mono').checked = !!cfg.mono;
+  }
+
+  function refreshLook(loadLookGrade = false) {
     const look = LOOK_BY_ID[lookId];
-    applyLook(U, look, tune);
-    applyTime(U, look, timeOfDay, tune);
+    if (loadLookGrade && look.grade) {
+      postState.bloom = look.grade.bloom;
+      postState.lens = look.grade.lens;
+      postState.contrast = look.grade.contrast;
+      postState.temp = look.grade.temp;
+      postState.film = look.grade.film;
+      syncPostSliders();
+    }
+    const effClouds = weatherMode === 2 || weatherMode === 6 ? Math.max(tune.clouds, 1.25) : tune.clouds;
+    const effStyle = weatherMode === 6 && tune.cloudStyle === 0 ? 1 : tune.cloudStyle;
+    applyLook(U, look, { ...tune, cloudStyle: effStyle });
+    applyTime(U, look, timeOfDay, { ...tune, clouds: effClouds, cloudStyle: effStyle, sat: tune.vib });
     if (trees) trees.setNature(look);
+    if (vehicles) vehicles.setPalette(look);
+    if (weather) weather.setTint(look);
     if (boulevardGroup && boulevardGroup.userData.lineMat) {
       boulevardGroup.userData.lineMat.color.set(look.ground.line);
     }
     document.documentElement.style.setProperty('--accent', look.accent);
-    $('#grain').style.opacity = look.post.grain;
+    // WebGL post-processor handles primary film grain & optical vignette; keep subtle CSS scanlines/grain low
+    $('#grain').style.opacity = look.post.grain * 0.35;
     $('#scan').style.opacity = look.post.scan;
-    $('#vig').style.opacity = look.post.vignette;
+    $('#vig').style.opacity = look.post.vignette * 0.35;
+    $('#custom-box').classList.toggle('on', lookId === 'custom');
     document.querySelectorAll('#chips button').forEach((b) => {
       const on = b.dataset.look === lookId;
       b.classList.toggle('on', on);
       b.setAttribute('aria-pressed', on);
+      if (b.dataset.look === 'custom') {
+        b.querySelector('i').style.background = LOOK_BY_ID.custom.accent;
+      }
     });
     $('#look-blurb').textContent = look.blurb;
+    syncPostUniforms(look);
     syncURL();
   }
 
@@ -220,6 +308,15 @@ function boot() {
     p.set('look', lookId);
     p.set('r', String(cityRadius));
     p.set('t', timeOfDay.toFixed(1));
+    if (weatherMode > 0) p.set('w', String(weatherMode)); else p.delete('w');
+    if (tune.cloudStyle > 0) p.set('cs', String(tune.cloudStyle)); else p.delete('cs');
+    if (lookId === 'custom' && LOOK_BY_ID.custom.customConfig) {
+      const c = LOOK_BY_ID.custom.customConfig;
+      const strip = (h) => String(h).replace('#', '');
+      p.set('pal', [strip(c.zen), strip(c.hor), strip(c.base), strip(c.win), strip(c.accent), strip(c.sec), c.style, c.mono ? '1' : '0'].join(','));
+    } else {
+      p.delete('pal');
+    }
     history.replaceState(null, '', `${location.pathname}?${p}`);
   }
 
@@ -232,13 +329,56 @@ function boot() {
     b.innerHTML = `<i></i>${L.label}`;
     b.querySelector('i').style.background = L.accent;
     b.onclick = () => {
+      if (lookId !== 'custom') prevPresetId = lookId;
       lookId = L.id;
-      timeOfDay = L.defTime; // land on the hour the look was authored for
+      timeOfDay = L.defTime;
       $('#sl-time').value = String(timeOfDay);
-      refreshLook();
+      refreshLook(true);
     };
     $('#chips').appendChild(b);
   }
+
+  // Custom theme / palette controls
+  syncCustomInputs();
+  const applyCustomEdit = () => {
+    syncCustomLook({
+      zen: $('#cp-zen').value,
+      hor: $('#cp-hor').value,
+      base: $('#cp-base').value,
+      win: $('#cp-win').value,
+      accent: $('#cp-accent').value,
+      sec: $('#cp-sec').value,
+      style: $('#cp-style').value,
+      mono: $('#cp-mono').checked,
+    });
+    if (lookId !== 'custom') lookId = 'custom';
+    refreshLook(false);
+  };
+  $('#cp-zen').oninput = applyCustomEdit;
+  $('#cp-hor').oninput = applyCustomEdit;
+  $('#cp-base').oninput = applyCustomEdit;
+  $('#cp-win').oninput = applyCustomEdit;
+  $('#cp-accent').oninput = applyCustomEdit;
+  $('#cp-sec').oninput = applyCustomEdit;
+  $('#cp-style').onchange = applyCustomEdit;
+  $('#cp-mono').onchange = applyCustomEdit;
+  $('#b-seed-pal').onclick = () => {
+    const src = LOOK_BY_ID[prevPresetId] || LOOK_BY_ID.bladerunner;
+    syncCustomLook({
+      zen: src.sky.zen,
+      hor: src.sky.hor,
+      base: src.tower.baseA,
+      win: src.tower.winA === '#000000' ? src.accent : src.tower.winA,
+      accent: src.accent,
+      sec: (src.signals && src.signals.billB) || src.tower.edgeCol,
+      style: src.light.flat ? 'flat' : src.light.toon ? 'toon' : 'lit',
+      mono: !!(src.signals && src.signals.billMono > 0.5),
+    });
+    syncCustomInputs();
+    lookId = 'custom';
+    refreshLook(true);
+    flash(`Seeded palette from ${src.label}`);
+  };
 
   $('#b-new').onclick = () => {
     seed = 1 + Math.floor(Math.random() * 999999998);
@@ -270,11 +410,15 @@ function boot() {
   };
   $('#b-ui').onclick = toggleUI;
   window.addEventListener('keydown', (e) => {
-    if (e.target && e.target.tagName === 'INPUT') return;
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT')) return;
     if (e.key === 'h' || e.key === 'H') toggleUI();
     else if (e.key === 'g' || e.key === 'G') toggleGlide();
     else if (e.key === 'c' || e.key === 'C') toggleCollision();
   });
+
+  function syncWeatherLabel() {
+    $('#weather-label').textContent = WEATHER_NAMES[weatherMode] || 'Clear';
+  }
 
   function bindSlider(el, fn) {
     el.oninput = () => fn(parseFloat(el.value));
@@ -291,22 +435,48 @@ function boot() {
   bindSlider($('#sl-haze'), (v) => { tune.haze = v; refreshLook(); });
   bindSlider($('#sl-sun'), (v) => { tune.sun = v; refreshLook(); });
   bindSlider($('#sl-vib'), (v) => { tune.vib = v; refreshLook(); });
-  bindSlider($('#sl-weather'), (v) => { weatherMode = v; if (weather) weather.setMode(v); });
+  bindSlider($('#sl-weather'), (v) => {
+    weatherMode = Math.round(v);
+    weather.setMode(weatherMode);
+    syncWeatherLabel();
+    refreshLook();
+  });
+  $('#sel-cloudstyle').value = String(tune.cloudStyle);
+  $('#sel-cloudstyle').onchange = (ev) => {
+    tune.cloudStyle = clampInt(ev.target.value, 0, 6, 0);
+    refreshLook();
+  };
+  bindSlider($('#sl-dust'), (v) => { dustLevel = v; weather.setDust(v); });
   bindSlider($('#sl-moon'), (v) => { tune.moon = v; refreshLook(); });
   bindSlider($('#sl-moonsz'), (v) => { tune.moonsz = v; refreshLook(); });
   bindSlider($('#sl-moonph'), (v) => { tune.moonph = v; refreshLook(); });
+
+  // Post-processing & old-film sliders
+  syncPostSliders();
+  bindSlider($('#sl-bloom'), (v) => { postState.bloom = v; syncPostUniforms(LOOK_BY_ID[lookId]); });
+  bindSlider($('#sl-lens'), (v) => { postState.lens = v; syncPostUniforms(LOOK_BY_ID[lookId]); });
+  bindSlider($('#sl-contrast'), (v) => { postState.contrast = v; syncPostUniforms(LOOK_BY_ID[lookId]); });
+  bindSlider($('#sl-temp'), (v) => { postState.temp = v; syncPostUniforms(LOOK_BY_ID[lookId]); });
+  bindSlider($('#sl-film'), (v) => { postState.film = v; syncPostUniforms(LOOK_BY_ID[lookId]); });
+
   $('#sl-time').value = String(timeOfDay);
   $('#sl-radius').value = String(cityRadius);
+  $('#sl-weather').value = String(weatherMode);
+  syncWeatherLabel();
 
   /* -------------------------------------------------- places of interest */
 
   let fly = null;
   let glideIdx = 0;
 
-  // Scenic glide nodes: landmarks, venues (arena, theatre, stadium…) and giant holograms
+  // Scenic glide nodes: Media Holo-Ad District, landmarks, venues & sky holograms
   function glideNodes() {
     if (!city) return [];
     const nodes = [];
+    if (city.mediaZone) {
+      const mz = city.mediaZone;
+      nodes.push({ x: mz.x + mz.r * 0.95, y: 110 * heightScale + 20, z: mz.z + mz.r * 0.95, name: mz.name });
+    }
     for (const lm of city.landmarks) {
       nodes.push({ x: lm.x + lm.r * 2.2, y: Math.max(95, lm.h * 0.65 * heightScale), z: lm.z + lm.r * 2.2, name: lm.name });
     }
@@ -327,7 +497,6 @@ function boot() {
     return node;
   }
 
-  // ---- glide mode (G): continuous banked cruise — steerable with mouse/keys, scenic nodes when idle ----
   function toggleGlide() {
     glideOn = !glideOn;
     fly = null;
@@ -346,7 +515,6 @@ function boot() {
     }
   }
 
-  // ---- collision detection toggle (C): camera vs buildings + vehicle spacing ----
   function toggleCollision() {
     collideOn = !collideOn;
     controls.collision = collideOn;
@@ -362,15 +530,15 @@ function boot() {
   $('#b-collide').onclick = toggleCollision;
 
   function flyToLandmark(lm) {
-    const dist = Math.max(240, lm.r * 4.6);
+    const dist = lm.kind === 'media' ? Math.max(220, lm.r * 1.15) : Math.max(240, lm.r * 4.6);
     const away = new THREE.Vector3(camera.position.x - lm.x, 0, camera.position.z - lm.z);
     if (away.lengthSq() < 1) away.set(1, 0, 1);
     away.normalize().multiplyScalar(dist);
     fly = {
       t: 0,
       from: camera.position.clone(),
-      to: new THREE.Vector3(lm.x + away.x, lm.h * 0.72 * heightScale + 26, lm.z + away.z),
-      look: new THREE.Vector3(lm.x, lm.h * 0.5 * heightScale, lm.z),
+      to: new THREE.Vector3(lm.x + away.x, lm.h * 0.68 * heightScale + 24, lm.z + away.z),
+      look: new THREE.Vector3(lm.x, lm.h * 0.45 * heightScale, lm.z),
     };
     flash(lm.name);
   }
@@ -379,6 +547,7 @@ function boot() {
     const box = $('#pois');
     box.innerHTML = '';
     const spots = [
+      ...(city.mediaZone ? [city.mediaZone] : []),
       ...city.landmarks,
       ...city.places.map((p) => ({ ...p, h: p.kind === 'arena' || p.kind === 'stadium' || p.kind === 'theatre' ? 58 : 42 })),
     ];
@@ -405,6 +574,7 @@ function boot() {
     const w = window.innerWidth;
     const h = window.innerHeight;
     renderer.setSize(w, h, false);
+    post.setSize(w, h, renderer.getPixelRatio());
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
   }
@@ -443,7 +613,7 @@ function boot() {
       if (searchlights) searchlights.update(dt);
       if (weather) weather.update(dt, camera.position);
       world.sky.position.copy(camera.position);
-      renderer.render(scene, camera);
+      post.render(scene, camera, U.uTime.value);
       requestAnimationFrame(animate);
     } catch (err) {
       fatal(err);
@@ -451,7 +621,7 @@ function boot() {
   }
 
   rebuild();
-  refreshLook();
+  refreshLook(true);
   $('#loading').classList.add('out');
   animate();
 }

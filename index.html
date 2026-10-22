@@ -125,6 +125,43 @@ body.ui-off #b-collide {
 
 .slider-row { display: flex; align-items: center; gap: 10px; margin: 7px 2px; }
 .slider-row span { width: 58px; font-size: 10.5px; color: var(--mute); }
+.slider-row select {
+  flex: 1; height: 27px; padding: 0 8px; border-radius: 8px;
+  border: 1px solid var(--line); background: rgba(20, 26, 42, 0.85);
+  color: var(--text); font-size: 11px; cursor: pointer;
+}
+.slider-row em {
+  font-style: normal; font-size: 10px; color: var(--text);
+  min-width: 72px; text-align: right; white-space: nowrap;
+}
+
+#custom-box {
+  display: none; margin: 9px 2px 4px; padding: 10px;
+  border-radius: 12px; background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--line);
+}
+#custom-box.on { display: block; }
+.pal-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 8px;
+}
+.pal-cell {
+  display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--mute);
+}
+.pal-cell input[type="color"] {
+  width: 24px; height: 22px; padding: 0; border: 1px solid var(--line);
+  border-radius: 6px; background: transparent; cursor: pointer; flex: none;
+}
+.pal-opts {
+  display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 10.5px; color: var(--mute);
+}
+.pal-opts select {
+  height: 25px; padding: 0 6px; border-radius: 7px;
+  border: 1px solid var(--line); background: rgba(20, 26, 42, 0.85); color: var(--text); font-size: 10.5px;
+}
+.pal-opts label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.pal-opts button {
+  margin-left: auto; height: 25px; padding: 0 8px; font-size: 10.5px; border-radius: 7px;
+}
 .slider-row input[type="range"] {
   flex: 1; height: 22px; appearance: none; -webkit-appearance: none; background: transparent; cursor: pointer;
 }
@@ -240,17 +277,57 @@ button.action:hover { filter: brightness(1.1); }
   <div id="chips" role="group" aria-label="Visual look"></div>
   <p id="look-blurb"></p>
 
+  <div id="custom-box" aria-label="Custom palette editor">
+    <div class="pal-grid">
+      <label class="pal-cell"><input id="cp-zen" type="color" value="#091326">Sky</label>
+      <label class="pal-cell"><input id="cp-hor" type="color" value="#d95b43">Horizon</label>
+      <label class="pal-cell"><input id="cp-base" type="color" value="#182438">Towers</label>
+      <label class="pal-cell"><input id="cp-win" type="color" value="#ffd166">Lights</label>
+      <label class="pal-cell"><input id="cp-accent" type="color" value="#06d6a0">Signs</label>
+      <label class="pal-cell"><input id="cp-sec" type="color" value="#4cc9f0">Holo</label>
+    </div>
+    <div class="pal-opts">
+      <select id="cp-style" aria-label="Custom shading style">
+        <option value="lit">Lit</option>
+        <option value="toon">Cel-toon</option>
+        <option value="flat">Flat</option>
+      </select>
+      <label><input id="cp-mono" type="checkbox">Mono signs</label>
+      <button id="b-seed-pal" type="button" class="action ghost" title="Copy colours from previous preset">Seed preset</button>
+    </div>
+  </div>
+
   <span class="lab">Tuning</span>
   <div class="slider-row"><span>Windows</span><input id="sl-win" type="range" min="0" max="2" step="0.02" value="1" aria-label="Window density"></div>
   <div class="slider-row"><span>Glow</span><input id="sl-glow" type="range" min="0" max="2.5" step="0.02" value="1" aria-label="Window glow"></div>
   <div class="slider-row"><span>Fog</span><input id="sl-fog" type="range" min="0" max="2.5" step="0.02" value="1" aria-label="Fog"></div>
 
-  <span class="lab">Environment</span>
+  <span class="lab">Environment &amp; Weather</span>
   <div class="slider-row"><span>Time</span><input id="sl-time" type="range" min="0" max="24" step="0.1" value="18.2" aria-label="Time of day"></div>
-  <div class="slider-row"><span>Weather</span><input id="sl-weather" type="range" min="0" max="4" step="1" value="0" aria-label="Weather: clear, rain, storm, snow, ash"></div>
+  <div class="slider-row"><span>Weather</span><input id="sl-weather" type="range" min="0" max="6" step="1" value="0" aria-label="Weather mode"><em id="weather-label">Clear + motes</em></div>
+  <div class="slider-row">
+    <span>Sky plate</span>
+    <select id="sel-cloudstyle" aria-label="StormyClouds sky rendering style">
+      <option value="0">Volumetric painted</option>
+      <option value="1">StormyClouds · Film grain</option>
+      <option value="2">StormyClouds · Spray &amp; drips</option>
+      <option value="3">StormyClouds · Mezzotint</option>
+      <option value="4">StormyClouds · Dry brush</option>
+      <option value="5">StormyClouds · Flow streaks</option>
+      <option value="6">StormyClouds · Line boil</option>
+    </select>
+  </div>
+  <div class="slider-row"><span>Dust</span><input id="sl-dust" type="range" min="0" max="1.8" step="0.02" value="0.6" aria-label="Ambient dust motes"></div>
   <div class="slider-row"><span>Moon</span><input id="sl-moon" type="range" min="0" max="2" step="0.02" value="1" aria-label="Moon glow"></div>
   <div class="slider-row"><span>Moon size</span><input id="sl-moonsz" type="range" min="0.3" max="2.5" step="0.02" value="1" aria-label="Moon size"></div>
   <div class="slider-row"><span>Moon phase</span><input id="sl-moonph" type="range" min="0" max="1" step="0.02" value="0.85" aria-label="Moon phase"></div>
+
+  <span class="lab">Post &amp; Film</span>
+  <div class="slider-row"><span>Bloom</span><input id="sl-bloom" type="range" min="0" max="2" step="0.02" value="0.95" aria-label="Bloom intensity"></div>
+  <div class="slider-row"><span>Lens FX</span><input id="sl-lens" type="range" min="0" max="1.5" step="0.02" value="0.55" aria-label="Chromatic aberration and lens halation"></div>
+  <div class="slider-row"><span>Contrast</span><input id="sl-contrast" type="range" min="0.65" max="1.5" step="0.01" value="1.08" aria-label="Color grading contrast"></div>
+  <div class="slider-row"><span>Temp</span><input id="sl-temp" type="range" min="-1" max="1" step="0.02" value="0.14" aria-label="Color grading temperature"></div>
+  <div class="slider-row"><span>Old film</span><input id="sl-film" type="range" min="0" max="1.5" step="0.02" value="0.16" aria-label="Old film grain, dust specks and scratches"></div>
 
   <span class="lab">Scale</span>
   <div class="slider-row"><span>City size</span><input id="sl-radius" type="range" min="1" max="15" step="1" value="5" aria-label="City size"></div>

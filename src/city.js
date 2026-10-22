@@ -65,6 +65,10 @@ const PLACE_NAMES = {
   stadium: ['Olympia Stadium', 'The Colosseum', 'Vector Field', 'Champion Grounds', 'The Bowl', 'Star Stadium'],
 };
 
+const MEDIA_NAMES = [
+  'Holo Crossing', 'Prism Square', 'Electric Ward', 'Billboard Row', 'Mirage Strip', 'Signal Mile',
+];
+
 /**
  * Grow the city.
  * @param {number} seed
@@ -189,6 +193,12 @@ export function generateCity(seed = 4417, radius = 13) {
     return best;
   };
 
+  // Dedicated Media / Holo-Ad District: a lively multi-block ward where entire
+  // buildings are wrapped floor-to-crown as living billboards & holographic ads.
+  const mediaZone = makeMediaZone(seed, radius, inWater, nearBoulevard, lmCells);
+  const holos = [];
+  const mediaTowers = [];
+
   const coreSpan = radius * CELL;
   for (let i = -radius; i < radius; i++) {
     for (let j = -radius; j < radius; j++) {
@@ -207,23 +217,27 @@ export function generateCity(seed = 4417, radius = 13) {
       const warp = (fbm2D(noise, cx / 580 + 7.3, cz / 580 - 4.1, 2) - 0.5) * CELL * 2.8;
       const rNorm = (Math.hypot(cx, cz) + warp) / Math.max(CELL, coreSpan);
       const edgeT = clamp01(1.18 - rNorm * 0.92);
+      const blockInMedia = mediaZone && Math.hypot(cx - mediaZone.x, cz - mediaZone.z) <= mediaZone.r;
 
       if (lmCells.has(i + ',' + j)) continue; // landmark/venue block
-      if (spireCells.has(i + ',' + j) && rNorm < 0.92 && !inWater(cx, cz) && !nearBoulevard(cx, cz, 68)) {
+      if (spireCells.has(i + ',' + j) && !blockInMedia && rNorm < 0.92 && !inWater(cx, cz) && !nearBoulevard(cx, cz, 68)) {
         addSpire(push, pushBeacon, rand, cx, cz, h01, d);
         towers++;
         continue;
       }
       // Corner blocks outside the organic radial core transition straight into outskirts!
-      if (rNorm > 1.06) {
+      if (rNorm > 1.06 && !blockInMedia) {
         if (!inWater(cx, cz) && !nearBoulevard(cx, cz, 48)) {
           addOutskirts(push, pushBeacon, (s) => signs.push(s), rand, x0, x1, z0, z1, clamp01(1.32 - rNorm * 0.85));
         }
         continue;
       }
-      // sparse / rift / rim quarters leave whole blocks empty — parks, gaps, voids
-      if (rand() < d.skip * 0.55 + (1 - edgeT) * 0.25) continue;
-      if (inWater(cx, cz) || nearBoulevard(cx, cz, 56)) continue;
+      // sparse / rift / rim quarters leave whole blocks empty — but never inside the Media Ward!
+      if (!blockInMedia && rand() < d.skip * 0.55 + (1 - edgeT) * 0.25) continue;
+      if (inWater(cx, cz) || (!blockInMedia && nearBoulevard(cx, cz, 56))) continue;
+
+      // Street-level urban realm: raised sidewalk promenade, corner transit kiosks & pedestrian skywalks
+      addBlockStreetscape(push, pushBeacon, (sg) => signs.push(sg), rand, i, j, x0, x1, z0, z1, d, blockInMedia, radius, lmCells, inWater);
 
       const site = nearestSite(cx, cz);
       // Voronoi cell orientation: radial around civic/water/park sites, angled in skewed cells
@@ -232,26 +246,54 @@ export function generateCity(seed = 4417, radius = 13) {
         : (site ? site.angle : 0);
 
       // Split the block into lots (jittered grid, or diagonal/courtyard layout in skewed cells).
-      const nx = 2 + Math.floor(rand() * (rand() < 0.25 ? 1 : Math.max(1, d.lots - 1)));
-      const nz = 2 + Math.floor(rand() * (rand() < 0.25 ? 1 : Math.max(1, d.lots - 1)));
+      const nx = blockInMedia ? 2 : 2 + Math.floor(rand() * (rand() < 0.25 ? 1 : Math.max(1, d.lots - 1)));
+      const nz = blockInMedia ? 2 : 2 + Math.floor(rand() * (rand() < 0.25 ? 1 : Math.max(1, d.lots - 1)));
       const xs = splitSpan(x0, x1, nx, rand);
       const zs = splitSpan(z0, z1, nz, rand);
 
       for (let a = 0; a < nx; a++) {
         for (let b = 0; b < nz; b++) {
-          if (a + 1 < nx && rand() < 0.08 + d.skip * 0.5) continue;
-          if (b + 1 < nz && rand() < 0.08 + d.skip * 0.5) continue;
+          if (!blockInMedia && a + 1 < nx && rand() < 0.08 + d.skip * 0.5) continue;
+          if (!blockInMedia && b + 1 < nz && rand() < 0.08 + d.skip * 0.5) continue;
           const lx = (xs[a] + xs[a + 1]) / 2;
           const lz = (zs[b] + zs[b + 1]) / 2;
           const halfDiag = 0.5 * Math.hypot(xs[a + 1] - xs[a], zs[b + 1] - zs[b]);
-          if (inWater(lx, lz) || nearBoulevard(lx, lz, 38 + halfDiag * 0.75)) continue;
-          addTower(
-            push, pushBeacon, (bl) => bills.push(bl), (sg) => signs.push(sg),
-            rand, xs[a], xs[a + 1], zs[b], zs[b + 1], h01, d, edgeT, baseAngle
-          );
+          const lotInMedia = mediaZone && Math.hypot(lx - mediaZone.x, lz - mediaZone.z) <= mediaZone.r;
+          if (inWater(lx, lz) || nearBoulevard(lx, lz, lotInMedia ? 20 : 38 + halfDiag * 0.75)) continue;
+          if (lotInMedia) {
+            const mt = addMediaTower(
+              push, pushBeacon, (bl) => bills.push(bl), (sg) => signs.push(sg), (hl) => holos.push(hl),
+              rand, xs[a], xs[a + 1], zs[b], zs[b + 1], h01, baseAngle
+            );
+            if (mt) mediaTowers.push(mt);
+          } else {
+            addTower(
+              push, pushBeacon, (bl) => bills.push(bl), (sg) => signs.push(sg),
+              rand, xs[a], xs[a + 1], zs[b], zs[b + 1], h01, d, edgeT, baseAngle
+            );
+          }
           towers++;
         }
       }
+    }
+  }
+  if (mediaZone) {
+    mediaZone.towerCount = mediaTowers.length;
+    // Span holographic ad-portals right over the streets inside the Media Ward
+    for (let k = 0; k < 3; k++) {
+      const ang = (k / 3) * Math.PI + hash2i(k, 907, seed) * 0.5;
+      const off = (k - 1) * 58;
+      holos.push({
+        x: mediaZone.x + Math.cos(ang) * off,
+        y: 38 + k * 18,
+        baseY: 12,
+        z: mediaZone.z + Math.sin(ang) * off,
+        w: 58 + hash2i(k, 911, seed) * 34,
+        h: 26 + hash2i(k, 919, seed) * 18,
+        rot: ang,
+        seed: hash2i(k, 929, seed),
+        kind: 'portal',
+      });
     }
   }
 
@@ -290,7 +332,6 @@ export function generateCity(seed = 4417, radius = 13) {
 
   // Giant holographic displays — towering sky projections above tall skyscrapers,
   // hovering crowns over the arena & stadium, and portal banners over avenues.
-  const holos = [];
   const holoCount = Math.max(2, Math.min(9, radius + Math.floor(hash2i(19, 23, seed) * 3)));
   const tall = [];
   const nItems = items.length / 10;
@@ -361,17 +402,17 @@ export function generateCity(seed = 4417, radius = 13) {
 
   const collider = makeCityCollider({ count: n, x, y, z, w, h, d, rot, landmarks, places });
   const lanes = makeLanes(seed, radius, boulevards, collider);
-  const lamps = makeLamps(seed, radius, boulevards);
+  const lamps = makeLamps(seed, radius, boulevards, mediaZone);
   const trees = makeTrees(seed, radius, water, lmCells, places, boulevards);
   return {
     seed, radius, count: n, towers, maxY, x, y, z, w, h, d, s, kind, style, rot,
-    districts, landmarks, places, lanes, beacons, lamps,
+    districts, landmarks, places, mediaZone, lanes, beacons, lamps,
     sites, water, boulevards, trees, bills, signs, holos,
   };
 }
 
 /** Street lamps along both sides of every avenue — the night grid, lit. */
-function makeLamps(seed, radius, boulevards = []) {
+function makeLamps(seed, radius, boulevards = [], mediaZone = null) {
   const lamps = [];
   const span = radius * CELL + CELL * 0.5;
   const R = (a, b) => hash2i(a, b, seed ^ 0x51e9a3c7);
@@ -408,6 +449,18 @@ function makeLamps(seed, radius, boulevards = []) {
       const bz = b.z1 + dz * t;
       lamps.push({ x: bx + nx * 19, y: 8.2, z: bz + nz * 19 });
       lamps.push({ x: bx - nx * 19, y: 8.2, z: bz - nz * 19 });
+    }
+  }
+  // Extra dense street-level pools & lamps flooding the Media / Holo-Ad District
+  if (mediaZone) {
+    for (let ring = 0; ring < 24; ring++) {
+      const a = (ring / 24) * Math.PI * 2;
+      const rr = (0.28 + (ring % 3) * 0.32) * mediaZone.r;
+      lamps.push({
+        x: mediaZone.x + Math.cos(a) * rr,
+        y: 9.0,
+        z: mediaZone.z + Math.sin(a) * rr,
+      });
     }
   }
   return lamps;
@@ -1001,11 +1054,8 @@ function addTower(push, pushBeacon, pushBill, pushSign, rand, x0, x1, z0, z1, h0
     }
   }
 
-  // Street-facing podium.
-  if (rand() < 0.45 && Math.min(w, dp) > 22) {
-    const ph = 8 + rand() * 13;
-    push(cx, ph / 2, cz, w * 1.02, ph, dp * 1.02, rand(), KIND.SLAB, style, rot);
-  }
+  // Distinct street-level base: colonnaded retail podium, awnings & recessed arcade
+  addStreetBase(push, pushSign, rand, cx, cz, w, dp, d, rot);
 
   // Roof slab + mast + aviation light.
   const tw = Math.max(10, w - iw * 2) * 0.92;
@@ -1360,3 +1410,204 @@ function addSpire(push, pushBeacon, rand, cx, cz, h01, d = { hMul: 1, clutter: 1
   push(cx, y + 4 + ah + 1, cz, 1.6, 2, 1.6, rand(), KIND.BAND, style, rot);
   pushBeacon(cx, y + 4 + ah + 2.2, cz, rand());
 }
+
+/**
+ * Choose a prominent downtown district where ENTIRE buildings are living
+ * billboards and full-shaft holographic advertisements.
+ */
+function makeMediaZone(seed, radius, inWater, nearBoulevard, lmCells) {
+  if (radius < 2) return null;
+  const spanB = Math.max(1, Math.min(radius - 1, Math.round(radius * 0.65)));
+  const zoneR = Math.max(CELL * 1.35, Math.min(CELL * 2.25, radius * CELL * 0.36));
+  const name = MEDIA_NAMES[Math.floor(hash2i(13, 709, seed) * MEDIA_NAMES.length) % MEDIA_NAMES.length];
+  for (let attempt = 0; attempt < 36; attempt++) {
+    const bi = Math.floor(hash2i(attempt * 17 + 3, 719, seed) * (spanB * 2)) - spanB;
+    const bj = Math.floor(hash2i(attempt * 19 + 5, 727, seed) * (spanB * 2)) - spanB;
+    if (bi === 0 && bj === 0) continue;
+    if (lmCells.has(bi + ',' + bj)) continue;
+    const cx = bi * CELL + CELL * 0.5;
+    const cz = bj * CELL + CELL * 0.5;
+    if (inWater(cx, cz) || (attempt < 24 && nearBoulevard(cx, cz, 56))) continue;
+    return { kind: 'media', name, x: cx, z: cz, r: zoneR, h: 170, bi, bj, towerCount: 0 };
+  }
+  return { kind: 'media', name, x: CELL * 1.5, z: -CELL * 0.5, r: zoneR, h: 170, bi: 1, bj: -1, towerCount: 0 };
+}
+
+/**
+ * Street-level urban realm per block: stepped sidewalk promenade terrace,
+ * corner transit/metro entrance canopies, bollard lights & pedestrian skywalks.
+ */
+function addBlockStreetscape(push, pushBeacon, pushSign, rand, i, j, x0, x1, z0, z1, d, inMedia, radius, lmCells, inWater) {
+  const bw = x1 - x0;
+  const bd = z1 - z0;
+  if (bw < 24 || bd < 24) return;
+  const cx = (x0 + x1) * 0.5;
+  const cz = (z0 + z1) * 0.5;
+
+  // Raised sidewalk promenade apron framing the urban block (style 4 = streetscape base)
+  push(cx, 0.42, cz, bw + 6.4, 0.84, bd + 6.4, rand(), KIND.SLAB, 4, 0);
+
+  // Corner transit shelter / metro stairs kiosk with illuminated fascia band
+  if (inMedia || rand() < 0.46) {
+    const sx = rand() < 0.5 ? -1 : 1;
+    const sz = rand() < 0.5 ? -1 : 1;
+    const kx = cx + sx * (bw * 0.5 - 3.2);
+    const kz = cz + sz * (bd * 0.5 - 3.2);
+    push(kx, 2.3, kz, 8.5, 4.6, 5.2, rand(), KIND.WALL, 4, 0);
+    push(kx, 4.95, kz, 9.8, 0.75, 6.4, rand(), KIND.BAND, 4, 0);
+    if (rand() < 0.65 || inMedia) {
+      pushSign({ x: kx, y: 6.2, z: kz, w: 6.8, h: 2.2, d: 1.1, rot: 0, seed: rand() });
+    }
+  }
+
+  // Sidewalk bollard / colonnade street posts along busy edges
+  const posts = inMedia ? 4 : (rand() < 0.55 ? 2 : 0);
+  for (let p = 0; p < posts; p++) {
+    const alongX = p % 2 === 0;
+    const side = p < 2 ? -1 : 1;
+    const px = alongX ? cx + (rand() - 0.5) * bw * 0.72 : cx + side * (bw * 0.5 + 2.2);
+    const pz = alongX ? cz + side * (bd * 0.5 + 2.2) : cz + (rand() - 0.5) * bd * 0.72;
+    push(px, 2.6, pz, 0.75, 5.2, 0.75, rand(), KIND.MAST, 4, 0);
+    push(px, 5.4, pz, 1.45, 0.75, 1.45, rand(), KIND.BAND, 4, 0);
+  }
+
+  // Elevated pedestrian skywalk bridging across minor streets (clears ground lanes easily at y=13m)
+  const nextMinorX = streetWidth(i + 1) === STREET && i + 1 < radius && !lmCells.has(`${i + 1},${j}`);
+  if (nextMinorX && (inMedia || (d.kind === 'dense' && rand() < 0.28))) {
+    const bx = (i + 1) * CELL;
+    const bz = cz + (rand() - 0.5) * bd * 0.35;
+    if (!inWater(bx, bz)) {
+      push(bx, 13.2, bz, STREET + 10, 3.4, 6.2, rand(), KIND.WALL, 4, 0);
+      push(bx, 15.1, bz, STREET + 10, 0.55, 6.8, rand(), KIND.BAND, 4, 0);
+    }
+  }
+}
+
+/**
+ * Distinct lower-level street base for buildings: colonnaded shopfront podium,
+ * overhanging illuminated sidewalk canopies/awnings & eye-level blade signs.
+ */
+function addStreetBase(push, pushSign, rand, cx, cz, w, dp, d, rot = 0) {
+  if (Math.min(w, dp) < 15) return;
+  const podH = 9.5 + rand() * 5.8;
+  const pw = w * 1.06;
+  const pd = dp * 1.06;
+  // Stepped street-arcade podium (style 4 renders double-height shopfronts + cornice)
+  push(cx, podH * 0.5, cz, pw, podH, pd, rand(), KIND.WALL, 4, rot);
+  // Cornice cap ledge separating lower street level from upper skyscraper shaft
+  push(cx, podH + 0.55, cz, pw * 1.03, 1.1, pd * 1.03, rand(), KIND.SLAB, 4, rot);
+
+  // Projecting shopfront awnings / colonnade canopies at y ~ 5.2m overhanging the sidewalk
+  for (const side of [-1, 1]) {
+    if (rand() < 0.78) {
+      const [ax, az] = rotOff(cx, cz, 0, side * (pd * 0.5 + 1.6), rot);
+      push(ax, 5.2, az, pw * 0.86, 0.85, 3.4, rand(), KIND.SLAB, 4, rot);
+    }
+    if (rand() < 0.55) {
+      const [bx, bz] = rotOff(cx, cz, side * (pw * 0.5 + 1.6), 0, rot);
+      push(bx, 5.2, bz, 3.4, 0.85, pd * 0.82, rand(), KIND.SLAB, 4, rot);
+    }
+  }
+
+  // Street-level arcade colonnade piers framing the ground entrance
+  if (Math.max(w, dp) > 22 && rand() < 0.7) {
+    const piers = 3;
+    for (let k = 0; k < piers; k++) {
+      const off = ((k / (piers - 1)) - 0.5) * pw * 0.72;
+      const [px, pz] = rotOff(cx, cz, off, pd * 0.5 + 0.85, rot);
+      push(px, 2.6, pz, 1.35, 5.2, 1.35, rand(), KIND.SLAB, 4, rot);
+    }
+  }
+
+  // Pedestrian-height hanging shop sign
+  if (rand() < 0.45 + 0.25 * (d.signs || 0)) {
+    const side = rand() < 0.5 ? -1 : 1;
+    const [sx, sz] = rotOff(cx, cz, side * (pw * 0.5 + 1.8), (rand() - 0.5) * pd * 0.4, rot);
+    pushSign({ x: sx, y: 6.8 + rand() * 2.4, z: sz, w: 1.6, h: 4.2 + rand() * 3.0, d: 4.5, rot, seed: rand() });
+  }
+}
+
+/**
+ * Media / Holo-Ad Tower: an entire building whose shaft is a floor-to-crown
+ * billboard & holographic display monolith (Times Square / Akihabara / Shibuya).
+ */
+function addMediaTower(push, pushBeacon, pushBill, pushSign, pushHolo, rand, x0, x1, z0, z1, h01, baseAngle = 0) {
+  const w0 = x1 - x0;
+  const d0 = z1 - z0;
+  if (w0 < 14 || d0 < 14) return null;
+  const cx = (x0 + x1) * 0.5;
+  const cz = (z0 + z1) * 0.5;
+  const rot = baseAngle * 0.25 + (rand() - 0.5) * 0.08;
+  const w = Math.max(16, w0 * 0.88);
+  const dp = Math.max(16, d0 * 0.88);
+  const H = Math.max(95, Math.min(360, (115 + 230 * h01) * (0.75 + rand() * 0.55)));
+
+  // Vibrant street-level arcade & marquee canopy base
+  addStreetBase(push, pushSign, rand, cx, cz, w, dp, { signs: 1.8 }, rot);
+
+  // Full-height style=3 Media LED tower core + stepped upper media crown
+  const hMain = H * 0.72;
+  const hCrown = H * 0.28;
+  push(cx, hMain * 0.5, cz, w, hMain, dp, rand(), KIND.WALL, 3, rot);
+  push(cx, hMain + 1.1, cz, w * 1.06, 2.2, dp * 1.06, rand(), KIND.BAND, 3, rot);
+  push(cx, hMain + hCrown * 0.5, cz, w * 0.78, hCrown, dp * 0.78, rand(), KIND.WALL, 3, rot);
+  push(cx, H + 1.2, cz, w * 0.84, 2.4, dp * 0.84, rand(), KIND.BAND, 3, rot);
+
+  // Wrap ALL FOUR FACES from street marquee (y=18m) to roof in stacked giant billboards!
+  const tiers = Math.max(3, Math.min(7, Math.floor((H - 20) / 30)));
+  const usableH = H - 20;
+  const tierH = usableH / tiers;
+  for (let t = 0; t < tiers; t++) {
+    const by = 18 + (t + 0.5) * tierH;
+    const bh = tierH * 0.84;
+    const scaleTop = t >= Math.floor(tiers * 0.72) ? 0.78 : 1.0;
+    const fw = w * scaleTop;
+    const fd = dp * scaleTop;
+    for (const side of [-1, 1]) {
+      const [bx1, bz1] = rotOff(cx, cz, side * (fw * 0.5 + 1.1), 0, rot);
+      const [bx2, bz2] = rotOff(cx, cz, 0, side * (fd * 0.5 + 1.1), rot);
+      const emit = by > 41 ? pushBill : pushSign;
+      emit({ x: bx1, y: by, z: bz1, w: 2.0, h: bh, d: fd * 0.92, rot, seed: rand() });
+      emit({ x: bx2, y: by, z: bz2, w: fw * 0.92, h: bh, d: 2.0, rot, seed: rand() });
+    }
+  }
+
+  // Corner vertical fin blade signs running up the building edges
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      if (rand() < 0.75) {
+        const [fx, fz] = rotOff(cx, cz, sx * (w * 0.5 + 2.4), sz * (dp * 0.5 + 2.4), rot);
+        pushSign({ x: fx, y: H * 0.46, z: fz, w: 3.2, h: H * 0.62, d: 7.5, rot: rot + Math.PI * 0.25 * sx * sz, seed: rand() });
+      }
+    }
+  }
+
+  // Enveloping full-building holographic sleeve / crown projection!
+  const holoWrapKind = rand() < 0.5 ? 'cylinder' : 'portal';
+  pushHolo({
+    x: cx,
+    y: H * 0.58,
+    baseY: 14,
+    z: cz,
+    w: Math.max(w, dp) * 1.48,
+    h: H * 0.78,
+    rot,
+    seed: rand(),
+    kind: holoWrapKind,
+  });
+  // Towering holographic crown sign above the roof
+  pushHolo({
+    x: cx,
+    y: H + 34 + rand() * 26,
+    baseY: H,
+    z: cz,
+    w: Math.max(w, dp) * 1.35,
+    h: 36 + rand() * 24,
+    rot: rot + Math.PI * 0.25,
+    seed: rand(),
+    kind: 'panel',
+  });
+  pushBeacon(cx, H + 8, cz, rand());
+  return { x: cx, z: cz, w, d: dp, h: H };
+}
+

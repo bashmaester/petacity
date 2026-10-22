@@ -59,3 +59,13 @@ test('glide mode and collision detection toggles are wired', () => {
   assert.ok(main.includes("e.key === 'g'"), 'G key shortcut wired');
   assert.ok(main.includes("e.key === 'c'"), 'C key shortcut wired');
 });
+
+test('custom palette, StormyClouds weather styles, dust motes & post-processing UI controls exist', () => {
+  for (const id of [
+    'custom-box', 'cp-zen', 'cp-hor', 'cp-base', 'cp-win', 'cp-accent', 'cp-sec', 'cp-style', 'cp-mono', 'b-seed-pal',
+    'sel-cloudstyle', 'sl-dust', 'weather-label',
+    'sl-bloom', 'sl-lens', 'sl-contrast', 'sl-temp', 'sl-film',
+  ]) {
+    assert.ok(html.includes(`id="${id}"`), `#${id} present in index.html`);
+  }
+});

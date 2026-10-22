@@ -7,6 +7,7 @@ import {
   LANDMARK_VERT, LANDMARK_FRAG, BEACON_VERT, BEACON_FRAG, TRAIL_VERT, TRAIL_FRAG,
   BEAM_VERT, BEAM_FRAG, POOL_VERT, POOL_FRAG,
   WATER_VERT, WATER_FRAG, BILL_VERT, BILL_FRAG, WEATHER_VERT, WEATHER_FRAG,
+  DUST_VERT, DUST_FRAG,
   HOLO_VERT, HOLO_FRAG,
 } from './shaders.js';
 
@@ -52,6 +53,7 @@ export function makeUniforms() {
     uCloudCol: { value: col('#2c1226') },
     uStars: { value: 0 },
     uCloud: { value: 0.3 },
+    uCloudStyle: { value: 0 },
     uHaze: { value: 0.5 },
     uGStreet: { value: col('#0c0713') },
     uGBlock: { value: col('#170e22') },
@@ -61,8 +63,10 @@ export function makeUniforms() {
     uAve: { value: AVENUE },
     uSt: { value: STREET },
     uCitySpan: { value: CELL * 5 },
+    uWetness: { value: 0 },
     uLightK: { value: 1 },
     uBeaconCol: { value: col('#ff3b30') },
+    uLampCol: { value: col('#ffd9a0') },
     uSunGlow: { value: 0.65 },
     uSat: { value: 1 },
     uSteady: { value: 0 },
@@ -78,6 +82,7 @@ export function makeUniforms() {
     uBillA: { value: col('#ff4f8f') },
     uBillB: { value: col('#53d9ff') },
     uBillK: { value: 1 },
+    uBillMono: { value: 0 },
     uWaterDeep: { value: col('#0c2033') },
     uWaterShallow: { value: col('#2a6a8c') },
   };
@@ -96,7 +101,7 @@ export function makeWorld(U) {
   const skyMat = new THREE.ShaderMaterial({
     vertexShader: SKY_VERT,
     fragmentShader: SKY_FRAG,
-    uniforms: pick(U, ['uZen', 'uHor', 'uSkySunCol', 'uSunDir', 'uCloudCol', 'uStars', 'uCloud', 'uHaze', 'uTime', 'uSunGlow', 'uSat', 'uMoonDir', 'uMoonSize', 'uMoonGlow', 'uMoonPhase', 'uFlash']),
+    uniforms: pick(U, ['uZen', 'uHor', 'uSkySunCol', 'uSunDir', 'uCloudCol', 'uStars', 'uCloud', 'uCloudStyle', 'uHaze', 'uTime', 'uSunGlow', 'uSat', 'uMoonDir', 'uMoonSize', 'uMoonGlow', 'uMoonPhase', 'uFlash']),
     side: THREE.BackSide,
     depthWrite: false,
   });
@@ -109,6 +114,7 @@ export function makeWorld(U) {
     uniforms: pick(U, [
       'uGStreet', 'uGBlock', 'uGLine', 'uGLineGlow', 'uCell', 'uAve', 'uSt', 'uCitySpan',
       'uSunDir', 'uFogCol', 'uSunFogCol', 'uFogDensity', 'uFogHeight', 'uHazeSun', 'uSat',
+      'uWetness', 'uPoolCol', 'uBillA', 'uLightK',
     ]),
   });
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(24000, 24000).rotateX(-Math.PI / 2), groundMat);
@@ -122,6 +128,7 @@ export function makeWorld(U) {
       'uPal', 'uUsePal', 'uWinDensity', 'uWinGlow', 'uWinA', 'uWinB', 'uWinC',
       'uEdge', 'uEdgeCol', 'uBandGlow', 'uToon', 'uFlat',
       'uFogCol', 'uSunFogCol', 'uFogDensity', 'uFogHeight', 'uHazeSun', 'uTime', 'uSat',
+      'uBillA', 'uBillB', 'uBillK', 'uBillMono', 'uPoolCol', 'uLightK',
     ]),
   });
 
@@ -134,14 +141,14 @@ export function makeWorld(U) {
     blending: THREE.AdditiveBlending,
   });
 
-  // street lamps: same glow, steady instead of pulsing, warm colour
+  // street lamps: same glow, steady instead of pulsing, look-tinted colour
   const lampMat = new THREE.ShaderMaterial({
     vertexShader: BEACON_VERT,
     fragmentShader: BEACON_FRAG,
     uniforms: {
       uTime: U.uTime,
       uLightK: U.uLightK,
-      uBeaconCol: { value: col('#ffd9a0') },
+      uBeaconCol: U.uLampCol,
       uSteady: { value: 1 },
     },
     transparent: true,
@@ -190,13 +197,13 @@ export function makeWorld(U) {
   const billMat = new THREE.ShaderMaterial({
     vertexShader: BILL_VERT,
     fragmentShader: BILL_FRAG,
-    uniforms: pick(U, ['uBillA', 'uBillB', 'uBillK', 'uTime', 'uLightK']),
+    uniforms: pick(U, ['uBillA', 'uBillB', 'uBillK', 'uBillMono', 'uTime', 'uLightK', 'uSat']),
   });
 
   const holoMat = new THREE.ShaderMaterial({
     vertexShader: HOLO_VERT,
     fragmentShader: HOLO_FRAG,
-    uniforms: pick(U, ['uBillA', 'uBillB', 'uBillK', 'uTime', 'uLightK']),
+    uniforms: pick(U, ['uBillA', 'uBillB', 'uBillK', 'uBillMono', 'uTime', 'uLightK', 'uSat']),
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
@@ -1228,6 +1235,34 @@ export function makeVehicles(city, trailMat, count = 260, collider = null) {
     spd[i] = baseSpd[i];
   };
 
+  function setPalette(lookOrCols) {
+    const isLook = lookOrCols && !Array.isArray(lookOrCols);
+    const pal = isLook
+      ? (lookOrCols.signals && lookOrCols.signals.vehicles) || VEHICLE_COLORS
+      : (Array.isArray(lookOrCols) && lookOrCols.length ? lookOrCols : VEHICLE_COLORS);
+    const mono = isLook && lookOrCols.signals && lookOrCols.signals.billMono > 0.5;
+    if (isLook && lookOrCols.signals && lookOrCols.signals.beam && beamMat.uniforms && beamMat.uniforms.uBeamCol) {
+      beamMat.uniforms.uBeamCol.value.set(lookOrCols.signals.beam);
+    }
+    for (let i = 0; i < total; i++) {
+      const cc = classOf[i];
+      c.set(pal[Math.floor(h01(i, 37) * pal.length) % pal.length]);
+      c.offsetHSL(mono ? 0 : (h01(i, 59) - 0.5) * 0.05, 0, (h01(i, 61) - 0.5) * 0.12);
+      bodies[cc].setColorAt(local[i], c);
+      if (rotors[cc]) rotors[cc].setColorAt(local[i], c);
+      if (cc === 0) thrusters.setColorAt(local[i], c);
+      if (cc === 2) for (const tr of trailers) tr.setColorAt(local[i], c);
+      aColor[i * 3] = c.r;
+      aColor[i * 3 + 1] = c.g;
+      aColor[i * 3 + 2] = c.b;
+    }
+    for (const b of bodies) if (b.instanceColor) b.instanceColor.needsUpdate = true;
+    for (const r of rotors) if (r && r.instanceColor) r.instanceColor.needsUpdate = true;
+    if (thrusters.instanceColor) thrusters.instanceColor.needsUpdate = true;
+    for (const tr of trailers) if (tr.instanceColor) tr.instanceColor.needsUpdate = true;
+    trailGeo.getAttribute('aColor').needsUpdate = true;
+  }
+
   for (let i = 0; i < total; i++) {
     const cc = classOf[i];
     const V = VEHICLE_CLASSES[cc];
@@ -1235,20 +1270,8 @@ export function makeVehicles(city, trailMat, count = 260, collider = null) {
     t[i] = h01(i, 17);
     phase[i] = h01(i, 19) * Math.PI * 2;
     scl[i] = V.scale * (0.82 + h01(i, 29) * 0.4);
-    c.set(VEHICLE_COLORS[Math.floor(h01(i, 37) * VEHICLE_COLORS.length) % VEHICLE_COLORS.length]);
-    c.offsetHSL((h01(i, 59) - 0.5) * 0.06, 0, (h01(i, 61) - 0.5) * 0.14);
-    bodies[cc].setColorAt(local[i], c);
-    if (rotors[cc]) rotors[cc].setColorAt(local[i], c);
-    if (cc === 0) thrusters.setColorAt(local[i], c);
-    if (cc === 2) for (const tr of trailers) tr.setColorAt(local[i], c);
-    aColor[i * 3] = c.r;
-    aColor[i * 3 + 1] = c.g;
-    aColor[i * 3 + 2] = c.b;
   }
-  for (const b of bodies) if (b.instanceColor) b.instanceColor.needsUpdate = true;
-  if (thrusters.instanceColor) thrusters.instanceColor.needsUpdate = true;
-  for (const tr of trailers) if (tr.instanceColor) tr.instanceColor.needsUpdate = true;
-  trailGeo.getAttribute('aColor').needsUpdate = true;
+  setPalette(VEHICLE_COLORS);
 
   const composeAt = (i, tVal, o = {}) => {
     const cc = classOf[i];
@@ -1419,6 +1442,7 @@ export function makeVehicles(city, trailMat, count = 260, collider = null) {
     trailers,
     trails,
     update,
+    setPalette,
     get collision() { return collision; },
     setCollision(on) { collision = !!on; },
   };
@@ -1775,13 +1799,17 @@ export function buildTrees(city) {
 }
 
 /**
- * Weather — rain streaks, drifting snow, ash fall and storm lightning.
- * Particles wrap in a column that follows the camera; lightning flashes
- * through the shared uFlash sky uniform.
+ * Weather — downward-falling rain streaks, thunderstorm sheets & lightning,
+ * snow, volcanic ash, swirling dust storms, Noir old-film storm, plus 3D
+ * ambient dust motes floating in convective air currents around the camera.
  */
+export const WEATHER_NAMES = [
+  'Clear + motes', 'Rain', 'Thunderstorm', 'Snow', 'Volcanic ash', 'Dust haze', 'Old-film storm',
+];
+
 export function makeWeather(U) {
   const group = new THREE.Group();
-  const mk = (count, w, h, d, hex, k, speed, sway) => {
+  const mk = (count, w, h, d, hex, k, speed, sway, windX = 12) => {
     const geo = new THREE.BoxGeometry(w, h, d);
     const off = new Float32Array(count);
     const spd = new Float32Array(count);
@@ -1793,6 +1821,7 @@ export function makeWeather(U) {
         uTime: U.uTime,
         uFallH: { value: 720 },
         uSwayAmp: { value: sway },
+        uWindX: { value: windX },
         uWeatherCol: { value: col(hex) },
         uWeatherK: { value: k },
       },
@@ -1806,7 +1835,7 @@ export function makeWeather(U) {
       m.makeTranslation((Math.random() - 0.5) * 900, 0, (Math.random() - 0.5) * 900);
       mesh.setMatrixAt(i, m);
       off[i] = Math.random() * 720;
-      spd[i] = speed * (0.8 + Math.random() * 0.5);
+      spd[i] = speed * (0.82 + Math.random() * 0.45);
       swy[i] = 0.4 + Math.random() * 1.8;
     }
     mesh.instanceMatrix.needsUpdate = true;
@@ -1818,36 +1847,113 @@ export function makeWeather(U) {
     return mesh;
   };
 
-  const rain = mk(1500, 0.45, 26, 0.45, '#a8c0dc', 0.42, 320, 0.6);
-  const snow = mk(800, 1.8, 1.8, 1.8, '#eef4ff', 0.85, 24, 6);
-  const ash = mk(800, 1.3, 1.3, 1.3, '#c8a888', 0.6, 17, 9);
+  const rain = mk(1600, 0.45, 27, 0.45, '#b6cce6', 0.44, 340, 0.55, 26);
+  const snow = mk(900, 1.8, 1.8, 1.8, '#eef4ff', 0.85, 26, 6.5, 16);
+  const ash = mk(850, 1.35, 1.35, 1.35, '#d4b494', 0.62, 19, 9.0, 22);
 
-  let mode = 0; // 0 clear · 1 rain · 2 storm · 3 snow · 4 ash
-  let elapsed = 0;
+  // Ambient 3D floating dust motes (active even in clear weather, scaled by dustLevel)
+  const dustCount = 1100;
+  const dPos = new Float32Array(dustCount * 3);
+  const dPhase = new Float32Array(dustCount);
+  const dSize = new Float32Array(dustCount);
+  const dDrift = new Float32Array(dustCount * 3);
+  const boxSpan = 620;
+  for (let i = 0; i < dustCount; i++) {
+    dPos[i * 3 + 0] = (Math.random() - 0.5) * boxSpan;
+    dPos[i * 3 + 1] = (Math.random() - 0.35) * 320;
+    dPos[i * 3 + 2] = (Math.random() - 0.5) * boxSpan;
+    dPhase[i] = Math.random();
+    dSize[i] = 1.6 + Math.random() * 3.4;
+    dDrift[i * 3 + 0] = (Math.random() - 0.42) * 2.2;
+    dDrift[i * 3 + 1] = (Math.random() - 0.45) * 1.1;
+    dDrift[i * 3 + 2] = (Math.random() - 0.5) * 2.2;
+  }
+  const dustGeo = new THREE.BufferGeometry();
+  dustGeo.setAttribute('position', new THREE.BufferAttribute(dPos, 3));
+  dustGeo.setAttribute('aPhase', new THREE.BufferAttribute(dPhase, 1));
+  dustGeo.setAttribute('aSize', new THREE.BufferAttribute(dSize, 1));
+  dustGeo.setAttribute('aDrift', new THREE.BufferAttribute(dDrift, 3));
+  const dustMat = new THREE.ShaderMaterial({
+    vertexShader: DUST_VERT,
+    fragmentShader: DUST_FRAG,
+    uniforms: {
+      uTime: U.uTime,
+      uBoxSpan: { value: boxSpan },
+      uDustCol: { value: col('#ffe8be') },
+      uDustK: { value: 0.42 },
+    },
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+  const dust = new THREE.Points(dustGeo, dustMat);
+  dust.frustumCulled = false;
+  group.add(dust);
+
+  let mode = 0; // 0 clear · 1 rain · 2 storm · 3 snow · 4 ash · 5 dust haze · 6 old-film storm
+  let dustLevel = 0.6;
   let nextFlash = 2.5;
 
+  function syncDust() {
+    const modeBoost = mode === 5 ? 2.1 : mode === 4 ? 1.45 : mode === 6 ? 1.35 : (mode === 1 || mode === 2 ? 0.55 : 1.0);
+    const k = dustLevel * modeBoost * 0.55;
+    dustMat.uniforms.uDustK.value = k;
+    dust.visible = k > 0.01;
+  }
+
   function setMode(w) {
-    mode = Math.max(0, Math.min(4, Math.round(w)));
-    rain.visible = mode === 1 || mode === 2;
+    mode = Math.max(0, Math.min(6, Math.round(w)));
+    rain.visible = mode === 1 || mode === 2 || mode === 6;
     snow.visible = mode === 3;
     ash.visible = mode === 4;
-    if (rain.material.uniforms) rain.material.uniforms.uWeatherK.value = mode === 2 ? 0.62 : 0.42;
+    if (rain.material.uniforms) {
+      rain.material.uniforms.uWeatherK.value = mode === 2 ? 0.65 : mode === 6 ? 0.56 : 0.44;
+      rain.material.uniforms.uWindX.value = mode === 2 ? 78 : mode === 6 ? 48 : 26;
+      rain.rotation.z = mode === 2 ? -0.11 : mode === 6 ? -0.07 : -0.035;
+    }
+    if (U && U.uWetness) {
+      U.uWetness.value = mode === 2 ? 1.0 : mode === 6 ? 0.9 : mode === 1 ? 0.78 : mode === 3 ? 0.25 : 0.0;
+    }
+    syncDust();
+  }
+
+  function setDust(v) {
+    dustLevel = Math.max(0, Math.min(2, v));
+    syncDust();
+  }
+
+  function setTint(look) {
+    if (!look) return;
+    const s = look.signals || {};
+    const lampHex = s.lamp || look.tower?.winA || '#ffe8be';
+    dustMat.uniforms.uDustCol.value.set(lampHex);
+    if (s.billMono > 0.5) {
+      rain.material.uniforms.uWeatherCol.value.set(s.beam || '#dfd5be');
+      ash.material.uniforms.uWeatherCol.value.set(s.billA || '#d8ccb4');
+    } else {
+      rain.material.uniforms.uWeatherCol.value.set('#b6cce6');
+      ash.material.uniforms.uWeatherCol.value.set('#d4b494');
+    }
   }
 
   function update(dt, cameraPos) {
-    elapsed += dt;
-    if (cameraPos) group.position.set(cameraPos.x, cameraPos.y - 120, cameraPos.z);
+    if (cameraPos) group.position.set(cameraPos.x, cameraPos.y - 40, cameraPos.z);
     if (U.uFlash.value > 0) U.uFlash.value = Math.max(0, U.uFlash.value - dt * 1.9);
-    if (mode === 2) {
+    if (mode === 2 || mode === 6) {
       nextFlash -= dt;
       if (nextFlash <= 0) {
-        U.uFlash.value = 1.15;
-        nextFlash = 2.2 + Math.random() * 6;
+        U.uFlash.value = mode === 6 ? 0.85 : 1.15;
+        nextFlash = 2.2 + Math.random() * 5.5;
       }
     }
   }
 
-  return { group, rain, snow, ash, setMode, update };
+  syncDust();
+  return {
+    group, rain, snow, ash, dust,
+    get mode() { return mode; },
+    setMode, setDust, setTint, update,
+  };
 }
 
 /** Light sculptures — glowing rings and light columns at the public spaces. */
@@ -1942,7 +2048,21 @@ export function applyLook(U, look, tune = { win: 1, glow: 1, fog: 1 }) {
   set(U.uGLine.value, look.ground.line);
   U.uGLineGlow.value = look.ground.lineGlow;
 
-  return { accent: look.accent, post: look.post };
+  // Theme-consistent signage, billboards, holograms, lamps, searchlights & water
+  const sig = look.signals || {};
+  set(U.uBillA.value, sig.billA || look.accent);
+  set(U.uBillB.value, sig.billB || look.tower.edgeCol);
+  U.uBillK.value = (sig.billK ?? 1.0) * (tune.glow ?? 1);
+  U.uBillMono.value = sig.billMono ?? 0;
+  set(U.uBeamCol.value, sig.beam || look.sky.sun);
+  set(U.uLampCol.value, sig.lamp || (look.tower.winA === '#000000' ? look.accent : look.tower.winA));
+  set(U.uPoolCol.value, sig.pool || (look.tower.winA === '#000000' ? look.accent : look.tower.winA));
+  set(U.uBeaconCol.value, sig.beacon || (look.tower.winC === '#000000' ? look.accent : look.tower.winC));
+  set(U.uWaterDeep.value, sig.waterDeep || look.sky.zen);
+  set(U.uWaterShallow.value, sig.waterShallow || look.sky.hor);
+  if (tune.cloudStyle !== undefined) U.uCloudStyle.value = tune.cloudStyle;
+
+  return { accent: look.accent, post: look.post, grade: look.grade };
 }
 
 /**
@@ -2046,11 +2166,13 @@ export function applyTime(U, look, hours = 12, tune = { lights: 1, glow: 1 }) {
 
   // parametric atmosphere knobs
   U.uCloud.value = look.sky.cloud * (tune.clouds ?? 1);
+  if (tune.cloudStyle !== undefined) U.uCloudStyle.value = tune.cloudStyle;
   U.uHaze.value = look.sky.haze * (tune.haze ?? 1);
   U.uSunGlow.value = 0.65 * (tune.sun ?? 1) * Math.max(0.08, 0.6 + cur.warm * 0.8 + cur.night * 0.1 - cur.deep * 0.15);
   U.uSat.value = (tune.sat ?? 1) * (1 + cur.warm * 0.12);
   U.uLightK.value = (tune.lights ?? 1) * (0.45 + cur.night * 0.7 + cur.warm * 0.35 + cur.deep * 0.2);
-  U.uBeaconCol.value.set(look.tower.winC === '#000000' ? look.accent : look.tower.winC);
+  const sig = look.signals || {};
+  U.uBeaconCol.value.set(sig.beacon || (look.tower.winC === '#000000' ? look.accent : look.tower.winC));
 
   return { hour: h, elev: cur.elev, night: cur.night, warm: cur.warm, deep: cur.deep };
 }
