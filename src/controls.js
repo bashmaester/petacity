@@ -62,6 +62,15 @@ export class FlyControls {
     );
   }
 
+  /** Re-seed yaw/pitch from wherever the camera currently points (after a fly-to). */
+  syncFromCamera() {
+    const e = new THREE.Euler().setFromQuaternion(this.camera.quaternion, 'YXZ');
+    this.yaw = e.y;
+    this.pitch = e.x;
+    this.keys.clear();
+    this._drag = null;
+  }
+
   update(dt) {
     const k = this.keys;
     const boost = k.has('shift') ? 4.2 : 1;

@@ -6,6 +6,7 @@
  * @property {string} id
  * @property {string} label
  * @property {string} blurb
+ * @property {number} defTime  hour of day the preset is authored for
  * @property {string} accent      UI accent colour
  * @property {Object} sky
  * @property {Object} fog
@@ -18,6 +19,7 @@
 export const LOOKS = [
   {
     id: 'bladerunner',
+    defTime: 18.2,
     label: 'Blade Runner',
     blurb: 'smog sunset · neon windows · low orange haze',
     accent: '#ff6a4d',
@@ -41,6 +43,7 @@ export const LOOKS = [
   },
   {
     id: 'anime',
+    defTime: 11.5,
     label: '2000s Anime',
     blurb: 'flat cel light · ink lines · bright painted sky',
     accent: '#3ea8ff',
@@ -64,6 +67,7 @@ export const LOOKS = [
   },
   {
     id: 'abstract',
+    defTime: 13,
     label: 'Abstract',
     blurb: 'primary blocks · black edges · no light at all',
     accent: '#e63946',
@@ -89,6 +93,7 @@ export const LOOKS = [
   },
   {
     id: 'tron',
+    defTime: 22.8,
     label: 'Tron',
     blurb: 'dark grid · glowing edges · emissive bands',
     accent: '#00e5ff',
@@ -112,6 +117,7 @@ export const LOOKS = [
   },
   {
     id: 'outrun',
+    defTime: 19.2,
     label: 'Outrun',
     blurb: 'violet dusk · pink grid · star field',
     accent: '#ff7edb',
@@ -135,6 +141,7 @@ export const LOOKS = [
   },
   {
     id: 'clay',
+    defTime: 12.5,
     label: 'Clay',
     blurb: 'white study model · soft shadow · archviz calm',
     accent: '#8fa3b8',
