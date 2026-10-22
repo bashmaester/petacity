@@ -76,6 +76,19 @@ a specific city + style + hour (the Copy link button does this for you).
 - **Full-day clock** — the Time slider spans 0–24 h with a moving sun path:
   dawn golds, high noon, warm dusk, and the deep small hours. The interface
   hides with the Hide UI button or <kbd>H</kbd>.
+- **Metropolis look** — a Fritz Lang preset: silver expressionist towers,
+  posterised light, burning windows, sepia clouds. Each look also decides
+  whether street structures are trees or sybernetic bioelectric illuminators.
+- **Weather** — rain, storms with lightning flashes, snow and ash fall.
+- **Moon controls** — moon glow, size and phase, riding a night path opposite
+  the sun.
+- **Billboards & light sculptures** — illuminated scrolling facade panels and
+  glowing rings/columns at the public spaces.
+- **Bodies of water** — irregular voronoi lakes with a ripple shader, plus
+  diagonal boulevards cutting the grid; streets and blocks stay, but the
+  large-scale division is no longer a pure lattice.
+- **Mixed fleet** — pods, skimmers, haulers, drones, helicopters and blimps
+  on curved multi-layer lanes with weaving trajectories.
 - **Parametric atmospherics** — cloud deck (lit tops, silver lining), sun
   disc + glow, horizon haze and vibrance are all sliders; the horizon
   dissolves into the sky so the world has no square edges.

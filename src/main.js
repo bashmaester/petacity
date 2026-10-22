@@ -5,6 +5,7 @@ import {
   makeUniforms, makeWorld, growCity, applyLook, applyTime,
   buildLandmarks, buildBeacons, buildPlaces, makeLamps,
   makeVehicles, makeSearchlights, makeLightPools,
+  buildWater, buildBillboards, buildTrees, buildSculptures, makeWeather,
 } from './scene.js';
 import { FlyControls } from './controls.js';
 
@@ -55,7 +56,11 @@ let timeOfDay = params.get('t') !== null
   ? clampFloat(params.get('t'), 0, 24, LOOK_BY_ID[lookId].defTime)
   : LOOK_BY_ID[lookId].defTime;
 let heightScale = 1;
-const tune = { win: 1, glow: 1, fog: 1, lights: 1, traffic: 1, clouds: 1, haze: 1, sun: 1, vib: 1 };
+const tune = {
+  win: 1, glow: 1, fog: 1, lights: 1, traffic: 1, clouds: 1, haze: 1, sun: 1, vib: 1,
+  moon: 1, moonsz: 1, moonph: 0.85,
+};
+let weatherMode = 0;
 
 function createRenderer(canvas) {
   try {
@@ -92,6 +97,10 @@ function boot() {
   const cityGroup = new THREE.Group();
   scene.add(cityGroup);
 
+  // weather follows the camera, not the city
+  const weather = makeWeather(U);
+  scene.add(weather.group);
+
   /* ------------------------------------------------------------- city */
 
   let cityMesh = null;
@@ -102,6 +111,10 @@ function boot() {
   let pools = null;
   let searchlights = null;
   let vehicles = null;
+  let waterGroup = null;
+  let billboards = null;
+  let trees = null;
+  let sculptures = null;
   let city = null;
 
   function rebuild() {
@@ -119,6 +132,11 @@ function boot() {
     pools = makeLightPools(city, world.poolMat);
     searchlights = makeSearchlights(city, world.beamMat);
     vehicles = makeVehicles(city, world.trailMat);
+    waterGroup = buildWater(city, world.waterMat);
+    billboards = buildBillboards(city, world.billMat);
+    trees = buildTrees(city);
+    sculptures = buildSculptures(city, world.beaconMat, world.lampMat);
+    if (trees) trees.setNature(LOOK_BY_ID[lookId]);
     cityGroup.add(cityMesh);
     cityGroup.add(landmarkGroup);
     cityGroup.add(placeGroup);
@@ -127,6 +145,10 @@ function boot() {
     cityGroup.add(pools);
     cityGroup.add(searchlights.group);
     cityGroup.add(vehicles.group);
+    cityGroup.add(waterGroup);
+    cityGroup.add(billboards);
+    cityGroup.add(trees.group);
+    cityGroup.add(sculptures);
     applyHeight();
 
     $('#stat-towers').textContent = city.towers.toLocaleString('en-US');
@@ -147,6 +169,7 @@ function boot() {
     const look = LOOK_BY_ID[lookId];
     applyLook(U, look, tune);
     applyTime(U, look, timeOfDay, tune);
+    if (trees) trees.setNature(look);
     document.documentElement.style.setProperty('--accent', look.accent);
     $('#grain').style.opacity = look.post.grain;
     $('#scan').style.opacity = look.post.scan;
@@ -237,6 +260,10 @@ function boot() {
   bindSlider($('#sl-haze'), (v) => { tune.haze = v; refreshLook(); });
   bindSlider($('#sl-sun'), (v) => { tune.sun = v; refreshLook(); });
   bindSlider($('#sl-vib'), (v) => { tune.vib = v; refreshLook(); });
+  bindSlider($('#sl-weather'), (v) => { weatherMode = v; if (weather) weather.setMode(v); });
+  bindSlider($('#sl-moon'), (v) => { tune.moon = v; refreshLook(); });
+  bindSlider($('#sl-moonsz'), (v) => { tune.moonsz = v; refreshLook(); });
+  bindSlider($('#sl-moonph'), (v) => { tune.moonph = v; refreshLook(); });
   $('#sl-time').value = String(timeOfDay);
   $('#sl-radius').value = String(cityRadius);
 
@@ -315,6 +342,7 @@ function boot() {
       }
       if (vehicles) vehicles.update(dt, tune.traffic);
       if (searchlights) searchlights.update(dt);
+      if (weather) weather.update(dt, camera.position);
       world.sky.position.copy(camera.position);
       renderer.render(scene, camera);
       requestAnimationFrame(animate);

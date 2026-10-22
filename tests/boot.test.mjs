@@ -3,6 +3,9 @@
 // Skips when jsdom is not installed (it is a devDependency: npm install).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { LOOKS } from '../src/looks.js';
+
+const LOOKS_EXPECTED = LOOKS.length;
 
 let JSDOM = null;
 try {
@@ -21,6 +24,8 @@ test('main.js boots end-to-end (jsdom + fake WebGL)', { skip: JSDOM ? false : 'j
     <input id="sl-traffic" type="range"><input id="sl-lights" type="range">
     <input id="sl-clouds" type="range"><input id="sl-haze" type="range">
     <input id="sl-sun" type="range"><input id="sl-vib" type="range">
+    <input id="sl-weather" type="range"><input id="sl-moon" type="range">
+    <input id="sl-moonsz" type="range"><input id="sl-moonph" type="range">
     <div id="pois"></div>
     <input id="seed-input" type="number">
     <button id="b-new"></button><button id="b-link"></button><button id="b-ui"></button>
@@ -107,7 +112,7 @@ test('main.js boots end-to-end (jsdom + fake WebGL)', { skip: JSDOM ? false : 'j
   const loading = window.document.querySelector('#loading');
   assert.equal(loading.className.includes('out'), true, 'loading overlay should fade out (init completed)');
   assert.equal(loading.querySelector('.boot-error'), null, `boot error overlay should be empty, got: ${loading.textContent}`);
-  assert.equal(window.document.querySelectorAll('#chips button').length, 6, 'all look chips built');
+  assert.equal(window.document.querySelectorAll('#chips button').length, LOOKS_EXPECTED, 'all look chips built');
   assert.ok(window.document.querySelectorAll('#pois button').length >= 1, 'POI buttons built');
   assert.ok(window.document.querySelector('#stat-towers').textContent.length > 0, 'stats filled');
   assert.ok(window.document.querySelector('#stat-boxes').textContent.length > 0, 'stats filled');

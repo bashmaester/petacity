@@ -59,6 +59,11 @@ uniform float uHaze;
 uniform float uTime;
 uniform float uSunGlow;
 uniform float uSat;
+uniform vec3 uMoonDir;
+uniform float uMoonSize;
+uniform float uMoonGlow;
+uniform float uMoonPhase;
+uniform float uFlash;
 varying vec3 vDir;
 ${GLSL_NOISE}
 ${GLSL_UTIL}
@@ -92,6 +97,24 @@ void main() {
     col = mix(col, cl, amt);
   }
 
+  // moon: soft disc with crater speckle, phase shadow and glow halo
+  if (uMoonGlow > 0.003) {
+    vec3 md = normalize(uMoonDir);
+    vec3 mright = normalize(cross(md, vec3(0.0, 1.0, 0.0)) + vec3(1e-4));
+    vec3 mup = cross(mright, md);
+    vec2 muv = vec2(dot(d, mright), dot(d, mup));
+    float moonR = 0.045 * max(uMoonSize, 0.15);
+    float mAng = length(muv);
+    float mDisc = 1.0 - smoothstep(moonR * 0.9, moonR, mAng);
+    float shOff = (uMoonPhase - 0.5) * 2.4 * moonR;
+    float shadow = 1.0 - smoothstep(moonR * 0.94, moonR * 1.02, length(muv - vec2(shOff, moonR * 0.15)));
+    float mBody = mDisc * (1.0 - shadow * 0.94);
+    float crater = 0.78 + 0.22 * vnoise(muv * 95.0 + 3.7);
+    col += vec3(0.86, 0.9, 1.0) * mBody * crater * (1.15 + uMoonGlow * 1.3);
+    float halo = 1.0 - smoothstep(moonR, moonR * 3.4, mAng);
+    col += vec3(0.62, 0.72, 1.0) * halo * uMoonGlow * 0.34;
+  }
+
   // stars belong to the night
   if (uStars > 0.002 && d.y > -0.02) {
     vec2 sph = vec2(atan(d.z, d.x), asin(clamp(d.y, -1.0, 1.0)));
@@ -107,6 +130,9 @@ void main() {
   // horizon haze band — thickens with uHaze and dissolves the ground seam
   float hz = exp(-max(d.y, 0.0) * 7.0) * uHaze * 0.55;
   col = mix(col, uHor, clamp(hz, 0.0, 0.85));
+
+  // lightning flash — the whole sky spikes
+  col += vec3(0.85, 0.9, 1.1) * uFlash;
 
   col = saturate3(col, uSat);
   gl_FragColor = vec4(col, 1.0);
@@ -549,5 +575,140 @@ void main() {
   float a = 1.0 - smoothstep(0.15, 1.0, r);
   a *= a * uPoolK * max(uLightK, 0.15);
   gl_FragColor = vec4(uPoolCol * (0.5 + 0.5 * a), a);
+}
+`;
+
+/* ---------------------------------------------------------------- water */
+
+export const WATER_VERT = /* glsl */ `
+varying vec3 vWorld;
+void main() {
+  vec4 wp = modelMatrix * vec4(position, 1.0);
+  vWorld = wp.xyz;
+  gl_Position = projectionMatrix * viewMatrix * wp;
+}
+`;
+
+export const WATER_FRAG = /* glsl */ `
+uniform vec3 uWaterDeep;
+uniform vec3 uWaterShallow;
+uniform vec3 uSunDir;
+uniform vec3 uSkySunCol;
+uniform vec3 uFogCol;
+uniform vec3 uSunFogCol;
+uniform float uHazeSun;
+uniform float uTime;
+uniform float uSat;
+varying vec3 vWorld;
+${GLSL_NOISE}
+${GLSL_UTIL}
+
+void main() {
+  vec3 vdir = normalize(vWorld - cameraPosition);
+  // animated ripple field — two drifting octaves
+  vec2 p = vWorld.xz * 0.012;
+  float w1 = fbm(p + vec2(uTime * 0.05, uTime * 0.031));
+  float w2 = fbm(p * 2.7 - vec2(uTime * 0.033, uTime * 0.05));
+  float wave = clamp(w1 * 0.7 + w2 * 0.5, 0.0, 1.0);
+  vec3 col = mix(uWaterDeep, uWaterShallow, wave * 0.65);
+
+  // sun glitter
+  vec3 sd = normalize(uSunDir);
+  float facing = pow(max(dot(normalize(vec3((w1 - w2) * 2.0, 1.0, (w2 - w1) * 2.0)), sd), 0.0), 24.0);
+  float glint = pow(smoothstep(0.55, 0.95, w2), 5.0);
+  col += uSkySunCol * (facing * 1.3 + glint * 0.55);
+
+  // fresnel toward the horizon sky
+  float fres = pow(1.0 - max(dot(-vdir, vec3(0.0, 1.0, 0.0)), 0.0), 3.0);
+  col = mix(col, uSunFogCol, fres * 0.55);
+
+  float dist = length(vWorld - cameraPosition);
+  vec3 fogCol = mix(uFogCol, uSunFogCol, pow(max(dot(vdir, sd), 0.0), 6.0) * uHazeSun);
+  float fogF = 1.0 - exp(-uTime * 0.0 - 0.00028 * dist);
+  col = mix(col, fogCol, clamp(fogF, 0.0, 1.0));
+  col = saturate3(col, uSat);
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+/* ------------------------------------------------------------ billboards */
+// Illuminated facade panels with scrolling procedural content.
+
+export const BILL_VERT = /* glsl */ `
+attribute float aSeed;
+varying vec2 vUv;
+varying float vSeed;
+void main() {
+  vUv = uv;
+  vSeed = aSeed;
+  vec4 wp = vec4(position, 1.0);
+  #ifdef USE_INSTANCING
+    wp = instanceMatrix * wp;
+  #endif
+  wp = modelMatrix * wp;
+  gl_Position = projectionMatrix * viewMatrix * wp;
+}
+`;
+
+export const BILL_FRAG = /* glsl */ `
+uniform vec3 uBillA;
+uniform vec3 uBillB;
+uniform float uBillK;
+uniform float uTime;
+uniform float uLightK;
+varying vec2 vUv;
+varying float vSeed;
+${GLSL_NOISE}
+
+void main() {
+  // scrolling slabs of fake text/graphics
+  float scroll = uTime * (0.12 + vSeed * 0.22);
+  vec2 g = vec2(vUv.x * 5.0, vUv.y * 3.0 - scroll);
+  float slab = hash12(floor(g) + vSeed * 31.0);
+  float lit = step(0.38, slab) * (0.55 + 0.45 * hash12(floor(g) * 1.7 + 2.0));
+  vec3 col = mix(uBillA, uBillB, step(0.62, fract(slab * 7.31)));
+  col *= lit;
+
+  // frame + scanlines + soft vignette
+  float frame = max(abs(vUv.x - 0.5), abs(vUv.y - 0.5)) * 2.0;
+  col += uBillB * smoothstep(0.86, 1.0, frame) * 1.2;
+  col *= 0.82 + 0.18 * sin(vUv.y * 90.0 + uTime * 3.0);
+  float vig = 1.0 - smoothstep(0.55, 1.02, length(vUv - 0.5) * 1.6);
+  float k = uBillK * max(uLightK, 0.25) * (0.72 + 0.28 * sin(uTime * 1.7 + vSeed * 20.0));
+  gl_FragColor = vec4(col * (0.35 + k) * vig, 1.0);
+}
+`;
+
+/* -------------------------------------------------------------- weather */
+// Rain streaks / drifting snow / ash — instanced with per-particle phase.
+
+export const WEATHER_VERT = /* glsl */ `
+attribute float aOff;
+attribute float aSpeed;
+attribute float aSway;
+uniform float uTime;
+uniform float uFallH;
+uniform float uSwayAmp;
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  vec4 wp = instanceMatrix * vec4(position, 1.0);
+  wp.y = mod(wp.y + aOff + uTime * aSpeed, uFallH) - uFallH * 0.5;
+  wp.x += sin(uTime * aSway + aOff * 0.7) * uSwayAmp;
+  wp.z += cos(uTime * aSway * 0.8 + aOff * 1.3) * uSwayAmp;
+  wp = modelMatrix * wp;
+  gl_Position = projectionMatrix * viewMatrix * wp;
+}
+`;
+
+export const WEATHER_FRAG = /* glsl */ `
+uniform vec3 uWeatherCol;
+uniform float uWeatherK;
+varying vec2 vUv;
+void main() {
+  float along = 1.0 - abs(vUv.y * 2.0 - 1.0);
+  float across = 1.0 - abs(vUv.x * 2.0 - 1.0);
+  float a = along * (0.35 + 0.65 * across) * uWeatherK;
+  gl_FragColor = vec4(uWeatherCol, a);
 }
 `;

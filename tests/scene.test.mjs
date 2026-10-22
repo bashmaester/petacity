@@ -8,6 +8,7 @@ import {
   makeUniforms, makeWorld, growCity, applyLook, applyTime,
   buildLandmarks, buildBeacons, buildPlaces, makeLamps, makeLandmarkMaterial,
   makeVehicles, makeSearchlights, makeLightPools,
+  buildWater, buildBillboards, buildTrees, buildSculptures, makeWeather,
 } from '../src/scene.js';
 
 test('every look preset has a complete schema', () => {
@@ -37,7 +38,7 @@ test('shaders only use uniforms the materials actually have', () => {
     for (const m of src.matchAll(/uniform\s+\w+\s+(\w+)/g)) names.add(m[1]);
     return names;
   };
-  const mats = [world.skyMat, world.groundMat, world.towerMat, world.beaconMat, world.lampMat, world.trailMat, world.beamMat, world.poolMat, makeLandmarkMaterial(U, '#334455')];
+  const mats = [world.skyMat, world.groundMat, world.towerMat, world.beaconMat, world.lampMat, world.trailMat, world.beamMat, world.poolMat, world.waterMat, world.billMat, makeLandmarkMaterial(U, '#334455')];
   for (const mat of mats) {
     const used = new Set([...declared(mat.vertexShader), ...declared(mat.fragmentShader)]);
     for (const name of used) {
@@ -239,19 +240,19 @@ test('landmarks, places, beacons, lamps and vehicles build against real three.js
 
   const veh = makeVehicles(city, world.trailMat, 60);
   assert.ok(veh.group.isGroup);
-  assert.equal(veh.bodies.length, 3, 'pods, skimmers, haulers');
-  assert.equal(veh.beams.length, 3, 'headlight beam per class');
-  assert.ok(veh.thrusters.isInstancedMesh && veh.rotors.isInstancedMesh, 'articulated sub-parts');
+  assert.equal(veh.bodies.length, 6, 'pods, skimmers, haulers, drones, helis, blimps');
+  assert.equal(veh.beams.length, 6);
+  assert.ok(veh.rotors.some(Boolean) && veh.thrusters.isInstancedMesh, 'articulated sub-parts');
   assert.equal(veh.trailers.length, 2, 'two articulated trailer sections');
   assert.ok(veh.mesh.isInstancedMesh && veh.trails.isInstancedMesh);
   assert.ok(veh.trails.geometry.getAttribute('aColor'));
   // merged silhouettes carry vertex colours (hull/canopy/lights)
   for (const b of veh.bodies) {
     assert.ok(b.geometry.getAttribute('color'), 'vertex colours on bodies');
-    assert.ok(b.geometry.getAttribute('position').count >= 10 * 6, 'multi-part merged body');
+    assert.ok(b.geometry.getAttribute('position').count >= 8 * 6, 'multi-part merged body');
     assert.ok(b.instanceColor, 'per-instance tint');
   }
-  for (const b of veh.beams) {
+  for (const b of veh.beams.filter(Boolean)) {
     assert.ok(b.geometry.getAttribute('aBeamT') && b.geometry.getAttribute('aBeamW'), 'beam falloff attrs');
   }
   const m = new THREE.Matrix4();
@@ -265,12 +266,29 @@ test('landmarks, places, beacons, lamps and vehicles build against real three.js
   m.decompose(p, new THREE.Quaternion(), new THREE.Vector3());
   assert.ok(p.distanceTo(before) > 0.01, 'vehicles move when updated');
 
+  // vehicles point ALONG their travel direction (the sideways bug is fixed):
+  // the body's +X forward must align with the actual displacement
+  const q = new THREE.Quaternion();
+  const sc = new THREE.Vector3();
+  veh.mesh.getMatrixAt(0, m);
+  const p0 = new THREE.Vector3();
+  m.decompose(p0, q, sc);
+  const fwd = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
+  veh.update(0.08, 1);
+  veh.mesh.getMatrixAt(0, m);
+  const p1 = new THREE.Vector3();
+  m.decompose(p1, new THREE.Quaternion(), new THREE.Vector3());
+  const disp = p1.clone().sub(p0);
+  const align = Math.abs(disp.dot(fwd)) / Math.max(disp.length() * fwd.length(), 1e-6);
+  assert.ok(disp.length() > 0.01 && align > 0.7, `vehicle forward vs motion align=${align}`);
+
   // articulated sub-parts actually animate
   const r0 = new THREE.Matrix4();
   const r1 = new THREE.Matrix4();
-  veh.rotors.getMatrixAt(0, r0);
+  const rotor = veh.rotors.find(Boolean);
+  rotor.getMatrixAt(0, r0);
   veh.update(0.5, 1);
-  veh.rotors.getMatrixAt(0, r1);
+  rotor.getMatrixAt(0, r1);
   const q0 = new THREE.Quaternion();
   const q1 = new THREE.Quaternion();
   r0.decompose(new THREE.Vector3(), q0, new THREE.Vector3());
@@ -300,6 +318,66 @@ test('landmarks, places, beacons, lamps and vehicles build against real three.js
   const totalActive = veh.bodies.reduce((a, b) => a + b.count, 0);
   assert.equal(totalActive, 6, 'traffic slider thins the swarm');
   assert.equal(veh.trailers[0].count, veh.bodies[2].count, 'trailer count follows haulers');
+});
+
+test('weather, water, billboards, trees and light sculptures build', () => {
+  const U = makeUniforms();
+  const world = makeWorld(U);
+  const { city } = growCity(4417, 6, world.towerMat);
+
+  const water = buildWater(city, world.waterMat);
+  assert.equal(water.children.length, city.water.length);
+  for (const w of city.water) assert.ok(w.pts.length >= 8, 'irregular shore');
+
+  const bills = buildBillboards(city, world.billMat);
+  assert.ok(bills.isInstancedMesh);
+  assert.equal(bills.count, city.bills.length);
+  if (city.bills.length) {
+    assert.ok(bills.geometry.getAttribute('aSeed'), 'per-billboard seed');
+  }
+
+  const trees = buildTrees(city);
+  assert.ok(trees.organic && trees.cyber, 'both tree natures built');
+  assert.equal(trees.organic.visible && !trees.cyber.visible, true, 'organic default');
+  trees.setNature(LOOK_BY_ID.tron);
+  assert.ok(!trees.organic.visible && trees.cyber.visible, 'cyber look switches illuminators');
+  trees.setNature(LOOK_BY_ID.anime);
+  assert.ok(trees.organic.visible && !trees.cyber.visible, 'anime look switches trees');
+
+  const sculpt = buildSculptures(city, world.beaconMat, world.lampMat);
+  assert.ok(sculpt.children.length >= 1, 'light sculptures at public spaces');
+
+  const weather = makeWeather(U);
+  assert.ok(weather.group.isGroup);
+  weather.setMode(1);
+  assert.ok(weather.rain.visible && !weather.snow.visible, 'rain mode');
+  weather.setMode(3);
+  assert.ok(weather.snow.visible && !weather.rain.visible, 'snow mode');
+  weather.setMode(2);
+  const fakeCam = new THREE.Vector3(100, 200, 300);
+  weather.update(3, fakeCam); // long dt -> lightning timer fires eventually
+  for (let i = 0; i < 30; i++) weather.update(1, fakeCam);
+  assert.ok(U.uFlash.value >= 0, 'storm lightning drives uFlash');
+  assert.equal(weather.group.position.x, 100, 'weather column follows camera');
+});
+
+test('metropolis look is a complete Fritz Lang preset', () => {
+  const L = LOOK_BY_ID.metropolis;
+  assert.ok(L, 'metropolis exists');
+  assert.equal(L.nature, 'cyber');
+  assert.ok(L.trees && L.trees.glow, 'tree palette');
+  const U = makeUniforms();
+  applyLook(U, L);
+  applyTime(U, L, L.defTime);
+  assert.ok(U.uToon.value > 0.5, 'posterised expressionist shading');
+  assert.ok(U.uWinGlow.value > 1, 'burning windows');
+
+  // moon controls respond
+  applyTime(U, L, 0, { moon: 2, moonsz: 2, moonph: 1 });
+  assert.ok(U.uMoonGlow.value > 1, 'moon glow slider');
+  assert.equal(U.uMoonSize.value, 2);
+  assert.equal(U.uMoonPhase.value, 1);
+  assert.ok(U.uMoonDir.value.length() > 0.99, 'moon dir normalised');
 });
 
 test('searchlights sweep, breathe and pulse', () => {

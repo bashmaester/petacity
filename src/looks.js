@@ -19,6 +19,8 @@
 export const LOOKS = [
   {
     id: 'bladerunner',
+    nature: 'cyber', // trees vs sybernetic bioelectric illuminators
+    trees: { trunk: '#1a1220', canopy: '#2a1a3c', glow: '#ff4f8f' },
     defTime: 18.2,
     label: 'Blade Runner',
     blurb: 'smog sunset · neon windows · low orange haze',
@@ -43,6 +45,8 @@ export const LOOKS = [
   },
   {
     id: 'anime',
+    nature: 'organic', // trees vs sybernetic bioelectric illuminators
+    trees: { trunk: '#7a5a3a', canopy: '#4a9c5d', glow: '#ffd98a' },
     defTime: 11.5,
     label: '2000s Anime',
     blurb: 'flat cel light · ink lines · bright painted sky',
@@ -67,6 +71,8 @@ export const LOOKS = [
   },
   {
     id: 'abstract',
+    nature: 'organic', // trees vs sybernetic bioelectric illuminators
+    trees: { trunk: '#202028', canopy: '#e63946', glow: '#f4c430' },
     defTime: 13,
     label: 'Abstract',
     blurb: 'primary blocks · black edges · no light at all',
@@ -93,6 +99,8 @@ export const LOOKS = [
   },
   {
     id: 'tron',
+    nature: 'cyber', // trees vs sybernetic bioelectric illuminators
+    trees: { trunk: '#0a1420', canopy: '#0a2836', glow: '#00e5ff' },
     defTime: 22.8,
     label: 'Tron',
     blurb: 'dark grid · glowing edges · emissive bands',
@@ -117,6 +125,8 @@ export const LOOKS = [
   },
   {
     id: 'outrun',
+    nature: 'organic', // trees vs sybernetic bioelectric illuminators
+    trees: { trunk: '#2a1a3c', canopy: '#ff7edb', glow: '#ffb347' },
     defTime: 19.2,
     label: 'Outrun',
     blurb: 'violet dusk · pink grid · star field',
@@ -141,6 +151,8 @@ export const LOOKS = [
   },
   {
     id: 'clay',
+    nature: 'organic', // trees vs sybernetic bioelectric illuminators
+    trees: { trunk: '#8a7a6a', canopy: '#9aa87a', glow: '#ffd9a0' },
     defTime: 12.5,
     label: 'Clay',
     blurb: 'white study model · soft shadow · archviz calm',
@@ -162,6 +174,32 @@ export const LOOKS = [
     },
     ground: { street: '#b4bac2', block: '#d7d7d7', line: '#97a0aa', lineGlow: 0.1 },
     post: { grain: 0, scan: 0, vignette: 0.35 },
+  },
+  {
+    id: 'metropolis',
+    defTime: 21.4,
+    label: 'Metropolis',
+    blurb: 'Fritz Lang silhouettes · silver towers · burning windows · searchlights raking the clouds',
+    accent: '#d8c9a3',
+    nature: 'cyber', // the Machine-Palace city: bioelectric illuminators everywhere
+    trees: { trunk: '#141210', canopy: '#2a2622', glow: '#e8d9b0' },
+    sky: {
+      zen: '#07070a', hor: '#5a5148', sun: '#e8d9b0', sunDir: [0.62, 0.16, -0.72],
+      stars: 0.3, cloud: 0.62, cloudCol: '#1c1916', haze: 0.8,
+    },
+    fog: { color: '#15130f', density: 0.00062, height: 0.00038 },
+    light: {
+      sun: '#e8d9b0', sunK: 0.75, amb: '#3a3630', ambG: '#141210',
+      toon: 1, flat: 0,
+    },
+    tower: {
+      baseA: '#26221e', baseB: '#6b635a', palette: ['#26221e', '#3a342e', '#6b635a', '#4a423a', '#201c18', '#57503f'], usePalette: 1,
+      winDensity: 0.4, winGlow: 2.3,
+      winA: '#ffcf7a', winB: '#ffe9c4', winC: '#ff8c42',
+      edge: 0.85, edgeCol: '#d9c9a0', bandGlow: 1.5,
+    },
+    ground: { street: '#0c0b09', block: '#171412', line: '#c9b98c', lineGlow: 1.1 },
+    post: { grain: 0.3, scan: 0.18, vignette: 0.55 },
   },
 ];
 

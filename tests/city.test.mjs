@@ -177,3 +177,38 @@ test('buildings carry facade styles: normal, outline-glow, sparse', () => {
   }
   assert.ok(tall > 20 && low > 20, `tall=${tall} low=${low} — want both`);
 });
+
+test('voronoi structure: water, boulevards, trees, bills and layered lanes', () => {
+  const city = generateCity(4417, 10);
+  assert.ok(city.sites.length >= 8, `sites=${city.sites.length}`);
+  for (const s of city.sites) {
+    assert.ok(Number.isFinite(s.x) && Number.isFinite(s.z));
+    assert.ok(typeof s.kind === 'string');
+  }
+  assert.ok(city.water.length >= 1, 'at least one body of water');
+  for (const w of city.water) {
+    assert.ok(w.pts.length >= 8, 'shore has many points');
+    for (const [x, z] of w.pts) assert.ok(Number.isFinite(x) && Number.isFinite(z));
+  }
+  assert.ok(city.boulevards.length >= 1, 'a diagonal boulevard');
+  assert.ok(city.trees.length > 50, `trees=${city.trees.length}`);
+  for (const tr of city.trees.slice(0, 32)) {
+    assert.ok(tr.h > 4 && tr.h < 30 && Math.abs(tr.x) < 1700 && Math.abs(tr.z) < 1700);
+  }
+  assert.ok(city.bills.length > 0, 'billboards on tall towers');
+  for (const b of city.bills.slice(0, 16)) {
+    assert.ok(b.y > 40 && b.h > 5, 'billboard rides a facade');
+  }
+  // layered lane network with bézier control points
+  const layers = new Set(city.lanes.map((l) => l.layer));
+  assert.ok(layers.has('ground') && layers.has('blimp'), [...layers]);
+  assert.ok(layers.has('air-low') && layers.has('air-mid') && layers.has('air-high'));
+  for (const l of city.lanes.slice(0, 24)) {
+    assert.ok(Number.isFinite(l.cx) && Number.isFinite(l.cz), 'bézier control point');
+  }
+  // deterministic
+  const again = generateCity(4417, 10);
+  assert.equal(again.trees.length, city.trees.length);
+  assert.deepEqual(again.water, city.water);
+  assert.equal(again.bills.length, city.bills.length);
+});

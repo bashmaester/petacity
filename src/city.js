@@ -78,6 +78,15 @@ export function generateCity(seed = 4417, radius = 13) {
     items.push(x, y, z, w, h, d, s, kind, style);
   };
   const pushBeacon = (x, y, z, r = 0) => beacons.push({ x, y, z, phase: r, r });
+  const bills = [];
+
+  // Voronoi-ish structure: relaxed sites give the city its large-scale
+  // division (water, parks, cores) and break the pure grid.
+  const sites = makeSites(seed, radius);
+  const water = makeWaters(seed, sites, radius);
+  const boulevards = makeBoulevards(seed, radius);
+  const inWater = (x, z) => water.some((w) => pointInPoly(x, z, w.pts));
+  const nearBoulevard = (x, z) => boulevards.some((b) => distToSeg(x, z, b.x1, b.z1, b.x2, b.z2) < 52);
 
   // Districts: coherent quarters via a smooth noise field + hash jitter.
   const DS = 3; // blocks per district side
@@ -160,6 +169,8 @@ export function generateCity(seed = 4417, radius = 13) {
       }
       // sparse / rift quarters leave whole blocks empty — parks, gaps, voids
       if (rand() < d.skip * 0.55) continue;
+      // water bodies and diagonal boulevards carve the grid up
+      if (inWater(cx, cz) || nearBoulevard(cx, cz)) continue;
 
       // Split the block into lots (jittered grid, 2–4 per axis).
       const nx = 2 + Math.floor(rand() * (rand() < 0.25 ? 1 : Math.max(1, d.lots - 1)));
@@ -172,7 +183,7 @@ export function generateCity(seed = 4417, radius = 13) {
           // Occasional empty lot -> a gap/plaza in the block.
           if (a + 1 < nx && rand() < 0.08 + d.skip * 0.5) continue;
           if (b + 1 < nz && rand() < 0.08 + d.skip * 0.5) continue;
-          addTower(push, pushBeacon, rand, xs[a], xs[a + 1], zs[b], zs[b + 1], h01, d);
+          addTower(push, pushBeacon, (b) => bills.push(b), rand, xs[a], xs[a + 1], zs[b], zs[b + 1], h01, d);
           towers++;
         }
       }
@@ -208,9 +219,14 @@ export function generateCity(seed = 4417, radius = 13) {
     maxY = Math.max(maxY, y[k] + h[k] / 2);
   }
 
-  const lanes = makeLanes(seed, radius);
+  const lanes = makeLanes(seed, radius, boulevards);
   const lamps = makeLamps(seed, radius);
-  return { seed, radius, count: n, towers, maxY, x, y, z, w, h, d, s, kind, style, districts, landmarks, places, lanes, beacons, lamps };
+  const trees = makeTrees(seed, radius, water, lmCells, places);
+  return {
+    seed, radius, count: n, towers, maxY, x, y, z, w, h, d, s, kind, style,
+    districts, landmarks, places, lanes, beacons, lamps,
+    sites, water, boulevards, trees, bills,
+  };
 }
 
 /** Street lamps along both sides of every avenue — the night grid, lit. */
@@ -301,36 +317,203 @@ function addPlaceData(places, lmCells, pushBeacon, kind, bi, bj, seed) {
   pushBeacon(cx, 14 + rnd(53) * 10, cz, rnd(59));
 }
 
-/** Air and ground traffic lanes: straight runs the vehicles loop along. */
-function makeLanes(seed, radius) {
+/**
+ * Traffic lanes as gentle quadratic béziers across multiple altitude layers:
+ * ground streets, low/mid/high air corridors, sweeping ring loops and slow
+ * blimp routes — plus diagonal boulevards on the ground.
+ */
+function makeLanes(seed, radius, boulevards = []) {
   const lanes = [];
   const span = radius * CELL + CELL * 0.6;
   const R = (a, b) => hash2i(a, b, seed ^ 0x2c1b3e5d);
 
-  // Air corridors: two axes at four altitude bands.
-  const bands = [85, 165, 255, 355];
+  const pushLane = (x1, z1, x2, z2, y, speed, layer, bow = 0) => {
+    const mx = (x1 + x2) / 2;
+    const mz = (z1 + z2) / 2;
+    const dx = x2 - x1;
+    const dz = z2 - z1;
+    const len = Math.hypot(dx, dz) || 1;
+    const px = -dz / len;
+    const pz = dx / len;
+    const b = bow * len;
+    lanes.push({ x1, z1, cx: mx + px * b, cz: mz + pz * b, x2, z2, y, speed, layer });
+  };
+
+  // Air corridors: two axes at five altitude bands, gently curved.
+  const bands = [[75, 'air-low'], [155, 'air-mid'], [245, 'air-mid'], [345, 'air-high'], [435, 'air-high']];
   for (let k = 0; k < bands.length; k++) {
-    const y = bands[k] + R(k, 1) * 40;
+    const y = bands[k][0] + R(k, 1) * 30;
+    const layer = bands[k][1];
     const off1 = (R(k, 2) - 0.5) * span * 0.85;
     const off2 = (R(k, 3) - 0.5) * span * 0.85;
-    lanes.push({ x1: -span, z1: off1, x2: span, z2: off1 * 0.35, y, speed: 130 + R(k, 4) * 150 });
-    lanes.push({ x1: span, z1: off2 * 0.35, x2: -span, z2: off2, y: y + 12, speed: 130 + R(k, 5) * 150 });
-    lanes.push({ x1: off1 * 0.4, z1: -span, x2: off1 * 0.9, z2: span, y: y + 24, speed: 120 + R(k, 6) * 160 });
-    lanes.push({ x1: off2 * 0.9, z1: span, x2: off2 * 0.4, z2: -span, y: y + 6, speed: 120 + R(k, 7) * 160 });
+    pushLane(-span, off1, span, off1 * 0.35, y, 130 + R(k, 4) * 150, layer, (R(k, 8) - 0.5) * 0.16);
+    pushLane(span, off2 * 0.35, -span, off2, y + 12, 130 + R(k, 5) * 150, layer, (R(k, 9) - 0.5) * 0.16);
+    pushLane(off1 * 0.4, -span, off1 * 0.9, span, y + 24, 120 + R(k, 6) * 160, layer, (R(k, 10) - 0.5) * 0.16);
+    pushLane(off2 * 0.9, span, off2 * 0.4, -span, y + 6, 120 + R(k, 7) * 160, layer, (R(k, 11) - 0.5) * 0.16);
+  }
+
+  // Ring loops around the core — curved skimmer highways.
+  for (let ring = 0; ring < 2; ring++) {
+    const rr = (0.35 + ring * 0.32) * span;
+    const y = 110 + ring * 150 + R(ring, 31) * 30;
+    const layer = ring === 0 ? 'air-low' : 'air-mid';
+    for (let s = 0; s < 4; s++) {
+      const a0 = (s / 4) * Math.PI * 2;
+      const a1 = ((s + 1) / 4) * Math.PI * 2;
+      pushLane(Math.cos(a0) * rr, Math.sin(a0) * rr, Math.cos(a1) * rr, Math.sin(a1) * rr,
+        y, 90 + R(ring, 32) * 60, layer, 0.3);
+    }
+  }
+
+  // Blimp lanes — very high, very slow, big lazy curves.
+  for (let k = 0; k < 3; k++) {
+    const y = 520 + k * 95 + R(k, 21) * 40;
+    pushLane(-span * 1.1, (R(k, 22) - 0.5) * span * 1.4, span * 1.1, (R(k, 23) - 0.5) * span * 1.4,
+      y, 38 + R(k, 24) * 22, 'blimp', (R(k, 25) - 0.5) * 0.45);
   }
 
   // Ground traffic on every 4th street (avenues), both directions.
   for (let a = -radius; a <= radius; a += 4) {
     const p = a * CELL;
     if (R(a, 11) < 0.25) continue;
-    lanes.push({ x1: p + 9, z1: -span, x2: p + 9, z2: span, y: 5.5, speed: 55 + R(a, 12) * 45 });
-    lanes.push({ x1: p - 9, z1: span, x2: p - 9, z2: -span, y: 5.5, speed: 55 + R(a, 13) * 45 });
+    pushLane(p + 9, -span, p + 9, span, 5.5, 55 + R(a, 12) * 45, 'ground');
+    pushLane(p - 9, span, p - 9, -span, 5.5, 55 + R(a, 13) * 45, 'ground');
     if (R(a, 14) < 0.5) {
-      lanes.push({ x1: -span, z1: p + 9, x2: span, z2: p + 9, y: 5.5, speed: 55 + R(a, 15) * 45 });
-      lanes.push({ x1: span, z1: p - 9, x2: -span, z2: p - 9, y: 5.5, speed: 55 + R(a, 16) * 45 });
+      pushLane(-span, p + 9, span, p + 9, 5.5, 55 + R(a, 15) * 45, 'ground');
+      pushLane(span, p - 9, -span, p - 9, 5.5, 55 + R(a, 16) * 45, 'ground');
     }
   }
+
+  // Diagonal boulevards — long fast ground runs cutting the grid.
+  for (let k = 0; k < boulevards.length; k++) {
+    const b = boulevards[k];
+    pushLane(b.x1 + 10, b.z1 + 6, b.x2 + 10, b.z2 + 6, 5.5, 90 + R(k, 41) * 50, 'ground', 0.04);
+    pushLane(b.x1 - 10, b.z1 - 6, b.x2 - 10, b.z2 - 6, 5.5, 90 + R(k, 42) * 50, 'ground', -0.04);
+  }
   return lanes;
+}
+
+/* ---------------------------------------------- voronoi structure helpers */
+
+/** Jittered, lightly-relaxed sites: the city's large-scale division. */
+function makeSites(seed, radius) {
+  const span = radius * CELL * 0.85;
+  const n = 8 + Math.floor(hash2i(3, 91, seed) * 7);
+  const pts = [];
+  for (let k = 0; k < n; k++) {
+    pts.push({
+      x: (hash2i(k, 71, seed) - 0.5) * 2 * span,
+      z: (hash2i(k, 83, seed) - 0.5) * 2 * span,
+      r: hash2i(k, 97, seed),
+    });
+  }
+  // one Lloyd relaxation pass over a coarse sample grid
+  const step = span / 6;
+  const acc = pts.map(() => ({ x: 0, z: 0, n: 0 }));
+  for (let x = -span; x <= span; x += step) {
+    for (let z = -span; z <= span; z += step) {
+      let best = 0;
+      let bd = Infinity;
+      for (let k = 0; k < pts.length; k++) {
+        const d = (pts[k].x - x) ** 2 + (pts[k].z - z) ** 2;
+        if (d < bd) { bd = d; best = k; }
+      }
+      acc[best].x += x;
+      acc[best].z += z;
+      acc[best].n++;
+    }
+  }
+  const kinds = ['core', 'park', 'core', 'water', 'sparse', 'civic'];
+  return pts.map((p, k) => {
+    const a = acc[k];
+    return {
+      x: a.n ? a.x / a.n : p.x,
+      z: a.n ? a.z / a.n : p.z,
+      kind: p.r < 0.18 ? 'water' : kinds[Math.floor(hash2i(k, 113, seed) * kinds.length) % kinds.length],
+      r: p.r,
+    };
+  });
+}
+
+/** 1–3 irregular water bodies around the water-kind sites. */
+function makeWaters(seed, sites, radius) {
+  const out = [];
+  const waterSites = sites.filter((s) => s.kind === 'water');
+  const limit = Math.min(waterSites.length, 1 + Math.floor(hash2i(5, 61, seed) * 2));
+  for (let k = 0; k < limit; k++) {
+    const s = waterSites[k];
+    const rad = 160 + hash2i(k, 67, seed) * 260;
+    const pts = [];
+    const m = 10 + Math.floor(hash2i(k, 71, seed) * 6);
+    for (let i = 0; i < m; i++) {
+      const a = (i / m) * Math.PI * 2;
+      const rr = rad * (0.55 + hash2i(k * 31 + i, 79, seed) * 0.8);
+      pts.push([s.x + Math.cos(a) * rr, s.z + Math.sin(a) * rr]);
+    }
+    out.push({ x: s.x, z: s.z, r: rad, pts, seed: hash2i(k, 89, seed) });
+  }
+  return out;
+}
+
+/** 1–2 diagonal boulevards slicing across the grid. */
+function makeBoulevards(seed, radius) {
+  const span = radius * CELL * 1.15;
+  const out = [];
+  const n = 1 + Math.floor(hash2i(9, 41, seed) * 2);
+  for (let k = 0; k < n; k++) {
+    const a = hash2i(k, 43, seed) * Math.PI;
+    const cx = (hash2i(k, 47, seed) - 0.5) * span * 0.4;
+    const cz = (hash2i(k, 53, seed) - 0.5) * span * 0.4;
+    out.push({
+      x1: cx - Math.cos(a) * span, z1: cz - Math.sin(a) * span,
+      x2: cx + Math.cos(a) * span, z2: cz + Math.sin(a) * span,
+    });
+  }
+  return out;
+}
+
+/** Trees — real trees or sybernetic illuminators depending on the look. */
+function makeTrees(seed, radius, water, lmCells, places) {
+  const trees = [];
+  const span = radius * CELL + CELL * 0.4;
+  const inWater = (x, z) => water.some((w) => pointInPoly(x, z, w.pts));
+  const placeNear = (x, z) => places.some((p) => Math.hypot(p.x - x, p.z - z) < p.r + 26);
+  let k = 0;
+  // street trees along the avenues
+  for (let a = -radius; a <= radius; a += 4) {
+    const p = a * CELL;
+    for (let z = -span; z <= span; z += 64) {
+      for (const sx of [1, -1]) {
+        const x = p + sx * 24 + (hash2i(k, 131, seed) - 0.5) * 8;
+        const zz = z + (hash2i(k, 137, seed) - 0.5) * 12;
+        k++;
+        if (Math.abs(x) > span || Math.abs(zz) > span) continue;
+        if (inWater(x, zz) || placeNear(x, zz)) continue;
+        const cell = Math.floor(x / CELL) + ',' + Math.floor(zz / CELL);
+        if (lmCells.has(cell)) continue;
+        if (hash2i(k, 139, seed) < 0.35) continue;
+        trees.push({ x, z: zz, h: 9 + hash2i(k, 149, seed) * 9, seed: hash2i(k, 151, seed) });
+      }
+    }
+  }
+  return trees;
+}
+
+function pointInPoly(x, z, pts) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, zi] = pts[i];
+    const [xj, zj] = pts[j];
+    if ((zi > z) !== (zj > z) && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+function distToSeg(px, pz, x1, z1, x2, z2) {
+  const dx = x2 - x1;
+  const dz = z2 - z1;
+  const t = Math.max(0, Math.min(1, ((px - x1) * dx + (pz - z1) * dz) / (dx * dx + dz * dz || 1)));
+  return Math.hypot(px - (x1 + t * dx), pz - (z1 + t * dz));
 }
 
 /** Split [a,b] into n spans with jittered interior cuts. */
@@ -349,7 +532,7 @@ function splitSpan(a, b, n, rand) {
  * stepped tower (default), monolith slab, rift spindle, or twin shafts with
  * a skybridge. Facade style: 0 normal windowed, 1 outline-glow, 2 sparse.
  */
-function addTower(push, pushBeacon, rand, x0, x1, z0, z1, h01, d) {
+function addTower(push, pushBeacon, pushBill, rand, x0, x1, z0, z1, h01, d) {
   const w0 = x1 - x0;
   const d0 = z1 - z0;
   if (w0 < 12 || d0 < 12) return;
@@ -465,6 +648,18 @@ function addTower(push, pushBeacon, rand, x0, x1, z0, z1, h01, d) {
   const tw = Math.max(10, w - iw * 2) * 0.92;
   const td = Math.max(10, dp - id * 2) * 0.92;
   push(cx, y + 1.1, cz, tw, 2.2, td, rand(), KIND.SLAB, style);
+  // illuminated billboards riding the facade of tall towers
+  if (H > 180 && rand() < 0.4) {
+    const bh = 10 + rand() * 16;
+    const bw = Math.min(46, Math.max(14, (rand() < 0.5 ? tw : td) * (0.7 + rand() * 0.5)));
+    const by = H * (0.45 + rand() * 0.38);
+    const side = rand();
+    if (side < 0.5) {
+      pushBill({ x: cx + tw / 2 + 1.2, y: by, z: cz, w: 2.4, h: bh, d: bw, seed: rand() });
+    } else {
+      pushBill({ x: cx, y: by, z: cz + td / 2 + 1.2, w: bw, h: bh, d: 2.4, seed: rand() });
+    }
+  }
   if (H > 170 && rand() < 0.7) {
     const ah = 12 + rand() * 40;
     push(cx, y + 2.2 + ah / 2, cz, 1.6, ah, 1.6, rand(), KIND.MAST, style);
