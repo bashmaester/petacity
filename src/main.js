@@ -1,11 +1,13 @@
 // Petacity — procedural city scaffolding with swap-able looks.
 import * as THREE from '../vendor/three.module.js';
 import { LOOKS, LOOK_BY_ID } from './looks.js';
+import { CELL } from './city.js';
 import {
   makeUniforms, makeWorld, growCity, applyLook, applyTime,
   buildLandmarks, buildBeacons, buildPlaces, makeLamps,
   makeVehicles, makeSearchlights, makeLightPools,
-  buildWater, buildBillboards, buildTrees, buildSculptures, makeWeather,
+  buildWater, buildBoulevards, buildBillboards, buildTrees, buildSculptures, makeWeather,
+  buildSigns, buildHolos,
 } from './scene.js';
 import { FlyControls } from './controls.js';
 
@@ -101,6 +103,8 @@ function boot() {
   const weather = makeWeather(U);
   scene.add(weather.group);
 
+  const controls = new FlyControls(camera, canvas);
+
   /* ------------------------------------------------------------- city */
 
   let cityMesh = null;
@@ -112,14 +116,25 @@ function boot() {
   let searchlights = null;
   let vehicles = null;
   let waterGroup = null;
+  let boulevardGroup = null;
   let billboards = null;
+  let signGroup = null;
+  let holoGroup = null;
   let trees = null;
   let sculptures = null;
   let city = null;
+  let cityCollider = null;
+  let glideOn = false;
+  let collideOn = true;
 
   function rebuild() {
     const grown = growCity(seed, cityRadius, world.towerMat);
     city = grown.city;
+    cityCollider = grown.collider;
+    U.uCitySpan.value = city.radius * CELL;
+    controls.collider = cityCollider;
+    controls.collision = collideOn;
+    controls.heightScale = heightScale;
     while (cityGroup.children.length) {
       const ch = cityGroup.children.pop();
       ch.traverse?.((o) => o.geometry && o.geometry.dispose());
@@ -131,12 +146,19 @@ function boot() {
     lamps = makeLamps(city, world.lampMat);
     pools = makeLightPools(city, world.poolMat);
     searchlights = makeSearchlights(city, world.beamMat);
-    vehicles = makeVehicles(city, world.trailMat);
+    vehicles = makeVehicles(city, world.trailMat, 260, cityCollider);
+    vehicles.setCollision(collideOn);
     waterGroup = buildWater(city, world.waterMat);
+    boulevardGroup = buildBoulevards(city, U);
     billboards = buildBillboards(city, world.billMat);
+    signGroup = buildSigns(city, world.billMat);
+    holoGroup = buildHolos(city, world.holoMat, world.beamMat);
     trees = buildTrees(city);
     sculptures = buildSculptures(city, world.beaconMat, world.lampMat);
     if (trees) trees.setNature(LOOK_BY_ID[lookId]);
+    if (boulevardGroup && boulevardGroup.userData.lineMat) {
+      boulevardGroup.userData.lineMat.color.set(LOOK_BY_ID[lookId].ground.line);
+    }
     cityGroup.add(cityMesh);
     cityGroup.add(landmarkGroup);
     cityGroup.add(placeGroup);
@@ -146,7 +168,10 @@ function boot() {
     cityGroup.add(searchlights.group);
     cityGroup.add(vehicles.group);
     cityGroup.add(waterGroup);
+    cityGroup.add(boulevardGroup);
     cityGroup.add(billboards);
+    cityGroup.add(signGroup);
+    cityGroup.add(holoGroup);
     cityGroup.add(trees.group);
     cityGroup.add(sculptures);
     applyHeight();
@@ -155,11 +180,14 @@ function boot() {
     $('#stat-boxes').textContent = city.count.toLocaleString('en-US');
     $('#stat-seed').textContent = String(seed);
     buildPois();
+    syncGlideNode();
     syncURL();
   }
 
   function applyHeight() {
     cityGroup.scale.y = heightScale;
+    controls.heightScale = heightScale;
+    syncGlideNode();
     if (vehicles) vehicles.update(0, tune.traffic);
   }
 
@@ -170,6 +198,9 @@ function boot() {
     applyLook(U, look, tune);
     applyTime(U, look, timeOfDay, tune);
     if (trees) trees.setNature(look);
+    if (boulevardGroup && boulevardGroup.userData.lineMat) {
+      boulevardGroup.userData.lineMat.color.set(look.ground.line);
+    }
     document.documentElement.style.setProperty('--accent', look.accent);
     $('#grain').style.opacity = look.post.grain;
     $('#scan').style.opacity = look.post.scan;
@@ -239,10 +270,10 @@ function boot() {
   };
   $('#b-ui').onclick = toggleUI;
   window.addEventListener('keydown', (e) => {
-    if (e.key === 'h' || e.key === 'H') {
-      if (e.target && e.target.tagName === 'INPUT') return;
-      toggleUI();
-    }
+    if (e.target && e.target.tagName === 'INPUT') return;
+    if (e.key === 'h' || e.key === 'H') toggleUI();
+    else if (e.key === 'g' || e.key === 'G') toggleGlide();
+    else if (e.key === 'c' || e.key === 'C') toggleCollision();
   });
 
   function bindSlider(el, fn) {
@@ -270,6 +301,65 @@ function boot() {
   /* -------------------------------------------------- places of interest */
 
   let fly = null;
+  let glideIdx = 0;
+
+  // Scenic glide nodes: landmarks, venues (arena, theatre, stadium…) and giant holograms
+  function glideNodes() {
+    if (!city) return [];
+    const nodes = [];
+    for (const lm of city.landmarks) {
+      nodes.push({ x: lm.x + lm.r * 2.2, y: Math.max(95, lm.h * 0.65 * heightScale), z: lm.z + lm.r * 2.2, name: lm.name });
+    }
+    for (const pl of city.places) {
+      nodes.push({ x: pl.x + pl.r * 1.6, y: 82 * heightScale + 24, z: pl.z - pl.r * 1.6, name: pl.name });
+    }
+    for (const h of city.holos.slice(0, 4)) {
+      nodes.push({ x: h.x + h.w * 1.4, y: h.y * heightScale, z: h.z - h.w * 1.4, name: 'Sky Hologram' });
+    }
+    return nodes;
+  }
+
+  function syncGlideNode() {
+    const nodes = glideNodes();
+    if (!nodes.length) { controls.glideTarget = null; return null; }
+    const node = nodes[glideIdx % nodes.length];
+    controls.glideTarget = node;
+    return node;
+  }
+
+  // ---- glide mode (G): continuous banked cruise — steerable with mouse/keys, scenic nodes when idle ----
+  function toggleGlide() {
+    glideOn = !glideOn;
+    fly = null;
+    controls.syncFromCamera();
+    controls.setGlide(glideOn);
+    const b = $('#b-glide');
+    b.textContent = glideOn ? 'Glide: on' : 'Glide mode';
+    b.classList.toggle('on', glideOn);
+    b.setAttribute('aria-pressed', String(glideOn));
+    b.title = (glideOn ? 'Stop' : 'Start') + ' Glide mode — drag to steer, wheel for speed (G)';
+    if (glideOn) {
+      const n = syncGlideNode();
+      flash(n ? `Glide mode · ${n.name}` : 'Glide mode');
+    } else {
+      flash('Glide off');
+    }
+  }
+
+  // ---- collision detection toggle (C): camera vs buildings + vehicle spacing ----
+  function toggleCollision() {
+    collideOn = !collideOn;
+    controls.collision = collideOn;
+    if (vehicles) vehicles.setCollision(collideOn);
+    const b = $('#b-collide');
+    b.textContent = collideOn ? 'Collision: on' : 'Collision: off';
+    b.classList.toggle('on', collideOn);
+    b.setAttribute('aria-pressed', String(collideOn));
+    b.title = (collideOn ? 'Disable' : 'Enable') + ' camera & traffic collision detection (C)';
+    flash(collideOn ? 'Collision on' : 'Collision off (noclip)');
+  }
+  $('#b-glide').onclick = toggleGlide;
+  $('#b-collide').onclick = toggleCollision;
 
   function flyToLandmark(lm) {
     const dist = Math.max(240, lm.r * 4.6);
@@ -290,7 +380,7 @@ function boot() {
     box.innerHTML = '';
     const spots = [
       ...city.landmarks,
-      ...city.places.map((p) => ({ ...p, h: 42 })),
+      ...city.places.map((p) => ({ ...p, h: p.kind === 'arena' || p.kind === 'stadium' || p.kind === 'theatre' ? 58 : 42 })),
     ];
     for (const lm of spots) {
       const b = document.createElement('button');
@@ -310,8 +400,6 @@ function boot() {
   }
 
   /* ------------------------------------------------------------- loop */
-
-  const controls = new FlyControls(camera, canvas);
 
   function resize() {
     const w = window.innerWidth;
@@ -333,11 +421,22 @@ function boot() {
         const e = fly.t < 0.5 ? 2 * fly.t * fly.t : 1 - Math.pow(-2 * fly.t + 2, 2) / 2;
         camera.position.lerpVectors(fly.from, fly.to, e);
         camera.lookAt(fly.look);
-        if (fly.t >= 1 || controls.keys.size || controls._drag) {
+        const interrupted = controls.keys.size || controls._drag;
+        if (fly.t >= 1 || interrupted) {
           controls.syncFromCamera();
+          if (glideOn) controls.setGlide(true);
           fly = null;
         }
       } else {
+        if (glideOn && controls.glideTarget) {
+          const dx = camera.position.x - controls.glideTarget.x;
+          const dz = camera.position.z - controls.glideTarget.z;
+          if (Math.hypot(dx, dz) < 220) {
+            glideIdx++;
+            const next = syncGlideNode();
+            if (next && controls._idle > 1.6) flash(next.name);
+          }
+        }
         controls.update(dt);
       }
       if (vehicles) vehicles.update(dt, tune.traffic);

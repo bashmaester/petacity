@@ -8,8 +8,10 @@ import {
   makeUniforms, makeWorld, growCity, applyLook, applyTime,
   buildLandmarks, buildBeacons, buildPlaces, makeLamps, makeLandmarkMaterial,
   makeVehicles, makeSearchlights, makeLightPools,
-  buildWater, buildBillboards, buildTrees, buildSculptures, makeWeather,
+  buildWater, buildBoulevards, buildBillboards, buildTrees, buildSculptures, makeWeather,
+  buildSigns, buildHolos,
 } from '../src/scene.js';
+import { FlyControls } from '../src/controls.js';
 
 test('every look preset has a complete schema', () => {
   for (const L of LOOKS) {
@@ -240,8 +242,8 @@ test('landmarks, places, beacons, lamps and vehicles build against real three.js
 
   const veh = makeVehicles(city, world.trailMat, 60);
   assert.ok(veh.group.isGroup);
-  assert.equal(veh.bodies.length, 6, 'pods, skimmers, haulers, drones, helis, blimps');
-  assert.equal(veh.beams.length, 6);
+  assert.equal(veh.bodies.length, 8, 'pods, skimmers, haulers, drones, helis, blimps, shuttles, spinners');
+  assert.equal(veh.beams.length, 8);
   assert.ok(veh.rotors.some(Boolean) && veh.thrusters.isInstancedMesh, 'articulated sub-parts');
   assert.equal(veh.trailers.length, 2, 'two articulated trailer sections');
   assert.ok(veh.mesh.isInstancedMesh && veh.trails.isInstancedMesh);
@@ -409,4 +411,121 @@ test('searchlights sweep, breathe and pulse', () => {
   pools.getMatrixAt(0, m);
   m.decompose(p, new THREE.Quaternion(), new THREE.Vector3());
   assert.ok(p.y > 0 && p.y < 10, 'pools hug the ground');
+});
+
+test('signage, holograms and venue districts build: more lights, more life', () => {
+  const U = makeUniforms();
+  const world = makeWorld(U);
+  const { city } = growCity(4417, 6, world.towerMat);
+
+  // signs: neon blades / rooftop wordmarks with seeds for the animation
+  const signs = buildSigns(city, world.billMat);
+  assert.ok(signs.isInstancedMesh);
+  assert.equal(signs.count, city.signs.length);
+  assert.ok(signs.geometry.getAttribute('aSeed'), 'signs carry seeds');
+  assert.ok(city.signs.length > 0, 'city produces signage');
+
+  // giant holographic displays + volumetric cones beneath
+  const holos = buildHolos(city, world.holoMat, world.beamMat);
+  assert.ok(city.holos.length >= 4, `expected several giant holograms, got ${city.holos.length}`);
+  assert.ok(holos.children.length >= city.holos.length + 1, 'projector cones + holo instanced meshes');
+  for (const H of city.holos) {
+    assert.ok(H.w > 35 && H.h > 25, `holo size ${H.w}x${H.h}`);
+    assert.ok(Number.isFinite(H.rot));
+  }
+
+  // diagonal boulevards build road ribbons
+  const bvds = buildBoulevards(city, U);
+  assert.equal(bvds.children.length, city.boulevards.length * 2, 'road + glowing centre stripe per boulevard');
+
+  // arena, movie theatre & stadium sites all exist and build richly
+  const kinds = new Set(city.places.map((p) => p.kind));
+  assert.ok(kinds.has('arena'), 'has an arena');
+  assert.ok(kinds.has('theatre'), 'has a movie theatre');
+  assert.ok(kinds.has('stadium'), 'has a stadium');
+  const pl = buildPlaces(city, U);
+  let meshes = 0;
+  pl.traverse((o) => { if (o.isMesh) meshes++; });
+  assert.ok(meshes >= city.places.length * 8, `place meshes=${meshes}`);
+});
+
+test('vehicles glide on lane profiles, never enter buildings, and collision toggles', () => {
+  const U = makeUniforms();
+  const world = makeWorld(U);
+  const { city, collider } = growCity(4417, 6, world.towerMat);
+  const veh = makeVehicles(city, world.trailMat, 160, collider);
+
+  // glide nodes: air lanes carry vertical profiles clearing the rooftops
+  const air = city.lanes.filter((L) => L.prof);
+  assert.ok(air.length > 0, 'lanes have glide profiles');
+  for (const L of air.slice(0, 12)) {
+    for (const y of L.prof) assert.ok(Number.isFinite(y) && y >= L.y - 1, `profile y=${y}`);
+  }
+  const climbers = air.filter((L) => Math.max(...L.prof) > L.y + 30);
+  assert.ok(climbers.length > 0, 'some lanes glide up over the skyline');
+
+  // advance traffic through multiple steps and verify zero vehicles clip into buildings
+  const m = new THREE.Matrix4();
+  const p = new THREE.Vector3();
+  const q = new THREE.Quaternion();
+  const s = new THREE.Vector3();
+  for (let step = 0; step < 12; step++) {
+    veh.update(0.35, 1);
+    for (let cc = 0; cc < veh.bodies.length; cc++) {
+      const inst = veh.bodies[cc];
+      for (let i = 0; i < inst.count; i++) {
+        inst.getMatrixAt(i, m);
+        m.decompose(p, q, s);
+        assert.equal(
+          collider.hitsPoint(p.x, p.y, p.z, 1.5),
+          false,
+          `vehicle class ${cc}#${i} clipped building at (${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)})`
+        );
+      }
+    }
+  }
+
+  // collision API: default on, toggles off without breaking updates
+  assert.equal(veh.collision, true);
+  veh.setCollision(false);
+  assert.equal(veh.collision, false);
+  veh.update(0.016, 1);
+  veh.setCollision(true);
+  assert.equal(veh.collision, true);
+});
+
+test('FlyControls glide mode cruises toward scenic nodes and respects collision toggle', () => {
+  const prevWin = globalThis.window;
+  globalThis.window = { addEventListener() {} };
+  try {
+    const cam = new THREE.PerspectiveCamera(62, 1, 2, 28000);
+    cam.position.set(400, 180, 400);
+    cam.lookAt(0, 120, 0);
+    const fakeDom = { addEventListener() {}, setPointerCapture() {} };
+    const ctl = new FlyControls(cam, fakeDom);
+    const U = makeUniforms();
+    const world = makeWorld(U);
+    const { city, collider } = growCity(4417, 5, world.towerMat);
+    ctl.collider = collider;
+    ctl.glideTarget = { x: -300, y: 150, z: -200 };
+    ctl.setGlide(true);
+    const start = cam.position.clone();
+    for (let i = 0; i < 20; i++) ctl.update(0.05);
+    assert.ok(cam.position.distanceTo(start) > 40, 'glide mode moves camera forward');
+    assert.equal(collider.hitsPoint(cam.position.x, cam.position.y, cam.position.z, 2), false, 'gliding camera stays out of buildings');
+
+    // Place camera inside a solid building: collision=true pushes it out, collision=false allows noclip
+    let bi = 0;
+    while (bi < city.count && city.h[bi] < 60) bi++;
+    cam.position.set(city.x[bi], city.y[bi], city.z[bi]);
+    ctl.setGlide(false);
+    ctl.collision = false;
+    ctl.update(0.016);
+    assert.equal(collider.hitsPoint(cam.position.x, cam.position.y, cam.position.z, 0), true, 'noclip when collision off');
+    ctl.collision = true;
+    ctl.update(0.016);
+    assert.equal(collider.hitsPoint(cam.position.x, cam.position.y, cam.position.z, 1), false, 'pushed clear when collision on');
+  } finally {
+    globalThis.window = prevWin;
+  }
 });

@@ -1,7 +1,7 @@
 // Node smoke tests for the pure-JS city generator. Run: node --test tests/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generateCity, streetWidth, AVENUE, STREET, KIND, LM_KINDS, PLACE_KINDS, DISTRICT_KINDS, CELL } from '../src/city.js';
+import { generateCity, makeCityCollider, streetWidth, AVENUE, STREET, KIND, LM_KINDS, PLACE_KINDS, DISTRICT_KINDS, CELL } from '../src/city.js';
 import { mulberry32, hash2i, makeNoise2D, fbm2D } from '../src/prng.js';
 
 test('mulberry32 is deterministic and in range', () => {
@@ -211,4 +211,72 @@ test('voronoi structure: water, boulevards, trees, bills and layered lanes', () 
   assert.equal(again.trees.length, city.trees.length);
   assert.deepEqual(again.water, city.water);
   assert.equal(again.bills.length, city.bills.length);
+});
+
+test('grid variation: towers rotate and the skyline tapers into fog', () => {
+  const c = generateCity(4417, 6);
+  assert.ok(c.rot, 'rotations recorded');
+  let rotated = 0;
+  for (let i = 0; i < c.count; i++) if (Math.abs(c.rot[i]) > 0.02) rotated++;
+  assert.ok(rotated > c.count * 0.05, `rotated=${rotated}/${c.count}`);
+  // edge buildings are generally shorter than core ones (outskirts fade)
+  let coreH = 0, edgeH = 0, nCore = 0, nEdge = 0;
+  for (let i = 0; i < c.count; i++) {
+    const r = Math.max(Math.abs(c.x[i]), Math.abs(c.z[i]));
+    if (r < c.radius * CELL * 0.35) { coreH += c.h[i]; nCore++; }
+    else if (r > c.radius * CELL * 0.8) { edgeH += c.h[i]; nEdge++; }
+  }
+  assert.ok(nCore > 0 && nEdge > 0);
+  assert.ok((edgeH / nEdge) < (coreH / nCore), `edge avg ${edgeH / nEdge} < core avg ${coreH / nCore}`);
+});
+
+test('outskirts skirt exists beyond the core and carries silos and sheds', () => {
+  const c = generateCity(4417, 6);
+  let outside = 0;
+  for (let i = 0; i < c.count; i++) {
+    const r = Math.hypot(c.x[i], c.z[i]);
+    if (r > (c.radius + 0.2) * CELL) outside++;
+  }
+  assert.ok(outside > 20, `outskirts pieces=${outside}`);
+});
+
+test('signs and holographic displays are deterministic per seed', () => {
+  const a = generateCity(4417, 6);
+  const b = generateCity(4417, 6);
+  assert.equal(a.signs.length, b.signs.length);
+  assert.equal(a.holos.length, b.holos.length);
+  assert.ok(a.signs.length > 10, `signs=${a.signs.length}`);
+  for (let i = 0; i < a.signs.length; i++) {
+    assert.equal(a.signs[i].x, b.signs[i].x);
+    assert.equal(a.signs[i].h, b.signs[i].h);
+  }
+});
+
+test('lane glide profiles lift air lanes over rooftops (no building clipping)', () => {
+  const c = generateCity(4417, 6);
+  const collider = makeCityCollider(c);
+  let checked = 0;
+  for (const L of c.lanes) {
+    if (!L.prof || L.layer === 'ground') continue;
+    checked++;
+    assert.equal(L.prof.length, 33);
+    for (let s = 0; s < L.prof.length; s++) {
+      const t = s / (L.prof.length - 1);
+      const u = 1 - t;
+      const px = u * u * L.x1 + 2 * u * t * L.cx + t * t * L.x2;
+      const pz = u * u * L.z1 + 2 * u * t * L.cz + t * t * L.z2;
+      const top = collider.maxHeightNear(px, pz, 30);
+      assert.ok(L.prof[s] >= top + 20, `lane ${L.layer} y=${L.prof[s].toFixed(0)} vs top=${top.toFixed(0)} at t=${t}`);
+    }
+  }
+  assert.ok(checked > 0, 'checked air & blimp lanes');
+
+  // Spatial collider pushes a sphere out of solid buildings and off the ground
+  let bi = 0;
+  while (bi < c.count && c.h[bi] < 40) bi++;
+  const inside = { x: c.x[bi], y: c.y[bi], z: c.z[bi] };
+  assert.equal(collider.hitsPoint(inside.x, inside.y, inside.z, 0), true, 'centre of tower box is solid');
+  const pushed = collider.resolveSphere(inside, 8, 1);
+  assert.equal(pushed, true, 'sphere inside building gets pushed out');
+  assert.equal(collider.hitsPoint(inside.x, inside.y, inside.z, 2), false, 'resolved point is clear');
 });

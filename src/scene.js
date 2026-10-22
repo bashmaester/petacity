@@ -1,12 +1,13 @@
 // Scene construction and look application — no DOM here, so this whole
 // layer runs (and is tested) in Node against real three.js.
 import * as THREE from '../vendor/three.module.js';
-import { generateCity, CELL, AVENUE, STREET } from './city.js';
+import { generateCity, makeCityCollider, CELL, AVENUE, STREET } from './city.js';
 import {
   SKY_VERT, SKY_FRAG, GROUND_VERT, GROUND_FRAG, TOWER_VERT, TOWER_FRAG,
   LANDMARK_VERT, LANDMARK_FRAG, BEACON_VERT, BEACON_FRAG, TRAIL_VERT, TRAIL_FRAG,
   BEAM_VERT, BEAM_FRAG, POOL_VERT, POOL_FRAG,
   WATER_VERT, WATER_FRAG, BILL_VERT, BILL_FRAG, WEATHER_VERT, WEATHER_FRAG,
+  HOLO_VERT, HOLO_FRAG,
 } from './shaders.js';
 
 export const col = (hex) => new THREE.Color(hex);
@@ -59,6 +60,7 @@ export function makeUniforms() {
     uCell: { value: CELL },
     uAve: { value: AVENUE },
     uSt: { value: STREET },
+    uCitySpan: { value: CELL * 5 },
     uLightK: { value: 1 },
     uBeaconCol: { value: col('#ff3b30') },
     uSunGlow: { value: 0.65 },
@@ -105,7 +107,7 @@ export function makeWorld(U) {
     vertexShader: GROUND_VERT,
     fragmentShader: GROUND_FRAG,
     uniforms: pick(U, [
-      'uGStreet', 'uGBlock', 'uGLine', 'uGLineGlow', 'uCell', 'uAve', 'uSt',
+      'uGStreet', 'uGBlock', 'uGLine', 'uGLineGlow', 'uCell', 'uAve', 'uSt', 'uCitySpan',
       'uSunDir', 'uFogCol', 'uSunFogCol', 'uFogDensity', 'uFogHeight', 'uHazeSun', 'uSat',
     ]),
   });
@@ -191,7 +193,17 @@ export function makeWorld(U) {
     uniforms: pick(U, ['uBillA', 'uBillB', 'uBillK', 'uTime', 'uLightK']),
   });
 
-  return { sky, skyMat, ground, groundMat, towerMat, beaconMat, lampMat, trailMat, beamMat, poolMat, waterMat, billMat };
+  const holoMat = new THREE.ShaderMaterial({
+    vertexShader: HOLO_VERT,
+    fragmentShader: HOLO_FRAG,
+    uniforms: pick(U, ['uBillA', 'uBillB', 'uBillK', 'uTime', 'uLightK']),
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+  });
+
+  return { sky, skyMat, ground, groundMat, towerMat, beaconMat, lampMat, trailMat, beamMat, poolMat, waterMat, billMat, holoMat };
 }
 
 /** One landmark material — shared look vocabulary with the towers. */
@@ -218,12 +230,16 @@ export function buildCityMesh(city, towerMat) {
   const q = new THREE.Quaternion();
   const p = new THREE.Vector3();
   const s = new THREE.Vector3();
+  const yAxis = new THREE.Vector3(0, 1, 0);
   for (let i = 0; i < city.count; i++) {
     p.set(city.x[i], city.y[i], city.z[i]);
     s.set(city.w[i], city.h[i], city.d[i]);
+    if (city.rot && city.rot[i]) q.setFromAxisAngle(yAxis, city.rot[i]);
+    else q.identity();
     m.compose(p, q, s);
     mesh.setMatrixAt(i, m);
   }
+  q.identity();
   mesh.instanceMatrix.needsUpdate = true;
 
   const dims = new Float32Array(city.count * 3);
@@ -243,7 +259,7 @@ export function buildCityMesh(city, towerMat) {
 /** Grow a city and return { city, mesh } — caller swaps the mesh in the scene. */
 export function growCity(seed, radius, towerMat) {
   const city = generateCity(seed, radius);
-  return { city, mesh: buildCityMesh(city, towerMat) };
+  return { city, mesh: buildCityMesh(city, towerMat), collider: makeCityCollider(city) };
 }
 
 /* -------------------------------------------------------------- landmarks */
@@ -484,7 +500,7 @@ export function buildPlaces(city, U) {
     return mats.get(hex);
   };
   const padHex = '#232838';
-  const stallHexes = ['#4a3a58', '#3a4a5e', '#584238', '#3c4c44'];
+  const stallHexes = ['#4a3a58', '#3a4a5e', '#584238', '#3c4c44', '#4e3d52'];
   const warmHex = '#6a4a58';
 
   for (const pl of city.places) {
@@ -561,7 +577,7 @@ export function buildPlaces(city, U) {
         slab.rotation.y = a * 1.7;
         m.add(slab);
       }
-    } else { // fair — tent ring + wheel-ish ring + midway stalls
+    } else if (kind === 'fair') { // tent ring + wheel-ish ring + midway stalls
       for (let i = 0; i < 7; i++) {
         const a = (i / 7) * Math.PI * 2 + seed * 4;
         const tent = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 8 + rnd(i) * 5, 12 + rnd(i + 5) * 9, 4), mat(stallHexes[i % stallHexes.length]));
@@ -581,6 +597,99 @@ export function buildPlaces(city, U) {
         bar.rotation.y = 0.5;
         m.add(bar);
       }
+    } else if (kind === 'arena') {
+      // the arena: ribbed oval bowl + twin glowing halo crowns + flying buttresses + entrance arches
+      const bowl = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.78, r * 0.92, 36, 24), mat(stallHexes[1]));
+      bowl.scale.z = 0.76;
+      bowl.position.y = 18;
+      m.add(bowl);
+      const hole = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.52, r * 0.52, 38, 20), mat(padHex));
+      hole.scale.z = 0.76;
+      hole.position.y = 19;
+      m.add(hole);
+      for (let i = 0; i < 16; i++) {
+        const a = (i / 16) * Math.PI * 2;
+        const rib = new THREE.Mesh(new THREE.BoxGeometry(3.8, 42, 10), mat(warmHex));
+        rib.position.set(Math.cos(a) * r * 0.86, 21, Math.sin(a) * r * 0.66);
+        rib.rotation.y = -a;
+        rib.rotation.z = 0.14;
+        m.add(rib);
+      }
+      const crown = new THREE.Mesh(new THREE.TorusGeometry(r * 0.66, 2.0, 6, 36), mat(warmHex));
+      crown.scale.z = 0.76;
+      crown.position.y = 40;
+      m.add(crown);
+      const innerCrown = new THREE.Mesh(new THREE.TorusGeometry(r * 0.42, 1.3, 6, 28), mat(warmHex));
+      innerCrown.scale.z = 0.76;
+      innerCrown.position.y = 46;
+      m.add(innerCrown);
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2 + 0.4;
+        const gate = new THREE.Mesh(new THREE.TorusGeometry(12, 2.4, 6, 14, Math.PI), mat(warmHex));
+        gate.position.set(Math.cos(a) * r * 0.9, 2, Math.sin(a) * r * 0.68);
+        gate.rotation.y = -a + Math.PI / 2;
+        m.add(gate);
+      }
+    } else if (kind === 'theatre') {
+      // grand movie palace: stepped Art-Deco fly-tower, glowing marquee canopy, twin neon fins & grand stairs
+      const hall = new THREE.Mesh(new THREE.BoxGeometry(r * 1.08, 30, r * 0.86), mat(stallHexes[0]));
+      hall.position.y = 15;
+      m.add(hall);
+      const flyTower = new THREE.Mesh(new THREE.BoxGeometry(r * 0.66, 22, r * 0.44), mat(stallHexes[4]));
+      flyTower.position.set(0, 36, -r * 0.14);
+      m.add(flyTower);
+      const crown = new THREE.Mesh(new THREE.BoxGeometry(r * 0.82, 9, r * 0.64), mat(warmHex));
+      crown.position.y = 34;
+      m.add(crown);
+      const marquee = new THREE.Mesh(new THREE.BoxGeometry(r * 0.98, 4.2, 18), mat(warmHex));
+      marquee.position.set(0, 12.5, r * 0.52);
+      m.add(marquee);
+      for (const sx of [-1, 1]) {
+        const blade = new THREE.Mesh(new THREE.BoxGeometry(4.6, 38, 3.0), mat(warmHex));
+        blade.position.set(sx * r * 0.42, 31, r * 0.46);
+        m.add(blade);
+      }
+      const spire = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 2.2, 22, 8), mat(warmHex));
+      spire.position.set(0, 56, -r * 0.14);
+      m.add(spire);
+      for (let i = 0; i < 4; i++) {
+        const step = new THREE.Mesh(new THREE.BoxGeometry(r * 0.9 - i * 6, 1.4, 8), mat(padHex));
+        step.position.set(0, 0.7 + i * 1.4, r * 0.52 + 14 - i * 4);
+        m.add(step);
+      }
+    } else if (kind === 'stadium') {
+      // the stadium: twin-tier oval colosseum, canopy rim, floodlight towers & glowing track
+      const tier1 = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.92, r * 0.99, 17, 26), mat(stallHexes[2]));
+      tier1.scale.z = 0.72;
+      tier1.position.y = 8.5;
+      m.add(tier1);
+      const tier2 = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.72, r * 0.88, 19, 26), mat(stallHexes[4]));
+      tier2.scale.z = 0.72;
+      tier2.position.y = 26;
+      m.add(tier2);
+      const rim = new THREE.Mesh(new THREE.TorusGeometry(r * 0.74, 2.6, 6, 36), mat(warmHex));
+      rim.scale.z = 0.72;
+      rim.position.y = 35.5;
+      m.add(rim);
+      const field = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.58, r * 0.58, 2.2, 22), mat(padHex));
+      field.scale.z = 0.66;
+      field.position.y = 2;
+      m.add(field);
+      const track = new THREE.Mesh(new THREE.TorusGeometry(r * 0.6, 2.4, 6, 36), mat(warmHex));
+      track.scale.z = 0.7;
+      track.position.y = 3.5;
+      m.add(track);
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2 + 0.25;
+        const mh = 50 + rnd(i) * 18;
+        const mast = new THREE.Mesh(new THREE.BoxGeometry(2.4, mh, 2.4), mat(padHex));
+        mast.position.set(Math.cos(a) * r * 1.02, mh / 2, Math.sin(a) * r * 0.74);
+        m.add(mast);
+        const lamp = new THREE.Mesh(new THREE.BoxGeometry(9, 4.2, 2.4), mat(warmHex));
+        lamp.position.set(Math.cos(a) * r * 1.02, mh + 1.5, Math.sin(a) * r * 0.74);
+        lamp.rotation.y = -a;
+        m.add(lamp);
+      }
     }
     group.add(m);
   }
@@ -589,7 +698,10 @@ export function buildPlaces(city, U) {
 
 /* --------------------------------------------------------------- traffic */
 
-const VEHICLE_COLORS = ['#ffe8c8', '#ffe8c8', '#ff4038', '#86f2ff', '#ffb347'];
+const VEHICLE_COLORS = [
+  '#ffe8c8', '#fff4df', '#ff4038', '#86f2ff', '#ffb347', '#ff66b8', '#7af0ff', '#ffd166',
+  '#b8e0ff', '#ff7b54', '#9bf6ff', '#ffd6a5', '#caffbf', '#bdb2ff', '#ffadad', '#e2ece9',
+];
 
 /* ------------------------------------------------- geometry helpers */
 
@@ -685,38 +797,46 @@ const GLOW = [0.32, 0.7, 1];
 
 const VEHICLE_CLASSES = [
   {
-    name: 'pod', layers: ['air-low', 'air-mid'], parts: podParts, beam: true, thruster: true,
-    beamLen: 26, beamW: 5.5, spd: 0.0062, spdJit: 0.0005, scale: 0.85,
-    bobA: 0.9, bobF: 1.35, weaveA: 15, weaveF: 1.1, spinSpeed: 8,
+    name: 'pod', len: 22, layers: ['air-low', 'air-mid', 'ground'], parts: podParts, beam: true, thruster: true,
+    beamLen: 26, beamW: 5.5, spd: 0.0062, spdJit: 0.0007, scale: 0.85,
+    bobA: 0.9, bobF: 1.35, weaveA: 12, weaveF: 1.1, spinSpeed: 8,
   },
   {
-    name: 'skimmer', layers: ['air-mid', 'air-high'], parts: skimmerParts, beam: true, rotor: rotorParts,
-    beamLen: 30, beamW: 7, spd: 0.0048, spdJit: 0.0004, scale: 0.9,
+    name: 'skimmer', len: 26, layers: ['air-mid', 'air-high'], parts: skimmerParts, beam: true, rotor: rotorParts,
+    beamLen: 30, beamW: 7, spd: 0.0052, spdJit: 0.0006, scale: 0.9,
     bobA: 1.5, bobF: 1.05, weaveA: 13, weaveF: 0.9, spinSpeed: 8,
   },
   {
-    name: 'hauler', layers: ['ground', 'air-low'], parts: haulerParts, beam: true, trailers: 2,
-    beamLen: 40, beamW: 9, spd: 0.0022, spdJit: 0.00025, scale: 0.92,
-    bobA: 0.35, bobF: 0.8, weaveA: 3, weaveF: 0.5, trailerLag: 0.016,
+    name: 'hauler', len: 46, layers: ['ground', 'air-low'], parts: haulerParts, beam: true, trailers: 2,
+    beamLen: 40, beamW: 9, spd: 0.0022, spdJit: 0.0003, scale: 0.92,
+    bobA: 0.3, bobF: 0.8, weaveA: 2.5, weaveF: 0.5, trailerLag: 0.016,
   },
   {
-    name: 'drone', layers: ['air-low', 'air-mid'], parts: droneParts, beam: false, rotor: droneRotorParts,
-    beamLen: 12, beamW: 3, spd: 0.009, spdJit: 0.0012, scale: 1,
-    bobA: 1.4, bobF: 2.4, weaveA: 28, weaveF: 2.1, spinSpeed: 22,
+    name: 'drone', len: 8, layers: ['air-low', 'air-mid'], parts: droneParts, beam: false, rotor: droneRotorParts,
+    beamLen: 12, beamW: 3, spd: 0.0092, spdJit: 0.0015, scale: 1,
+    bobA: 1.5, bobF: 2.4, weaveA: 22, weaveF: 2.1, spinSpeed: 22, hover: true,
   },
   {
-    name: 'heli', layers: ['air-mid', 'air-low'], parts: heliParts, beam: true, rotor: heliRotorParts,
-    beamLen: 34, beamW: 8, spd: 0.0038, spdJit: 0.0004, scale: 1,
-    bobA: 1.1, bobF: 0.9, weaveA: 8, weaveF: 0.7, spinSpeed: 14,
+    name: 'heli', len: 18, layers: ['air-mid', 'air-low'], parts: heliParts, beam: true, rotor: heliRotorParts,
+    beamLen: 36, beamW: 8.5, spd: 0.0038, spdJit: 0.0005, scale: 1,
+    bobA: 1.1, bobF: 0.9, weaveA: 8, weaveF: 0.7, spinSpeed: 14, hover: true,
   },
   {
-    name: 'blimp', layers: ['blimp'], parts: blimpParts, beam: false,
-    beamLen: 60, beamW: 12, spd: 0.0011, spdJit: 0.00012, scale: 1,
-    bobA: 7, bobF: 0.22, weaveA: 42, weaveF: 0.18,
+    name: 'blimp', len: 110, layers: ['blimp'], parts: blimpParts, beam: true,
+    beamLen: 85, beamW: 20, spd: 0.0010, spdJit: 0.00018, scale: 1,
+    bobA: 6.5, bobF: 0.22, weaveA: 34, weaveF: 0.18,
+  },
+  {
+    name: 'shuttle', len: 34, layers: ['air-low', 'air-mid', 'ground'], parts: shuttleParts, beam: true,
+    beamLen: 34, beamW: 7.5, spd: 0.0034, spdJit: 0.0004, scale: 0.95,
+    bobA: 0.55, bobF: 0.72, weaveA: 5, weaveF: 0.45,
+  },
+  {
+    name: 'spinner', len: 20, layers: ['air-low', 'air-mid', 'air-high'], parts: spinnerParts, beam: true,
+    beamLen: 32, beamW: 6, spd: 0.0076, spdJit: 0.001, scale: 0.88,
+    bobA: 1.1, bobF: 1.6, weaveA: 17, weaveF: 1.45,
   },
 ];
-
-const CLASS_PATTERN = [0, 0, 0, 1, 1, 2, 3, 3, 4, 5];
 
 /** Sleek pod — the common commuter. ~22 m, hover-bobbing. */
 function podParts() {
@@ -905,24 +1025,81 @@ function blimpParts() {
   ];
 }
 
-/**
- * The traffic fleet: pods, skimmers, haulers, drones, helicopters and blimps
- * on curved multi-layer lanes — with detailed silhouettes, lights, beams,
- * trails, hover-bob, spinning rotors, pulsing thrusters and articulated
- * trailer sections. Returns { group, mesh, bodies, beams, rotors, thrusters,
- * trailers, trails, update }.
- */
-export function makeVehicles(city, trailMat, count = 220) {
-  const lanes = city.lanes.length ? city.lanes : [{ x1: -400, z1: 0, cx: 0, cz: 0, x2: 400, z2: 0, y: 90, speed: 100, layer: 'air-low' }];
-  const total = Math.min(count, 480);
-  const group = new THREE.Group();
+/** Long streamlined transit shuttle / sky-tram with lit passenger windows. */
+function shuttleParts() {
+  const parts = [
+    { w: 34, h: 3.4, d: 5.4, y: 0.2, c: HULL },
+    { w: 28, h: 1.2, d: 4.4, y: 2.3, c: HULL2 },
+    { w: 6, h: 2.6, d: 4.6, x: 18.2, y: -0.1, c: HULL, sphere: true, seg: 10 },
+    { w: 4.5, h: 1.5, d: 3.8, x: 18.8, y: 0.8, c: GLASS },
+    { w: 5, h: 2.8, d: 0.5, x: -15, y: 3.2, c: TRIM },
+    { w: 26, h: 0.28, d: 3.8, y: -1.65, c: GLOW },
+    { w: 1.2, h: 0.8, d: 1.1, x: 20.6, y: -0.4, z: 1.6, c: HEAD },
+    { w: 1.2, h: 0.8, d: 1.1, x: 20.6, y: -0.4, z: -1.6, c: HEAD },
+    { w: 0.9, h: 0.9, d: 4.4, x: -17.1, y: 0.2, c: TAIL },
+  ];
+  for (let w = -11; w <= 11; w += 4.4) {
+    parts.push({ w: 2.6, h: 1.1, d: 5.6, x: w, y: 0.7, c: HEAD });
+  }
+  return parts;
+}
 
+/** Asymmetric twin-prong spinner interceptor with vectored thruster pods. */
+function spinnerParts() {
+  return [
+    { w: 13, h: 1.8, d: 4.6, x: -2, y: 0.2, c: HULL },
+    { w: 6.5, h: 1.7, d: 3.2, x: 1.5, y: 1.35, c: GLASS, sphere: true, seg: 10 },
+    { w: 11, h: 1.1, d: 1.35, x: 6.5, y: 0.0, z: 2.1, c: HULL2 },
+    { w: 11, h: 1.1, d: 1.35, x: 6.5, y: 0.0, z: -2.1, c: HULL2 },
+    { w: 5.5, h: 1.5, d: 1.8, x: -6.5, y: 0.3, z: 3.2, c: TRIM },
+    { w: 5.5, h: 1.5, d: 1.8, x: -6.5, y: 0.3, z: -3.2, c: TRIM },
+    { w: 1.4, h: 1.0, d: 1.3, x: -9.5, y: 0.3, z: 3.2, c: GLOW },
+    { w: 1.4, h: 1.0, d: 1.3, x: -9.5, y: 0.3, z: -3.2, c: GLOW },
+    { w: 1.1, h: 0.65, d: 0.9, x: 12.1, y: 0.0, z: 2.1, c: HEAD },
+    { w: 1.1, h: 0.65, d: 0.9, x: 12.1, y: 0.0, z: -2.1, c: HEAD },
+    { w: 0.8, h: 0.7, d: 3.6, x: -8.6, y: 0.4, c: TAIL },
+    { w: 9, h: 0.22, d: 2.8, x: -1, y: -0.9, c: GLOW },
+  ];
+}
+
+/**
+ * The traffic fleet: 8 distinct classes (pods, skimmers, haulers, drones,
+ * helicopters, blimps, shuttles and spinners) riding curved 3D glide lanes,
+ * switching lanes at endpoints, varying speed/scale/banking, never clipping
+ * through buildings, and maintaining safe spacing when collision is enabled.
+ */
+export function makeVehicles(city, trailMat, count = 260, collider = null) {
+  const lanes = city.lanes.length ? city.lanes : [{ x1: -400, z1: 0, cx: 0, cz: 0, x2: 400, z2: 0, y: 90, speed: 100, layer: 'air-low' }];
+  const colCheck = collider || makeCityCollider(city);
+  const total = Math.min(count, 520);
+  const group = new THREE.Group();
+  const nCls = VEHICLE_CLASSES.length;
+
+  const h01 = (a, b) => {
+    let x = ((a * 374761393) ^ (b * 668265263) ^ ((city.seed || 4417) * 1442695041)) >>> 0;
+    x = Math.imul(x ^ (x >>> 13), 1274126177) >>> 0;
+    return ((x ^ (x >>> 16)) >>> 0) / 4294967296;
+  };
+
+  // Weighted non-periodic class assignment; guarantee all 8 classes appear when total >= 16
+  const weights = [0.22, 0.16, 0.11, 0.16, 0.09, 0.04, 0.10, 0.12];
   const classOf = new Int32Array(total);
   const local = new Int32Array(total);
-  const classCount = [0, 0, 0, 0, 0, 0];
+  const classCount = new Array(nCls).fill(0);
   for (let i = 0; i < total; i++) {
-    classOf[i] = CLASS_PATTERN[i % CLASS_PATTERN.length];
-    local[i] = classCount[classOf[i]]++;
+    let cc = 0;
+    if (i === 0) cc = 0; // instance 0 is always a pod so veh.mesh[0] is active
+    else if (i < nCls && total >= nCls * 2) cc = i;
+    else {
+      const r = h01(i, 11);
+      let acc = 0;
+      for (let k = 0; k < nCls; k++) {
+        acc += weights[k];
+        if (r <= acc) { cc = k; break; }
+      }
+    }
+    classOf[i] = cc;
+    local[i] = classCount[cc]++;
   }
 
   const bodyMat = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false });
@@ -941,7 +1118,6 @@ export function makeVehicles(city, trailMat, count = 220) {
     side: THREE.DoubleSide,
   });
 
-  // lane pools per class
   const lanePool = VEHICLE_CLASSES.map((V) => {
     const pool = lanes.filter((l) => V.layers.includes(l.layer));
     return pool.length ? pool : lanes;
@@ -950,19 +1126,19 @@ export function makeVehicles(city, trailMat, count = 220) {
   const bodies = [];
   const beams = [];
   const rotors = [];
-  for (let c = 0; c < VEHICLE_CLASSES.length; c++) {
-    const V = VEHICLE_CLASSES[c];
-    const body = new THREE.InstancedMesh(mergeParts(V.parts()), bodyMat, Math.max(1, classCount[c]));
+  for (let cc = 0; cc < nCls; cc++) {
+    const V = VEHICLE_CLASSES[cc];
+    const body = new THREE.InstancedMesh(mergeParts(V.parts()), bodyMat, Math.max(1, classCount[cc]));
     body.frustumCulled = false;
     bodies.push(body);
     group.add(body);
 
     let beam = null;
     if (V.beam) {
-      const bgeo = beamGeometry(V.beamLen, V.beamW).rotateZ(-Math.PI / 2); // +Y -> +X (nose)
+      const bgeo = beamGeometry(V.beamLen, V.beamW).rotateZ(-Math.PI / 2);
       const first = V.parts().reduce((mx, pt) => Math.max(mx, (pt.x || 0) + (pt.w || 0) / 2), 0);
       bgeo.translate(first + 1.5, 0, 0);
-      beam = new THREE.InstancedMesh(bgeo, beamMat, Math.max(1, classCount[c]));
+      beam = new THREE.InstancedMesh(bgeo, beamMat, Math.max(1, classCount[cc]));
       beam.frustumCulled = false;
       group.add(beam);
     }
@@ -970,26 +1146,24 @@ export function makeVehicles(city, trailMat, count = 220) {
 
     let rotor = null;
     if (V.rotor) {
-      rotor = new THREE.InstancedMesh(mergeParts(V.rotor()), bodyMat, Math.max(1, classCount[c]));
+      rotor = new THREE.InstancedMesh(mergeParts(V.rotor()), bodyMat, Math.max(1, classCount[cc]));
       rotor.frustumCulled = false;
       group.add(rotor);
     }
     rotors.push(rotor);
   }
 
-  // articulated sub-part meshes
   const thrusters = new THREE.InstancedMesh(mergeParts(thrusterParts()), bodyMat, Math.max(1, classCount[0]));
   thrusters.frustumCulled = false;
   group.add(thrusters);
   const trailerGeo = mergeParts(trailerParts());
   const trailers = [0, 1].map(() => {
-    const t = new THREE.InstancedMesh(trailerGeo, bodyMat, Math.max(1, classCount[2]));
-    t.frustumCulled = false;
-    group.add(t);
-    return t;
+    const tr = new THREE.InstancedMesh(trailerGeo, bodyMat, Math.max(1, classCount[2]));
+    tr.frustumCulled = false;
+    group.add(tr);
+    return tr;
   });
 
-  // trails: one shared instanced mesh indexed globally
   const trailGeo = new THREE.BoxGeometry(1, 1, 1);
   const aColor = new Float32Array(total * 3);
   trailGeo.setAttribute('aColor', new THREE.InstancedBufferAttribute(aColor, 3));
@@ -998,21 +1172,33 @@ export function makeVehicles(city, trailMat, count = 220) {
   group.add(trails);
 
   const laneIdx = new Int32Array(total);
+  const laps = new Int32Array(total);
   const t = new Float32Array(total);
   const dir = new Float32Array(total);
+  const baseSpd = new Float32Array(total);
   const spd = new Float32Array(total);
   const scl = new Float32Array(total);
   const phase = new Float32Array(total);
   const spin = new Float32Array(total);
+  const latOf = new Float32Array(total);
+  const vOf = new Float32Array(total);
+  const weaveRate = new Float32Array(total);
   let elapsed = 0;
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
-  const e = new THREE.Euler();
+  const e = new THREE.Euler(0, 0, 0, 'YXZ');
   const p = new THREE.Vector3();
   const s = new THREE.Vector3();
   const c = new THREE.Color();
 
-  /** Bézier position + travel direction (unit-ish) at lane parameter tt. */
+  const laneY = (L, tt) => {
+    if (!L.prof) return L.y;
+    const f = tt * (L.prof.length - 1);
+    const i0 = Math.floor(f);
+    const i1 = Math.min(L.prof.length - 1, i0 + 1);
+    const fr = f - i0;
+    return L.prof[i0] * (1 - fr) + L.prof[i1] * fr;
+  };
   const evalLane = (L, tt, out) => {
     const u = 1 - tt;
     out.x = u * u * L.x1 + 2 * u * tt * L.cx + tt * tt * L.x2;
@@ -1022,79 +1208,155 @@ export function makeVehicles(city, trailMat, count = 220) {
     const len = Math.hypot(dx, dz) || 1;
     out.dx = dx / len;
     out.dz = dz / len;
+    out.len = len;
     return out;
   };
-  const tmp = { x: 0, z: 0, dx: 1, dz: 0 };
+  const tmp = { x: 0, z: 0, dx: 1, dz: 0, len: 1 };
 
-  /**
-   * Compose the matrix for vehicle i at lane parameter tVal. Geometry points
-   * along +X, so yaw = atan2(-dz, dx) of the travel direction (the fix for
-   * sideways vehicles). Weave adds a lateral sine offset per vehicle.
-   */
-  const composeAt = (i, tVal, o = {}) => {
-    const L = lanes[laneIdx[i]];
-    const tt = ((tVal % 1) + 1) % 1;
-    evalLane(L, tt, tmp);
-    const sign = dir[i];
-    const tx = tmp.dx * sign;
-    const tz = tmp.dz * sign;
+  const assignRoute = (i, lap) => {
+    const pool = lanePool[classOf[i]];
     const V = VEHICLE_CLASSES[classOf[i]];
-    const weave = Math.sin(tt * Math.PI * 2 * V.weaveF + phase[i]) * V.weaveA;
-    const nx = -tz;
-    const nz = tx;
-    const px = tmp.x + nx * weave;
-    const pz = tmp.z + nz * weave;
-    const yaw = Math.atan2(-tz, tx) + (o.sway || 0);
-    p.set(px, L.y + (o.bob || 0), pz);
-    e.set(0, yaw + (o.spinY || 0), o.roll || 0);
-    q.setFromEuler(e);
-    const sc = scl[i] * (o.pulse || 1);
-    s.set(sc * (o.stretch || 1), sc, sc * (o.wMul || 1));
-    m.compose(p, q, s);
+    laneIdx[i] = Math.floor(h01(i + lap * 997, 23) * pool.length) % pool.length;
+    const L = pool[laneIdx[i]];
+    dir[i] = h01(i + lap * 613, 31) < 0.5 ? 1 : -1;
+    // Separate opposing directions laterally so oncoming traffic passes cleanly
+    const sideSpread = L.layer === 'ground' ? 2.4 : 7.5;
+    latOf[i] = dir[i] * sideSpread * 0.55 + (h01(i + lap * 317, 41) - 0.5) * sideSpread;
+    vOf[i] = L.layer === 'ground' ? 0 : (h01(i + lap * 419, 43) - 0.5) * 9;
+    weaveRate[i] = V.weaveF * (0.65 + h01(i + lap * 521, 47) * 0.85);
+    baseSpd[i] = V.spd * (0.54 + h01(i + lap * 733, 53) * 1.05);
+    spd[i] = baseSpd[i];
   };
 
   for (let i = 0; i < total; i++) {
-    const pool = lanePool[classOf[i]];
-    laneIdx[i] = -1; // filled below from per-class pools
-    t[i] = (i * 0.618034) % 1;
-    dir[i] = i % 2 === 0 ? 1 : -1;
-    phase[i] = (i * 0.754877666) % 6.28318;
-    const V = VEHICLE_CLASSES[classOf[i]];
-    spd[i] = V.spd + ((i * 37) % 13) * V.spdJit;
-    scl[i] = V.scale * (0.9 + ((i * 53) % 17) * 0.012);
-    c.set(VEHICLE_COLORS[i % VEHICLE_COLORS.length]);
-    bodies[classOf[i]].setColorAt(local[i], c);
-    if (rotors[classOf[i]]) rotors[classOf[i]].setColorAt(local[i], c);
-    if (classOf[i] === 0) thrusters.setColorAt(local[i], c);
-    if (classOf[i] === 2) for (const tr of trailers) tr.setColorAt(local[i], c);
+    const cc = classOf[i];
+    const V = VEHICLE_CLASSES[cc];
+    assignRoute(i, 0);
+    t[i] = h01(i, 17);
+    phase[i] = h01(i, 19) * Math.PI * 2;
+    scl[i] = V.scale * (0.82 + h01(i, 29) * 0.4);
+    c.set(VEHICLE_COLORS[Math.floor(h01(i, 37) * VEHICLE_COLORS.length) % VEHICLE_COLORS.length]);
+    c.offsetHSL((h01(i, 59) - 0.5) * 0.06, 0, (h01(i, 61) - 0.5) * 0.14);
+    bodies[cc].setColorAt(local[i], c);
+    if (rotors[cc]) rotors[cc].setColorAt(local[i], c);
+    if (cc === 0) thrusters.setColorAt(local[i], c);
+    if (cc === 2) for (const tr of trailers) tr.setColorAt(local[i], c);
     aColor[i * 3] = c.r;
     aColor[i * 3 + 1] = c.g;
     aColor[i * 3 + 2] = c.b;
-    // remember which pool entry this vehicle rides
-    laneIdx[i] = pool.length - 1 - (i % pool.length);
   }
   for (const b of bodies) if (b.instanceColor) b.instanceColor.needsUpdate = true;
   if (thrusters.instanceColor) thrusters.instanceColor.needsUpdate = true;
   for (const tr of trailers) if (tr.instanceColor) tr.instanceColor.needsUpdate = true;
   trailGeo.getAttribute('aColor').needsUpdate = true;
 
+  const composeAt = (i, tVal, o = {}) => {
+    const cc = classOf[i];
+    const pool = lanePool[cc];
+    const L = pool[laneIdx[i]];
+    const tt = ((tVal % 1) + 1) % 1;
+    evalLane(L, tt, tmp);
+    const sign = dir[i];
+    const tx = tmp.dx * sign;
+    const tz = tmp.dz * sign;
+    const V = VEHICLE_CLASSES[cc];
+    const wAmp = L.layer === 'ground' ? Math.min(1.6, V.weaveA * 0.15) : V.weaveA;
+    const wArg = tt * Math.PI * 2 * weaveRate[i] + phase[i];
+    const weave = Math.sin(wArg) * wAmp;
+    const nx = -tz;
+    const nz = tx;
+    const px = tmp.x + nx * (weave + latOf[i]);
+    const pz = tmp.z + nz * (weave + latOf[i]);
+
+    // Glide elevation + strict runtime building floor so no vehicle ever clips a building
+    let py = laneY(L, tt) + (o.bob || 0) + vOf[i];
+    if (L.layer !== 'ground') {
+      const roof = colCheck.maxHeightNear(px, pz, 9);
+      if (roof > 0 && py < roof + 14) py = roof + 14;
+    } else {
+      py = Math.max(5.2, py);
+    }
+
+    // Climb/descent pitch along the glide profile + bank into weave
+    const tAhead = Math.max(0, Math.min(1, tt + sign * 0.02));
+    const dy = laneY(L, tAhead) - laneY(L, tt);
+    const pitch = L.layer === 'ground' ? 0 : Math.max(-0.28, Math.min(0.28, Math.atan2(dy, Math.max(14, tmp.len * 0.02)) * 0.55));
+    const yaw = Math.atan2(-tz, tx) + (o.sway || 0);
+    const bank = -Math.cos(wArg) * (wAmp * 0.0045) + (o.roll || 0);
+
+    p.set(px, py, pz);
+    e.set(bank, yaw + (o.spinY || 0), pitch, 'YXZ');
+    q.setFromEuler(e);
+    const sc = scl[i] * (o.pulse || 1);
+    s.set(sc * (o.stretch || 1), sc, sc * (o.wMul || 1));
+    m.compose(p, q, s);
+  };
+
+  let collision = true;
+  /**
+   * Vehicle-vehicle collision avoidance: vehicles sharing a lane & direction
+   * maintain safe headways instead of overlapping.
+   */
+  function applyCollision(n) {
+    const byKey = new Map();
+    for (let i = 0; i < n; i++) {
+      const pool = lanePool[classOf[i]];
+      const L = pool[laneIdx[i]];
+      const dirBit = dir[i] > 0 ? 1 : 0;
+      let arr = byKey.get(L);
+      if (!arr) { arr = [[], []]; byKey.set(L, arr); }
+      arr[dirBit].push(i);
+    }
+    for (const [L, pair] of byKey.entries()) {
+      const spanLen = Math.max(140, Math.hypot(L.x2 - L.x1, L.z2 - L.z1));
+      for (let dBit = 0; dBit < 2; dBit++) {
+        const arr = pair[dBit];
+        if (arr.length < 2) continue;
+        arr.sort((a, b) => (dBit === 1 ? t[a] - t[b] : t[b] - t[a]));
+        for (let k = 0; k < arr.length - 1; k++) {
+          const follower = arr[k];
+          const leader = arr[k + 1];
+          const gap = dBit === 1 ? (t[leader] - t[follower]) : (t[follower] - t[leader]);
+          const need = (VEHICLE_CLASSES[classOf[follower]].len + VEHICLE_CLASSES[classOf[leader]].len + 18) / spanLen;
+          if (gap > 0 && gap < need && spd[follower] > spd[leader] * 0.85) {
+            spd[follower] = Math.max(spd[leader] * 0.85, spd[follower] * 0.92);
+          } else if (gap > need * 1.45 && spd[follower] < baseSpd[follower]) {
+            spd[follower] = Math.min(baseSpd[follower], spd[follower] * 1.03);
+          }
+        }
+      }
+    }
+  }
+
   function update(dt, density = 1) {
     elapsed += dt;
     const n = Math.max(0, Math.min(total, Math.round(total * density)));
-    const active = [0, 0, 0, 0, 0, 0];
+    const active = new Array(nCls).fill(0);
+    if (collision && dt > 0) applyCollision(n);
     for (let i = 0; i < n; i++) {
-      const V = VEHICLE_CLASSES[classOf[i]];
-      const pool = lanePool[classOf[i]];
-      const L = pool[laneIdx[i]];
-      const span = Math.max(60, Math.hypot(L.x2 - L.x1, L.z2 - L.z1) * 1.2);
-      t[i] += spd[i] * dt * dir[i] * Math.max(20, L.speed) * 0.055;
-      if (t[i] > 1) t[i] -= 1;
-      if (t[i] < 0) t[i] += 1;
-      const ph = phase[i];
-      const bob = Math.sin(elapsed * V.bobF + ph) * V.bobA;
-      const roll = Math.sin(elapsed * 0.9 + ph) * 0.05;
-      const li = local[i];
       const cc = classOf[i];
+      const V = VEHICLE_CLASSES[cc];
+      const pool = lanePool[cc];
+      const L = pool[laneIdx[i]];
+      const ph = phase[i];
+      // Dynamic throttle breathing + occasional drone/heli hover pauses
+      let throttle = 1 + 0.22 * Math.sin(elapsed * 0.45 + ph * 1.7);
+      if (V.hover) {
+        const hv = Math.sin(elapsed * 0.33 + ph * 3.1);
+        if (hv > 0.78) throttle *= 0.16;
+      }
+      if (!collision) spd[i] = baseSpd[i];
+      t[i] += spd[i] * throttle * dt * dir[i] * Math.max(22, L.speed) * 0.055;
+      if (t[i] > 1 || t[i] < 0) {
+        laps[i]++;
+        const wasOver = t[i] > 1;
+        assignRoute(i, laps[i]);
+        t[i] = dir[i] > 0 ? (wasOver ? t[i] % 1 : 0.002) : (wasOver ? 0.998 : ((t[i] % 1) + 1) % 1);
+      }
+
+      const bob = L.layer === 'ground' ? 0 : Math.sin(elapsed * V.bobF + ph) * V.bobA;
+      const roll = L.layer === 'ground' ? 0 : Math.sin(elapsed * 0.9 + ph) * 0.06;
+      const li = local[i];
 
       composeAt(i, t[i], { bob, roll });
       bodies[cc].setMatrixAt(li, m);
@@ -1118,23 +1380,22 @@ export function makeVehicles(city, trailMat, count = 220) {
       }
       active[cc]++;
 
-      // trail sits behind the body along the lane
       const savedT = t[i];
       t[i] = savedT - dir[i] * 0.012;
       composeAt(i, t[i], { bob: bob * 0.5, stretch: 2.4, wMul: 0.75 });
       trails.setMatrixAt(i, m);
       t[i] = savedT;
     }
-    for (let c = 0; c < VEHICLE_CLASSES.length; c++) {
-      bodies[c].count = active[c];
-      bodies[c].instanceMatrix.needsUpdate = true;
-      if (beams[c]) {
-        beams[c].count = active[c];
-        beams[c].instanceMatrix.needsUpdate = true;
+    for (let cIdx = 0; cIdx < nCls; cIdx++) {
+      bodies[cIdx].count = active[cIdx];
+      bodies[cIdx].instanceMatrix.needsUpdate = true;
+      if (beams[cIdx]) {
+        beams[cIdx].count = active[cIdx];
+        beams[cIdx].instanceMatrix.needsUpdate = true;
       }
-      if (rotors[c]) {
-        rotors[c].count = active[c];
-        rotors[c].instanceMatrix.needsUpdate = true;
+      if (rotors[cIdx]) {
+        rotors[cIdx].count = active[cIdx];
+        rotors[cIdx].instanceMatrix.needsUpdate = true;
       }
     }
     thrusters.count = active[0];
@@ -1146,9 +1407,21 @@ export function makeVehicles(city, trailMat, count = 220) {
     beamMat.uniforms.uTime.value = elapsed;
   }
 
-  update(0, 1); // place everything for frame 0
+  update(0, 1);
 
-  return { group, mesh: bodies[0], bodies, beams, rotors, thrusters, trailers, trails, update };
+  return {
+    group,
+    mesh: bodies[0],
+    bodies,
+    beams,
+    rotors,
+    thrusters,
+    trailers,
+    trails,
+    update,
+    get collision() { return collision; },
+    setCollision(on) { collision = !!on; },
+  };
 }
 
 /* ------------------------------------------------- searchlights & pools */
@@ -1158,15 +1431,35 @@ export function makeVehicles(city, trailMat, count = 220) {
  * tallest towers: slow yaw sweeps, breathing tilt oscillation and a gentle
  * shared intensity pulse.
  */
-export function makeSearchlights(city, beamMat, count = 8) {
+export function makeSearchlights(city, beamMat, count = 20) {
   const group = new THREE.Group();
   const spots = [];
   for (const lm of city.landmarks) {
-    spots.push({ x: lm.x, y: lm.h * 0.86, z: lm.z, r: lm.colorSeed });
+    spots.push({ x: lm.x, y: lm.h * 0.86, z: lm.z, r: lm.colorSeed, len: 850 + lm.colorSeed * 800, w: 120 + lm.colorSeed * 130, tilt: 0.06 + lm.colorSeed * 0.28 });
   }
-  for (let i = 0; i < city.count && spots.length < count + 4; i += 53) {
+  // Venue volumetric shafts: movie-premiere twin searchlights, arena rim beams & stadium floodbeams
+  for (const pl of city.places || []) {
+    if (pl.kind === 'theatre') {
+      for (const sx of [-1, 1]) {
+        spots.push({
+          x: pl.x + sx * pl.r * 0.38, y: 14, z: pl.z + pl.r * 0.48,
+          r: (pl.seed + (sx > 0 ? 0.31 : 0.71)) % 1, len: 780, w: 82, tilt: 0.24, fast: 2.1,
+        });
+      }
+    } else if (pl.kind === 'arena' || pl.kind === 'stadium') {
+      for (let k = 0; k < 3; k++) {
+        const a = (k / 3) * Math.PI * 2 + pl.rot;
+        spots.push({
+          x: pl.x + Math.cos(a) * pl.r * 0.82, y: 38, z: pl.z + Math.sin(a) * pl.r * 0.62,
+          r: (pl.seed + k * 0.29) % 1, len: 720, w: 96, tilt: 0.16, fast: 1.3,
+        });
+      }
+    }
+  }
+  const step = Math.max(11, Math.floor(city.count / 24));
+  for (let i = 0; i < city.count && spots.length < count + 8; i += step) {
     const top = city.y[i] + city.h[i] / 2;
-    if (top > 240) spots.push({ x: city.x[i], y: top, z: city.z[i], r: city.s[i] });
+    if (top > 180) spots.push({ x: city.x[i], y: top, z: city.z[i], r: city.s[i] });
   }
   const pivots = [];
   const use = spots.slice(0, Math.max(2, count));
@@ -1177,20 +1470,21 @@ export function makeSearchlights(city, beamMat, count = 8) {
     const pivot = new THREE.Group();
     pivot.position.set(sp.x, sp.y, sp.z);
     pivot.rotation.y = sp.r * Math.PI * 2;
-    const len = 750 + sp.r * 750;
-    const geo = beamGeometry(len, 110 + sp.r * 130);
+    const len = sp.len || (750 + sp.r * 750);
+    const geo = beamGeometry(len, sp.w || (110 + sp.r * 130));
     const mesh = new THREE.Mesh(geo, beamMat);
-    const tilt = 0.04 + sp.r * 0.3;
+    const tilt = sp.tilt ?? (0.04 + sp.r * 0.3);
     mesh.rotation.z = tilt;
     mesh.frustumCulled = false;
     pivot.add(mesh);
     group.add(pivot);
+    const fm = sp.fast || 1;
     pivots.push({
       pivot,
       mesh,
       tilt,
-      speed: (sp.r - 0.5) * 0.16,       // yaw sweep
-      wob: 0.12 + sp.r * 0.22,          // tilt breathing rate
+      speed: (sp.r - 0.48) * 0.22 * fm,
+      wob: (0.14 + sp.r * 0.24) * fm,
       phase: sp.r * Math.PI * 2,
     });
   }
@@ -1252,20 +1546,48 @@ export function buildWater(city, waterMat) {
   return group;
 }
 
+/** Diagonal boulevards — non-orthogonal road ribbons slicing across the city. */
+export function buildBoulevards(city, U) {
+  const group = new THREE.Group();
+  const roadMat = makeLandmarkMaterial(U, '#161824');
+  const lineMat = new THREE.MeshBasicMaterial({ color: '#ffd28a', toneMapped: false });
+  group.userData.lineMat = lineMat;
+  for (const b of city.boulevards || []) {
+    const dx = b.x2 - b.x1;
+    const dz = b.z2 - b.z1;
+    const len = Math.hypot(dx, dz) || 1;
+    const ang = Math.atan2(dx, dz);
+    const road = new THREE.Mesh(new THREE.BoxGeometry(36, 0.5, len), roadMat);
+    road.position.set((b.x1 + b.x2) * 0.5, 0.35, (b.z1 + b.z2) * 0.5);
+    road.rotation.y = ang;
+    road.frustumCulled = false;
+    group.add(road);
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.65, len), lineMat);
+    stripe.position.set((b.x1 + b.x2) * 0.5, 0.42, (b.z1 + b.z2) * 0.5);
+    stripe.rotation.y = ang;
+    stripe.frustumCulled = false;
+    group.add(stripe);
+  }
+  return group;
+}
+
 /** Illuminated billboards riding tower facades — scrolling procedural content. */
 export function buildBillboards(city, billMat) {
   const n = city.bills.length;
   const geo = new THREE.BoxGeometry(1, 1, 1);
-  const seeds = new Float32Array(n);
+  const seeds = new Float32Array(Math.max(1, n));
   const mesh = new THREE.InstancedMesh(geo, billMat, Math.max(1, n));
+  mesh.count = n;
   mesh.frustumCulled = false;
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const p = new THREE.Vector3();
   const s = new THREE.Vector3();
+  const yAxis = new THREE.Vector3(0, 1, 0);
   for (let i = 0; i < n; i++) {
     const b = city.bills[i];
     p.set(b.x, b.y, b.z);
+    q.setFromAxisAngle(yAxis, b.rot || 0);
     s.set(b.w, b.h, b.d);
     m.compose(p, q, s);
     mesh.setMatrixAt(i, m);
@@ -1274,6 +1596,104 @@ export function buildBillboards(city, billMat) {
   mesh.instanceMatrix.needsUpdate = true;
   geo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seeds, 1));
   return mesh;
+}
+
+/** Neon blades, shopfront fascias and rooftop wordmarks — animated glowing signage. */
+export function buildSigns(city, billMat) {
+  const n = city.signs.length;
+  const geo = new THREE.BoxGeometry(1, 1, 1);
+  const seeds = new Float32Array(Math.max(1, n));
+  const mesh = new THREE.InstancedMesh(geo, billMat, Math.max(1, n));
+  mesh.count = n;
+  mesh.frustumCulled = false;
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const p = new THREE.Vector3();
+  const s = new THREE.Vector3();
+  const yAxis = new THREE.Vector3(0, 1, 0);
+  for (let i = 0; i < n; i++) {
+    const g = city.signs[i];
+    p.set(g.x, g.y, g.z);
+    q.setFromAxisAngle(yAxis, g.rot || 0);
+    s.set(g.w, g.h, g.d);
+    m.compose(p, q, s);
+    mesh.setMatrixAt(i, m);
+    seeds[i] = (g.seed + 0.13) % 1;
+  }
+  mesh.instanceMatrix.needsUpdate = true;
+  geo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seeds, 1));
+  return mesh;
+}
+
+/**
+ * Giant holographic displays — towering panels, 360-degree cylindrical drums
+ * and crossed sky-portals, each fed by volumetric projector cones.
+ */
+export function buildHolos(city, holoMat, beamMat) {
+  const group = new THREE.Group();
+  const panels = [];
+  const drums = [];
+  for (const H of city.holos) {
+    if (H.kind === 'cylinder') drums.push(H);
+    else if (H.kind === 'portal') {
+      panels.push(H);
+      panels.push({ ...H, rot: H.rot + Math.PI * 0.5, seed: (H.seed + 0.41) % 1 });
+    } else {
+      panels.push(H);
+    }
+    // Volumetric projector beam rising into the hologram + atmospheric spill below
+    const beamH = Math.max(H.h * 2.2, H.y - (H.baseY || 40) + H.h * 0.5);
+    const cone = new THREE.Mesh(beamGeometry(beamH, H.w * 0.85), beamMat);
+    cone.position.set(H.x, H.y + H.h * 0.4, H.z);
+    cone.rotation.z = Math.PI;
+    cone.frustumCulled = false;
+    group.add(cone);
+  }
+
+  const yAxis = new THREE.Vector3(0, 1, 0);
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const p = new THREE.Vector3();
+  const s = new THREE.Vector3();
+
+  if (panels.length) {
+    const pGeo = new THREE.BoxGeometry(1, 1, 1);
+    const pSeeds = new Float32Array(panels.length);
+    const pMesh = new THREE.InstancedMesh(pGeo, holoMat, panels.length);
+    pMesh.frustumCulled = false;
+    for (let i = 0; i < panels.length; i++) {
+      const H = panels[i];
+      p.set(H.x, H.y, H.z);
+      q.setFromAxisAngle(yAxis, H.rot);
+      s.set(H.w, H.h, 2.2);
+      m.compose(p, q, s);
+      pMesh.setMatrixAt(i, m);
+      pSeeds[i] = H.seed;
+    }
+    pMesh.instanceMatrix.needsUpdate = true;
+    pGeo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(pSeeds, 1));
+    group.add(pMesh);
+  }
+
+  if (drums.length) {
+    const dGeo = new THREE.CylinderGeometry(0.5, 0.5, 1, 24, 1, true);
+    const dSeeds = new Float32Array(drums.length);
+    const dMesh = new THREE.InstancedMesh(dGeo, holoMat, drums.length);
+    dMesh.frustumCulled = false;
+    for (let i = 0; i < drums.length; i++) {
+      const H = drums[i];
+      p.set(H.x, H.y, H.z);
+      q.setFromAxisAngle(yAxis, H.rot);
+      s.set(H.w * 0.72, H.h, H.w * 0.72);
+      m.compose(p, q, s);
+      dMesh.setMatrixAt(i, m);
+      dSeeds[i] = H.seed;
+    }
+    dMesh.instanceMatrix.needsUpdate = true;
+    dGeo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(dSeeds, 1));
+    group.add(dMesh);
+  }
+  return group;
 }
 
 /**

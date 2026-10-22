@@ -158,6 +158,7 @@ uniform float uGLineGlow;
 uniform float uCell;
 uniform float uAve;
 uniform float uSt;
+uniform float uCitySpan;
 uniform vec3 uSunDir;
 uniform vec3 uFogCol;
 uniform vec3 uSunFogCol;
@@ -172,30 +173,40 @@ void main() {
   vec2 p = vWorld.xz;
   float ix = floor(p.x / uCell + 0.5);
   float iz = floor(p.y / uCell + 0.5);
-  float swx = (abs(mod(ix, 4.0)) < 0.5) ? uAve : uSt;
-  float swz = (abs(mod(iz, 4.0)) < 0.5) ? uAve : uSt;
+  float isAveX = (abs(mod(ix, 4.0)) < 0.5) ? 1.0 : 0.0;
+  float isAveZ = (abs(mod(iz, 4.0)) < 0.5) ? 1.0 : 0.0;
+  float swx = (isAveX > 0.5) ? uAve : uSt;
+  float swz = (isAveZ > 0.5) ? uAve : uSt;
   float dx = abs(p.x - ix * uCell);
   float dz = abs(p.y - iz * uCell);
-  float street = max(step(dx, swx * 0.5), step(dz, swz * 0.5));
+
+  // Outskirts fade: minor streets dissolve first, major avenues linger out into the mist
+  float rWarp = (vnoise(p * 0.0018) - 0.5) * uCell * 3.2;
+  float rDist = length(p) + rWarp;
+  float gridFade = 1.0 - smoothstep(uCitySpan * 0.9, uCitySpan * 2.15, rDist);
+  float aveFade = 1.0 - smoothstep(uCitySpan * 1.15, uCitySpan * 2.85, rDist);
+  float stX = step(dx, swx * 0.5) * mix(gridFade, aveFade, isAveX);
+  float stZ = step(dz, swz * 0.5) * mix(gridFade, aveFade, isAveZ);
+  float street = max(stX, stZ);
 
   vec3 col = mix(uGBlock, uGStreet, street);
-  col *= 0.92 + 0.16 * vnoise(p * 0.018);
+  col *= 0.90 + 0.20 * vnoise(p * 0.018);
 
-  // centre lines + kerbs
+  // centre lines + kerbs, gently fading across the outskirts
   float line = max(
-    (1.0 - smoothstep(0.0, 1.5, dx)) * step(dx, swx * 0.5),
-    (1.0 - smoothstep(0.0, 1.5, dz)) * step(dz, swz * 0.5)
+    (1.0 - smoothstep(0.0, 1.5, dx)) * stX,
+    (1.0 - smoothstep(0.0, 1.5, dz)) * stZ
   );
   float curb = max(
-    (1.0 - smoothstep(0.0, 1.1, abs(dx - swx * 0.5))) * (1.0 - step(swx * 0.5, dx)),
-    (1.0 - smoothstep(0.0, 1.1, abs(dz - swz * 0.5))) * (1.0 - step(swz * 0.5, dz))
+    (1.0 - smoothstep(0.0, 1.1, abs(dx - swx * 0.5))) * (1.0 - step(swx * 0.5, dx)) * mix(gridFade, aveFade, isAveX),
+    (1.0 - smoothstep(0.0, 1.1, abs(dz - swz * 0.5))) * (1.0 - step(swz * 0.5, dz)) * mix(gridFade, aveFade, isAveZ)
   );
   col = mix(col, uGLine, clamp(line * (0.3 + uGLineGlow * 0.7) + curb * 0.35, 0.0, 1.0));
   col += uGLine * line * uGLineGlow * 0.4;
 
-  // faint fine grid (reads strongly in the glowing looks)
+  // faint fine grid inside the core only
   vec2 gf = abs(fract(p / 25.0) - 0.5);
-  float fine = 1.0 - smoothstep(0.0, 0.035, min(gf.x, gf.y));
+  float fine = (1.0 - smoothstep(0.0, 0.035, min(gf.x, gf.y))) * gridFade;
   col += uGLine * fine * uGLineGlow * 0.16;
 
   col = saturate3(col, uSat);
@@ -710,5 +721,57 @@ void main() {
   float across = 1.0 - abs(vUv.x * 2.0 - 1.0);
   float a = along * (0.35 + 0.65 * across) * uWeatherK;
   gl_FragColor = vec4(uWeatherCol, a);
+}
+`;
+
+/* ------------------------------------------------------ holograms */
+// Giant translucent displays: scanlines, interference, vertical fade.
+
+export const HOLO_VERT = /* glsl */ `
+attribute float aSeed;
+varying vec2 vUv;
+varying float vSeed;
+void main() {
+  vUv = uv;
+  vSeed = aSeed;
+  vec4 wp = vec4(position, 1.0);
+  #ifdef USE_INSTANCING
+    wp = instanceMatrix * wp;
+  #endif
+  wp = modelMatrix * wp;
+  gl_Position = projectionMatrix * viewMatrix * wp;
+}
+`;
+
+export const HOLO_FRAG = /* glsl */ `
+uniform vec3 uBillA;
+uniform vec3 uBillB;
+uniform float uBillK;
+uniform float uTime;
+uniform float uLightK;
+varying vec2 vUv;
+varying float vSeed;
+${GLSL_NOISE}
+
+void main() {
+  // Animated sky-hologram motifs: orbital rings, glyph columns & waveform bars
+  vec2 cUv = vUv - 0.5;
+  float r = length(cUv * vec2(1.4, 1.0));
+  float rings = smoothstep(0.05, 0.0, abs(fract(r * 5.0 - uTime * 0.32 + vSeed * 4.0) - 0.5));
+  float band = vnoise(vec2(vUv.y * 6.5 - uTime * 0.38, vSeed * 20.0 + uTime * 0.09));
+  float rows = step(0.28, fract(vUv.y * 15.0 - uTime * 0.24 + band));
+  vec2 g = vec2(vUv.x * 7.0, vUv.y * 5.0 - uTime * 0.22);
+  float blocks = hash12(floor(g) + vSeed * 17.0);
+  float glyphs = step(0.58, blocks) * step(0.22, fract(g.x)) * step(0.22, fract(g.y));
+  float motif = clamp(rows * (0.45 + 0.55 * band) + rings * 0.85 + glyphs * 0.75, 0.0, 1.35);
+
+  vec3 col = mix(uBillB, uBillA, clamp(band + rings * 0.45, 0.0, 1.0));
+  col = mix(col, (uBillA + uBillB) * 0.9 + vec3(0.22), glyphs * 0.65);
+  float scan = 0.58 + 0.42 * sin(vUv.y * 170.0 + uTime * 10.0);
+  float flick = 0.84 + 0.16 * sin(uTime * 3.3 + vSeed * 40.0);
+  float edge = smoothstep(0.0, 0.06, vUv.x) * smoothstep(1.0, 0.94, vUv.x)
+             * smoothstep(0.0, 0.12, vUv.y) * smoothstep(1.0, 0.88, vUv.y);
+  float a = (0.26 + 0.58 * motif) * scan * flick * edge * uBillK * max(uLightK, 0.35);
+  gl_FragColor = vec4(col * (0.7 + motif * 0.65), clamp(a, 0.0, 0.95));
 }
 `;

@@ -52,3 +52,10 @@ test('the interface is toggleable', () => {
   assert.ok(html.includes('body.ui-off'), 'css hides chrome under body.ui-off');
   assert.ok(main.includes("e.key === 'h'"), 'H key shortcut wired');
 });
+
+test('glide mode and collision detection toggles are wired', () => {
+  assert.ok(html.includes('id="b-glide"'), 'glide button exists');
+  assert.ok(html.includes('id="b-collide"'), 'collision button exists');
+  assert.ok(main.includes("e.key === 'g'"), 'G key shortcut wired');
+  assert.ok(main.includes("e.key === 'c'"), 'C key shortcut wired');
+});

@@ -61,13 +61,27 @@ body {
   transition: opacity 0.22s ease, transform 0.22s ease;
 }
 
-#b-ui {
+#topbar {
   position: fixed; z-index: 6;
   top: 18px; right: 18px;
+  display: flex; gap: 8px; align-items: center;
+}
+#topbar button.action.ghost {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  background: rgba(14, 18, 30, 0.72);
+  transition: opacity 0.22s ease, background 0.15s, border-color 0.15s;
+}
+#topbar button.action.ghost.on {
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
 }
 
 body.ui-off .panel,
-body.ui-off #keys {
+body.ui-off #keys,
+body.ui-off #b-glide,
+body.ui-off #b-collide {
   opacity: 0;
   pointer-events: none;
   transform: translateX(-14px);
@@ -266,14 +280,21 @@ button.action:hover { filter: brightness(1.1); }
   </div>
 </aside>
 
-<button id="b-ui" class="action ghost" aria-pressed="true" aria-label="Toggle interface" title="Hide the interface (H)">Hide UI</button>
+<div id="topbar">
+  <button id="b-glide" class="action ghost" aria-pressed="false" aria-label="Glide mode" title="Start Glide mode — drag to steer, wheel for speed (G)">Glide mode</button>
+  <button id="b-collide" class="action ghost on" aria-pressed="true" aria-label="Toggle collision detection" title="Disable camera &amp; traffic collision detection (C)">Collision: on</button>
+  <button id="b-ui" class="action ghost" aria-pressed="true" aria-label="Toggle interface" title="Hide the interface (H)">Hide UI</button>
+</div>
 
 <div id="keys" aria-hidden="true">
   <span><kbd>drag</kbd> look</span>
   <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> fly</span>
   <span><kbd>E</kbd>/<kbd>Q</kbd> up/down</span>
   <span><kbd>Shift</kbd> boost</span>
-  <span><kbd>wheel</kbd> dolly</span>
+  <span><kbd>wheel</kbd> dolly/speed</span>
+  <span><kbd>G</kbd> glide</span>
+  <span><kbd>C</kbd> collision</span>
+  <span><kbd>H</kbd> UI</span>
 </div>
 
 <div id="hint-flash"></div>

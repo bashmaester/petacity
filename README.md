@@ -35,11 +35,14 @@ instead of hanging — and `npm test` includes a headless boot smoke test
 
 | input | action |
 | --- | --- |
-| drag | look around |
-| `W` `A` `S` `D` | fly |
-| `E` / `Q` (or `Space` / `C`) | up / down |
+| drag | look / steer glide |
+| `W` `A` `S` `D` | fly (or adjust glide speed / bank) |
+| `E` / `Q` (or `Space`) | up / down |
 | `Shift` | speed boost |
-| mouse wheel | dolly in/out |
+| mouse wheel | dolly in/out (or adjust glide speed) |
+| `G` | toggle **Glide mode** (banked forward cruise + scenic autopilot nodes) |
+| `C` | toggle **Collision detection** (solid buildings & traffic spacing vs noclip) |
+| `H` | hide / show the UI |
 
 The **Look** chips restyle the same city instantly. The tuning sliders scale
 window density, window glow and fog on top of any look. **Environment → Time**
@@ -82,13 +85,21 @@ a specific city + style + hour (the Copy link button does this for you).
 - **Weather** — rain, storms with lightning flashes, snow and ash fall.
 - **Moon controls** — moon glow, size and phase, riding a night path opposite
   the sun.
-- **Billboards & light sculptures** — illuminated scrolling facade panels and
-  glowing rings/columns at the public spaces.
-- **Bodies of water** — irregular voronoi lakes with a ripple shader, plus
-  diagonal boulevards cutting the grid; streets and blocks stay, but the
-  large-scale division is no longer a pure lattice.
-- **Mixed fleet** — pods, skimmers, haulers, drones, helicopters and blimps
-  on curved multi-layer lanes with weaving trajectories.
+- **Billboards, neon signage & giant holograms** — illuminated scrolling
+  facade billboards, vertical neon canyon blades, rooftop wordmarks, shopfront
+  fascias, and towering sky-holograms (panels, 360° drums & portals) fed by
+  volumetric projector cones.
+- **Grand venues & public spaces** — arenas, Art-Deco movie theatres (with
+  premiere searchlights), twin-tier colosseum stadiums (with floodlight
+  towers), markets, plazas, parks and fairs.
+- **Non-rectangular variation & outskirts fade** — Voronoi-oriented and radial
+  quarters, octagonal prisms, V-wing wedges, twisting stacks, diagonal
+  boulevards, and a deep noise-fingered outskirts skirt of low-rise blocks,
+  silos, warehouses and lone beacons dissolving seamlessly into the mist.
+- **8-class collision-free fleet** — pods, skimmers, haulers, drones,
+  helicopters, blimps, transit shuttles and twin-prong spinners riding 3D
+  rooftop-clearing glide profiles, switching routes at endpoints, pitching over
+  towers, and maintaining headway spacing.
 - **Parametric atmospherics** — cloud deck (lit tops, silver lining), sun
   disc + glow, horizon haze and vibrance are all sliders; the horizon
   dissolves into the sky so the world has no square edges.
