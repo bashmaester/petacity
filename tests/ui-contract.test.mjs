@@ -20,6 +20,17 @@ test('every id main.js queries exists in index.html', () => {
   }
 });
 
+test('every $() call uses a #-prefixed string literal (no selector typos)', () => {
+  // catches bugs like $((id)) where id='sl-win' (missing '#'), which silently
+  // returns null and kills startup
+  const calls = [...main.matchAll(/\$\(\s*([^)]+?)\s*\)/g)].map((m) => m[1]);
+  assert.ok(calls.length > 5, 'expected several $() calls');
+  for (const arg of calls) {
+    assert.match(arg, /^'#[\w-]+'$/, `$(${arg}) must be a '#id' string literal`);
+    assert.ok(html.includes(`id="${arg.slice(2, -1)}"`), `${arg} missing from index.html`);
+  }
+});
+
 test('script and stylesheet hooks line up', () => {
   assert.ok(html.includes('src="./src/main.js"'));
   // chips are built dynamically in JS

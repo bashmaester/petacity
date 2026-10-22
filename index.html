@@ -165,6 +165,18 @@ button.action:hover { filter: brightness(1.1); }
   transition: opacity 0.6s ease, visibility 0s linear 0.6s;
 }
 #loading.out { opacity: 0; visibility: hidden; }
+#loading .boot-error {
+  max-width: min(680px, calc(100vw - 48px)); padding: 22px 24px;
+  border-radius: 16px; background: rgba(18, 12, 20, 0.92);
+  border: 1px solid rgba(255, 90, 80, 0.35); color: #ffd9d5;
+  font-size: 13px; text-transform: none; letter-spacing: normal;
+}
+#loading .boot-error b { display: block; font-size: 15px; color: #ff8d84; margin-bottom: 4px; }
+#loading .boot-error small { display: block; color: #b99; margin-bottom: 12px; }
+#loading .boot-error pre {
+  margin: 0; max-height: 42vh; overflow: auto; white-space: pre-wrap;
+  font: 11px/1.55 ui-monospace, Menlo, Consolas, monospace; color: #e8c8c4;
+}
 
 @media (max-width: 720px) {
   .panel { width: calc(100vw - 36px); }

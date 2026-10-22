@@ -18,6 +18,14 @@ python3 -m http.server 8000        # or: npm run serve
 # open http://localhost:8000
 ```
 
+The city starts **small by default** (a 1.5 km core, ~4.5k boxes) so it stays
+fast while testing and debugging. Grow the skyline with `?r=13` in the URL
+(each step is a 150 m block ring, max 15) when you want the full thing.
+
+If anything fails at startup, the error is shown right on the loading screen
+instead of hanging — and `npm test` includes a headless boot smoke test
+(jsdom + fake WebGL) that catches startup regressions like selector typos.
+
 ## Controls
 
 | input | action |
@@ -29,8 +37,9 @@ python3 -m http.server 8000        # or: npm run serve
 | mouse wheel | dolly in/out |
 
 The **Look** chips restyle the same city instantly. The sliders scale window
-density, window glow and fog on top of any look. `?seed=` and `?look=` in the URL
-share a specific city + style (the Copy link button does this for you).
+density, window glow and fog on top of any look. `?seed=`, `?look=` and `?r=`
+(city scale) in the URL share a specific city + style (the Copy link button
+does this for you).
 
 ## Current looks
 
@@ -76,4 +85,5 @@ npm test
 
 Node tests cover the generator (determinism, bounds), the scene layer against
 real three.js (uniform/shader contract, instancing attributes, look application),
-and the HTML/JS wiring contract.
+the HTML/JS wiring contract, and a full headless boot of `main.js` (jsdom +
+fake WebGL — skips if jsdom isn't installed).
