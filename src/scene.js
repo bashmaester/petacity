@@ -649,72 +649,154 @@ function beamGeometry(length, width) {
 
 // vehicle part colours (multiplied by per-instance tint)
 const HULL = [1, 1, 1];
+const HULL2 = [0.72, 0.75, 0.82];
 const GLASS = [0.14, 0.17, 0.23];
 const TRIM = [0.52, 0.55, 0.65];
 const HEAD = [1, 0.97, 0.82];
 const TAIL = [1, 0.16, 0.12];
 const GLOW = [0.32, 0.7, 1];
 
-/** Sleek pod — the common commuter. ~22 m long. */
+/** Sleek pod — the common commuter. ~22 m, hover-bobbing. */
 function podParts() {
   return [
-    { w: 22, h: 2.6, d: 4.4, y: 0, c: HULL },
-    { w: 6, h: 1.5, d: 3.1, x: 12.6, y: 0.35, c: HULL },
-    { w: 8, h: 1.5, d: 3, x: 1.5, y: 1.95, c: GLASS },
-    { w: 7, h: 0.35, d: 1.5, x: -7, y: 0.7, z: 2.5, c: TRIM },
-    { w: 7, h: 0.35, d: 1.5, x: -7, y: 0.7, z: -2.5, c: TRIM },
-    { w: 1.1, h: 0.75, d: 0.85, x: 16.1, y: 0.15, z: 1.35, c: HEAD },
-    { w: 1.1, h: 0.75, d: 0.85, x: 16.1, y: 0.15, z: -1.35, c: HEAD },
-    { w: 0.85, h: 0.8, d: 1, x: -11.2, y: 0.15, z: 1.3, c: TAIL },
-    { w: 0.85, h: 0.8, d: 1, x: -11.2, y: 0.15, z: -1.3, c: TAIL },
+    { w: 22, h: 1.6, d: 4.2, y: -0.5, c: HULL2 },
+    { w: 18, h: 1.4, d: 3.6, y: 0.7, c: HULL },
+    { w: 6.5, h: 1.2, d: 2.8, x: 12.8, y: 0.3, c: HULL },
+    { w: 5, h: 1.2, d: 2.6, x: 8, y: 1.55, c: GLASS },
+    { w: 7, h: 1.3, d: 2.8, x: 1, y: 1.95, c: GLASS },
+    { w: 10, h: 0.6, d: 1.2, x: -4, y: 1.9, c: TRIM },
+    { w: 6, h: 1, d: 0.9, x: 3, y: 0.4, z: 2.35, c: TRIM },
+    { w: 6, h: 1, d: 0.9, x: 3, y: 0.4, z: -2.35, c: TRIM },
+    { w: 7, h: 0.35, d: 1.5, x: -7, y: 0.7, z: 2.6, c: TRIM, rz: 0.1 },
+    { w: 7, h: 0.35, d: 1.5, x: -7, y: 0.7, z: -2.6, c: TRIM, rz: -0.1 },
+    { w: 4, h: 1.6, d: 0.3, x: -8, y: 1.7, c: TRIM },
+    { w: 1.2, h: 0.7, d: 0.9, x: 16, y: 0.15, z: 1.3, c: HEAD },
+    { w: 1.2, h: 0.7, d: 0.9, x: 16, y: 0.15, z: -1.3, c: HEAD },
+    { w: 0.7, h: 0.5, d: 0.7, x: 15.6, y: 0.3, z: 2.3, c: HEAD },
+    { w: 0.7, h: 0.5, d: 0.7, x: 15.6, y: 0.3, z: -2.3, c: HEAD },
+    { w: 0.9, h: 0.7, d: 3, x: -11.1, y: 0.15, c: TAIL },
+    { w: 0.7, h: 0.7, d: 0.7, x: -10.9, y: 0.4, z: 1.6, c: TAIL },
+    { w: 0.7, h: 0.7, d: 0.7, x: -10.9, y: 0.4, z: -1.6, c: TAIL },
     { w: 15, h: 0.22, d: 3, x: -1, y: -1.32, c: GLOW },
+    { w: 0.25, h: 1.4, d: 0.25, x: -3, y: 2.9, c: TRIM },
   ];
 }
 
-/** Flat skimmer — the fast courier. ~26 m long. */
+/** Flat skimmer — the fast courier. ~26 m, spinning rotor ring. */
 function skimmerParts() {
   return [
-    { w: 26, h: 1.8, d: 7, y: 0, c: HULL },
-    { w: 12, h: 1.4, d: 5, x: -5, y: 1.5, c: TRIM },
-    { w: 7, h: 1.3, d: 2.6, x: 6, y: 1.55, c: GLASS },
-    { w: 8, h: 0.3, d: 2.4, x: -2, y: 0.2, z: 4.5, c: TRIM, rz: 0.08 },
-    { w: 8, h: 0.3, d: 2.4, x: -2, y: 0.2, z: -4.5, c: TRIM, rz: -0.08 },
-    { w: 1, h: 0.6, d: 1, x: 13.2, y: 0.15, z: 2.2, c: HEAD },
-    { w: 1, h: 0.6, d: 1, x: 13.2, y: 0.15, z: -2.2, c: HEAD },
-    { w: 0.8, h: 0.7, d: 3.8, x: -13.2, y: 0.2, c: TAIL },
-    { w: 18, h: 0.2, d: 4.6, x: -1, y: -1.05, c: GLOW },
+    { w: 26, h: 1.6, d: 6.4, y: 0, c: HULL },
+    { w: 14, h: 1.2, d: 4.6, x: -4, y: 1.3, c: HULL2 },
+    { w: 7, h: 1.1, d: 3.4, x: 12, y: 0.25, c: HULL },
+    { w: 5.5, h: 1.1, d: 2.4, x: 7.5, y: 1.35, c: GLASS },
+    { w: 5, h: 1.2, d: 2.4, x: 1, y: 1.7, c: GLASS },
+    { w: 7, h: 0.28, d: 2.6, x: -2, y: 0.15, z: 4.3, c: TRIM, rz: 0.08 },
+    { w: 7, h: 0.28, d: 2.6, x: -2, y: 0.15, z: -4.3, c: TRIM, rz: -0.08 },
+    { w: 5, h: 1.2, d: 1.6, x: -8, y: 0.3, z: 3.2, c: TRIM },
+    { w: 5, h: 1.2, d: 1.6, x: -8, y: 0.3, z: -3.2, c: TRIM },
+    { w: 1, h: 0.8, d: 1.2, x: -10.7, y: 0.3, z: 3.2, c: GLOW },
+    { w: 1, h: 0.8, d: 1.2, x: -10.7, y: 0.3, z: -3.2, c: GLOW },
+    { w: 1.6, h: 0.7, d: 1.6, x: -1, y: 2.6, c: TRIM },
+    { w: 0.6, h: 0.6, d: 0.6, x: -2, y: 0.35, z: 5.6, c: HEAD },
+    { w: 0.6, h: 0.6, d: 0.6, x: -2, y: 0.35, z: -5.6, c: TAIL },
+    { w: 1, h: 0.55, d: 0.9, x: 13.2, y: 0.15, z: 2.1, c: HEAD },
+    { w: 1, h: 0.55, d: 0.9, x: 13.2, y: 0.15, z: -2.1, c: HEAD },
+    { w: 0.8, h: 0.6, d: 3.6, x: -13.2, y: 0.2, c: TAIL },
+    { w: 18, h: 0.2, d: 4.4, x: -1, y: -1.05, c: GLOW },
   ];
 }
 
-/** Heavy hauler — the freight backbone. ~88 m long. */
+/** Heavy hauler — the freight backbone. ~88 m, articulated trailers. */
 function haulerParts() {
   return [
-    { w: 88, h: 5, d: 9, y: 0, c: HULL },
-    { w: 12, h: 4.5, d: 8, x: 41, y: 3.4, c: TRIM },
-    { w: 8, h: 1.8, d: 6, x: 41, y: 6.4, c: GLASS },
-    { w: 22, h: 4.2, d: 8, x: -26, y: 4.7, c: TRIM },
-    { w: 22, h: 4.2, d: 8, x: -2, y: 4.7, c: HULL },
-    { w: 22, h: 4.2, d: 8, x: 22, y: 4.7, c: TRIM },
-    { w: 1.2, h: 1, d: 1.2, x: 44.6, y: 1.4, z: 3.1, c: HEAD },
-    { w: 1.2, h: 1, d: 1.2, x: 44.6, y: 1.4, z: -3.1, c: HEAD },
-    { w: 1, h: 1, d: 2, x: -44.6, y: 1.6, z: 3, c: TAIL },
-    { w: 1, h: 1, d: 2, x: -44.6, y: 1.6, z: -3, c: TAIL },
-    { w: 80, h: 0.28, d: 0.35, x: -2, y: 2.2, z: 4.6, c: GLOW },
-    { w: 80, h: 0.28, d: 0.35, x: -2, y: 2.2, z: -4.6, c: GLOW },
+    { w: 88, h: 1.4, d: 8, y: -1.6, c: HULL2 },
+    { w: 86, h: 4.2, d: 8.6, y: 0.6, c: HULL },
+    { w: 80, h: 1.2, d: 0.5, y: -1, z: 4.5, c: TRIM },
+    { w: 80, h: 1.2, d: 0.5, y: -1, z: -4.5, c: TRIM },
+    { w: 12, h: 4.6, d: 8, x: 41, y: 3.6, c: TRIM },
+    { w: 3.5, h: 1.6, d: 6.4, x: 46, y: 5, c: GLASS },
+    { w: 1.2, h: 1.4, d: 8.4, x: 47, y: 1.6, c: HULL2 },
+    { w: 1, h: 5, d: 1, x: 33, y: 6, z: 3.4, c: TRIM },
+    { w: 1, h: 5, d: 1, x: 33, y: 6, z: -3.4, c: TRIM },
+    { w: 22, h: 4.4, d: 8, x: -26, y: 5, c: TRIM },
+    { w: 22, h: 0.5, d: 8.4, x: -26, y: 3.6, c: HULL2 },
+    { w: 22, h: 0.5, d: 8.4, x: -26, y: 6.3, c: HULL2 },
+    { w: 22, h: 4.4, d: 8, x: -2, y: 5, c: HULL },
+    { w: 22, h: 0.5, d: 8.4, x: -2, y: 3.6, c: TRIM },
+    { w: 22, h: 0.5, d: 8.4, x: -2, y: 6.3, c: TRIM },
+    { w: 22, h: 4.4, d: 8, x: 22, y: 5, c: TRIM },
+    { w: 22, h: 0.5, d: 8.4, x: 22, y: 3.6, c: HULL2 },
+    { w: 22, h: 0.5, d: 8.4, x: 22, y: 6.3, c: HULL2 },
+    { w: 1.4, h: 0.8, d: 1.4, x: 41, y: 6.7, c: HEAD },
+    { w: 1.2, h: 1, d: 1.2, x: 45, y: 1.4, z: 3.2, c: HEAD },
+    { w: 1.2, h: 1, d: 1.2, x: 45, y: 1.4, z: -3.2, c: HEAD },
+    { w: 0.6, h: 0.6, d: 0.6, x: 44, y: 1.2, z: 4, c: HEAD },
+    { w: 0.6, h: 0.6, d: 0.6, x: 44, y: 1.2, z: -4, c: HEAD },
+    { w: 1, h: 1, d: 2, x: -43.5, y: 1.6, z: 3.2, c: TAIL },
+    { w: 1, h: 1, d: 2, x: -43.5, y: 1.6, z: -3.2, c: TAIL },
+    { w: 3, h: 0.6, d: 3, x: 34, y: -2.4, z: 3, c: HULL2 },
+    { w: 3, h: 0.6, d: 3, x: 34, y: -2.4, z: -3, c: HULL2 },
+    { w: 3, h: 0.6, d: 3, x: -34, y: -2.4, z: 3, c: HULL2 },
+    { w: 3, h: 0.6, d: 3, x: -34, y: -2.4, z: -3, c: HULL2 },
+    { w: 78, h: 0.28, d: 0.35, x: -2, y: 2.4, z: 4.45, c: GLOW },
+    { w: 78, h: 0.28, d: 0.35, x: -2, y: 2.4, z: -4.45, c: GLOW },
+  ];
+}
+
+/** One articulated trailer section behind a hauler (~22 m). */
+function trailerParts() {
+  return [
+    { w: 22, h: 4.2, d: 7.6, y: 0.5, c: TRIM },
+    { w: 22, h: 0.5, d: 8, y: -0.9, c: HULL2 },
+    { w: 22, h: 0.5, d: 8, y: 1.9, c: HULL2 },
+    { w: 20, h: 1, d: 0.4, y: -1, z: 3.9, c: HULL2 },
+    { w: 20, h: 1, d: 0.4, y: -1, z: -3.9, c: HULL2 },
+    { w: 3, h: 1.2, d: 3, x: 11.5, y: 0.2, c: HULL2 },
+    { w: 0.8, h: 0.7, d: 1, x: -11.2, y: 0.6, z: 3, c: TAIL },
+    { w: 0.8, h: 0.7, d: 1, x: -11.2, y: 0.6, z: -3, c: TAIL },
+    { w: 18, h: 0.22, d: 0.3, y: 2.2, z: 3.85, c: GLOW },
+    { w: 18, h: 0.22, d: 0.3, y: 2.2, z: -3.85, c: GLOW },
+  ];
+}
+
+/** Pulsing thruster block at a pod's tail. */
+function thrusterParts() {
+  return [
+    { w: 1.7, h: 1, d: 2.8, x: -11.8, y: 0.15, c: GLOW },
+  ];
+}
+
+/** Crossed rotor blades on a skimmer's mast — spun about the yaw axis. */
+function rotorParts() {
+  return [
+    { w: 9, h: 0.22, d: 0.9, x: -1, y: 3, c: TRIM },
+    { w: 0.9, h: 0.22, d: 9, x: -1, y: 3, c: TRIM },
+    { w: 1.2, h: 0.5, d: 1.2, x: -1, y: 3, c: HEAD },
   ];
 }
 
 const VEHICLE_CLASSES = [
-  { parts: podParts, len: 22, wid: 4.4, beamLen: 26, beamW: 5.5, spd: 0.006, spdJit: 0.0005, scale: 0.85 },
-  { parts: skimmerParts, len: 26, wid: 7, beamLen: 30, beamW: 7, spd: 0.0045, spdJit: 0.0004, scale: 0.9 },
-  { parts: haulerParts, len: 88, wid: 9, beamLen: 40, beamW: 9, spd: 0.0022, spdJit: 0.00025, scale: 0.92 },
+  {
+    parts: podParts, len: 22, wid: 4.4, beamLen: 26, beamW: 5.5,
+    spd: 0.006, spdJit: 0.0005, scale: 0.85, bobA: 0.9, bobF: 1.35,
+  },
+  {
+    parts: skimmerParts, len: 26, wid: 7, beamLen: 30, beamW: 7,
+    spd: 0.0045, spdJit: 0.0004, scale: 0.9, bobA: 1.5, bobF: 1.05,
+  },
+  {
+    parts: haulerParts, len: 88, wid: 9, beamLen: 40, beamW: 9,
+    spd: 0.0022, spdJit: 0.00025, scale: 0.92, bobA: 0.35, bobF: 0.8,
+    trailerLag: 0.016,
+  },
 ];
 
 /**
- * The traffic fleet: pods, skimmers and haulers with proper silhouettes
- * (hull, canopy, fins, containers), head/tail lights, an additive headlight
- * beam and a gradient trail. All instanced.
- * Returns { group, mesh, bodies, beams, trails, update(dt, density) }.
+ * The traffic fleet: pods, skimmers and haulers with detailed multi-part
+ * silhouettes, head/tail lights, underglow, headlight beams and trails —
+ * and articulated sub-parts: pulsing thrusters, spinning rotors, and lagging
+ * swaying trailer sections behind the haulers. Everything hover-bobs.
+ * Returns { group, mesh, bodies, beams, thrusters, rotors, trailers, trails, update }.
  */
 export function makeVehicles(city, trailMat, count = 220) {
   const lanes = city.lanes.length ? city.lanes : [{ x1: -400, z1: 0, x2: 400, z2: 0, y: 90, speed: 100 }];
@@ -764,6 +846,21 @@ export function makeVehicles(city, trailMat, count = 220) {
     group.add(beam);
   }
 
+  // articulated sub-part meshes (one per class that has them)
+  const thrusters = new THREE.InstancedMesh(mergeParts(thrusterParts()), bodyMat, Math.max(1, classCount[0]));
+  thrusters.frustumCulled = false;
+  group.add(thrusters);
+  const rotors = new THREE.InstancedMesh(mergeParts(rotorParts()), bodyMat, Math.max(1, classCount[1]));
+  rotors.frustumCulled = false;
+  group.add(rotors);
+  const trailerGeo = mergeParts(trailerParts());
+  const trailers = [0, 1].map(() => {
+    const t = new THREE.InstancedMesh(trailerGeo, bodyMat, Math.max(1, classCount[2]));
+    t.frustumCulled = false;
+    group.add(t);
+    return t;
+  });
+
   // trails: one shared instanced mesh indexed globally
   const trailGeo = new THREE.BoxGeometry(1, 1, 1);
   const aColor = new Float32Array(total * 3);
@@ -777,6 +874,9 @@ export function makeVehicles(city, trailMat, count = 220) {
   const dir = new Float32Array(total);
   const spd = new Float32Array(total);
   const scl = new Float32Array(total);
+  const phase = new Float32Array(total);
+  const spin = new Float32Array(total);
+  let elapsed = 0;
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const e = new THREE.Euler();
@@ -784,47 +884,42 @@ export function makeVehicles(city, trailMat, count = 220) {
   const s = new THREE.Vector3();
   const c = new THREE.Color();
 
-  const place = (i, target, localIdx, stretch = 1, wMul = 1) => {
+  /** Compose the matrix for vehicle i at lane position tVal with motion offsets. */
+  const composeAt = (i, tVal, o = {}) => {
     const L = lanes[laneIdx[i]];
-    const V = VEHICLE_CLASSES[classOf[i]];
-    p.set(L.x1 + (L.x2 - L.x1) * t[i], L.y, L.z1 + (L.z2 - L.z1) * t[i]);
-    e.set(0, Math.atan2(L.x2 - L.x1, L.z2 - L.z1) + (dir[i] < 0 ? Math.PI : 0), 0);
+    const yaw = Math.atan2(L.x2 - L.x1, L.z2 - L.z1) + (dir[i] < 0 ? Math.PI : 0) + (o.sway || 0);
+    const tt = ((tVal % 1) + 1) % 1;
+    p.set(L.x1 + (L.x2 - L.x1) * tt, L.y + (o.bob || 0), L.z1 + (L.z2 - L.z1) * tt);
+    e.set(0, yaw + (o.spinY || 0), o.roll || 0);
     q.setFromEuler(e);
-    s.set(scl[i] * stretch, scl[i], scl[i] * wMul);
+    const sc = scl[i] * (o.pulse || 1);
+    s.set(sc * (o.stretch || 1), sc, sc * (o.wMul || 1));
     m.compose(p, q, s);
-    target.setMatrixAt(localIdx, m);
-    return V;
   };
 
   for (let i = 0; i < total; i++) {
     laneIdx[i] = i % lanes.length;
     t[i] = (i * 0.618034) % 1;
     dir[i] = i % 2 === 0 ? 1 : -1;
+    phase[i] = (i * 0.754877666) % 6.28318;
     const V = VEHICLE_CLASSES[classOf[i]];
     spd[i] = V.spd + ((i * 37) % 13) * V.spdJit;
     scl[i] = V.scale + ((i * 53) % 17) * 0.017;
     c.set(VEHICLE_COLORS[i % VEHICLE_COLORS.length]);
     bodies[classOf[i]].setColorAt(local[i], c);
+    if (classOf[i] === 0) thrusters.setColorAt(local[i], c);
+    else if (classOf[i] === 1) rotors.setColorAt(local[i], c);
+    else for (const tr of trailers) tr.setColorAt(local[i], c);
     aColor[i * 3] = c.r;
     aColor[i * 3 + 1] = c.g;
     aColor[i * 3 + 2] = c.b;
-    place(i, bodies[classOf[i]], local[i]);
-    place(i, beams[classOf[i]], local[i]);
-    // trail sits behind the body along the lane
-    const savedT = t[i];
-    t[i] = savedT - dir[i] * (V.len * 1.7) / Math.max(60, Math.hypot(lanes[laneIdx[i]].x2 - lanes[laneIdx[i]].x1, lanes[laneIdx[i]].z2 - lanes[laneIdx[i]].z1));
-    place(i, trails, i, 2.4, 0.75);
-    t[i] = savedT;
   }
-  for (const b of bodies) {
-    if (b.instanceColor) b.instanceColor.needsUpdate = true;
-    b.instanceMatrix.needsUpdate = true;
-  }
-  for (const b of beams) b.instanceMatrix.needsUpdate = true;
-  trails.instanceMatrix.needsUpdate = true;
+  for (const b of bodies) if (b.instanceColor) b.instanceColor.needsUpdate = true;
+  for (const b of [thrusters, rotors, ...trailers]) if (b.instanceColor) b.instanceColor.needsUpdate = true;
   trailGeo.getAttribute('aColor').needsUpdate = true;
 
   function update(dt, density = 1) {
+    elapsed += dt;
     const n = Math.max(0, Math.min(total, Math.round(total * density)));
     const active = [0, 0, 0];
     for (let i = 0; i < n; i++) {
@@ -834,12 +929,40 @@ export function makeVehicles(city, trailMat, count = 220) {
       t[i] += spd[i] * dt * dir[i] * Math.max(20, L.speed) * 0.055;
       if (t[i] > 1) t[i] -= 1;
       if (t[i] < 0) t[i] += 1;
-      place(i, bodies[classOf[i]], local[i]);
-      place(i, beams[classOf[i]], local[i]);
-      active[classOf[i]]++;
+      const ph = phase[i];
+      const bob = Math.sin(elapsed * V.bobF + ph) * V.bobA;
+      const roll = Math.sin(elapsed * 0.9 + ph) * 0.05;
+      const li = local[i];
+      const cc = classOf[i];
+
+      composeAt(i, t[i], { bob, roll });
+      bodies[cc].setMatrixAt(li, m);
+      beams[cc].setMatrixAt(li, m);
+
+      if (cc === 0) {
+        // pulsing thruster
+        composeAt(i, t[i], { bob, roll, pulse: 0.78 + 0.36 * Math.sin(elapsed * 7 + ph) });
+        thrusters.setMatrixAt(li, m);
+      } else if (cc === 1) {
+        // spinning rotor
+        spin[i] += dt * 8;
+        composeAt(i, t[i], { bob, roll, spinY: spin[i] });
+        rotors.setMatrixAt(li, m);
+      } else {
+        // articulated trailers — lag behind and sway out of step
+        const lag = V.trailerLag;
+        composeAt(i, t[i] - dir[i] * lag, { bob: bob * 0.7, roll: roll * 0.6, sway: Math.sin(elapsed * 0.8 + ph) * 0.05 });
+        trailers[0].setMatrixAt(li, m);
+        composeAt(i, t[i] - dir[i] * lag * 2, { bob: bob * 0.55, roll: roll * 0.4, sway: Math.sin(elapsed * 0.8 + ph - 0.7) * 0.09 });
+        trailers[1].setMatrixAt(li, m);
+      }
+      active[cc]++;
+
+      // trail sits behind the body along the lane
       const savedT = t[i];
       t[i] = savedT - dir[i] * (V.len * 1.7) / span;
-      place(i, trails, i, 2.4, 0.75);
+      composeAt(i, t[i], { bob: bob * 0.5, stretch: 2.4, wMul: 0.75 });
+      trails.setMatrixAt(i, m);
       t[i] = savedT;
     }
     for (let c = 0; c < 3; c++) {
@@ -848,18 +971,28 @@ export function makeVehicles(city, trailMat, count = 220) {
       bodies[c].instanceMatrix.needsUpdate = true;
       beams[c].instanceMatrix.needsUpdate = true;
     }
+    thrusters.count = active[0];
+    rotors.count = active[1];
+    for (const tr of trailers) tr.count = active[2];
+    thrusters.instanceMatrix.needsUpdate = true;
+    rotors.instanceMatrix.needsUpdate = true;
+    for (const tr of trailers) tr.instanceMatrix.needsUpdate = true;
     trails.count = n;
     trails.instanceMatrix.needsUpdate = true;
+    beamMat.uniforms.uTime.value = elapsed;
   }
 
-  return { group, mesh: bodies[0], bodies, beams, trails, update };
+  update(0, 1); // place everything for frame 0
+
+  return { group, mesh: bodies[0], bodies, beams, thrusters, rotors, trailers, trails, update };
 }
 
 /* ------------------------------------------------- searchlights & pools */
 
 /**
- * Slow-sweeping volumetric searchlight shafts rising from landmarks and the
- * tallest towers — the city's signature night beams.
+ * Animated volumetric searchlight shafts rising from landmarks and the
+ * tallest towers: slow yaw sweeps, breathing tilt oscillation and a gentle
+ * shared intensity pulse.
  */
 export function makeSearchlights(city, beamMat, count = 8) {
   const group = new THREE.Group();
@@ -873,6 +1006,8 @@ export function makeSearchlights(city, beamMat, count = 8) {
   }
   const pivots = [];
   const use = spots.slice(0, Math.max(2, count));
+  const baseK = beamMat.uniforms && beamMat.uniforms.uBeamK ? beamMat.uniforms.uBeamK.value : 0.16;
+  let elapsed = 0;
   for (let k = 0; k < use.length; k++) {
     const sp = use[k];
     const pivot = new THREE.Group();
@@ -881,14 +1016,30 @@ export function makeSearchlights(city, beamMat, count = 8) {
     const len = 750 + sp.r * 750;
     const geo = beamGeometry(len, 110 + sp.r * 130);
     const mesh = new THREE.Mesh(geo, beamMat);
-    mesh.rotation.z = 0.04 + sp.r * 0.3;
+    const tilt = 0.04 + sp.r * 0.3;
+    mesh.rotation.z = tilt;
     mesh.frustumCulled = false;
     pivot.add(mesh);
     group.add(pivot);
-    pivots.push({ pivot, speed: (sp.r - 0.5) * 0.16 });
+    pivots.push({
+      pivot,
+      mesh,
+      tilt,
+      speed: (sp.r - 0.5) * 0.16,       // yaw sweep
+      wob: 0.12 + sp.r * 0.22,          // tilt breathing rate
+      phase: sp.r * Math.PI * 2,
+    });
   }
   function update(dt) {
-    for (const pv of pivots) pv.pivot.rotation.y += pv.speed * dt;
+    elapsed += dt;
+    for (const pv of pivots) {
+      pv.pivot.rotation.y += pv.speed * dt;
+      pv.mesh.rotation.z = pv.tilt + Math.sin(elapsed * pv.wob + pv.phase) * 0.22;
+    }
+    // gentle shared intensity pulse — the beams "breathe"
+    if (beamMat.uniforms && beamMat.uniforms.uBeamK) {
+      beamMat.uniforms.uBeamK.value = baseK * (0.82 + 0.18 * Math.sin(elapsed * 0.5));
+    }
   }
   return { group, update };
 }
@@ -966,38 +1117,52 @@ export function applyLook(U, look, tune = { win: 1, glow: 1, fog: 1 }) {
 }
 
 /**
- * Time of day. Each look's palette is authored for its defTime hour and stays
- * *identity* there; moving the hour applies only the DELTA toward day/night/
- * golden light, so lighting works everywhere instead of crushing the palette.
+ * Time of day — a full 24-hour cycle. Each look's palette is authored for its
+ * defTime hour and stays *identity* there; moving the clock applies only the
+ * DELTA (dawn / day / golden / dusk / the small hours), so lighting works
+ * everywhere instead of crushing the palette. The sun sweeps east→west around
+ * the sky through the day and continues as a low moon path at night.
  * @param {number} hours 0..24 (6 = sunrise, 12 = noon, 18 = sunset)
  * @param {{lights?:number, glow?:number, clouds?:number, haze?:number, sun?:number, sat?:number}} tune
- * @returns {{hour:number, elev:number, night:number, warm:number}}
+ * @returns {{hour:number, elev:number, night:number, warm:number, deep:number}}
  */
 export function applyTime(U, look, hours = 12, tune = { lights: 1, glow: 1 }) {
   const h = ((hours % 24) + 24) % 24;
 
   const model = (hour) => {
-    const dayT = clamp01((hour - 5.5) / 13); // 0 at 05:30, 1 at 18:30
-    const elev = Math.sin(dayT * Math.PI); // sun elevation proxy 0..1..0
-    const night = 1 - smoothstep(0.0, 0.22, elev); // 1 deep night .. 0 day
-    const warm = smoothstep(0.34, 0.05, elev) * (1 - night * 0.75); // golden hour
-    return { elev, night, warm };
+    const elevRaw = Math.sin(((hour - 6) / 12) * Math.PI); // +1 noon, 0 at 06/18, -1 midnight
+    const elev = Math.max(0, elevRaw);
+    const night = smoothstep(0.10, -0.16, elevRaw); // 1 deep night .. 0 day
+    const wrapD = (d) => { d = ((d % 24) + 24) % 24; return d > 12 ? 24 - d : d; };
+    const dawnW = Math.exp(-Math.pow(wrapD(hour - 6.6) / 1.55, 2)); // cool gold sunrise
+    const duskW = Math.exp(-Math.pow(wrapD(hour - 17.9) / 1.7, 2)); // warm sunset
+    const warm = clamp01((dawnW * 0.7 + duskW * 1.05) * (1 - night * 0.65));
+    // the small hours are the darkest — biased toward ~03:36 pre-dawn
+    const dark = smoothstep(-0.35, -0.85, elevRaw);
+    const preDawn = Math.exp(-Math.pow(wrapD(hour - 3.6) / 2.8, 2));
+    const deep = clamp01(dark * (0.7 + 0.3 * preDawn));
+    return { elev, night, warm, deep };
   };
   const cur = model(h);
   const ref = model(look.defTime);
 
-  // sun path: azimuth from the look, elevation from the hour
+  // sun path: the look's base azimuth plus a full sweep through the day —
+  // east at sunrise, overhead arc, west at sunset, low moon path at night
   const [ax, , az] = look.sky.sunDir;
   const alen = Math.hypot(ax, az) || 1;
-  const ey = 0.05 + Math.max(cur.elev, cur.night * 0.2) * 0.95;
+  const baseAz = Math.atan2(az / alen, ax / alen);
+  const sweep = ((h - 6) / 12) * Math.PI;
+  const sunAz = baseAz + sweep;
+  const ey = 0.06 + Math.max(cur.elev, cur.night * 0.26) * 0.94;
   const exz = Math.sqrt(Math.max(0, 1 - ey * ey));
-  U.uSunDir.value.set((ax / alen) * exz, ey, (az / alen) * exz).normalize();
+  U.uSunDir.value.set(Math.cos(sunAz) * exz, ey, Math.sin(sunAz) * exz).normalize();
 
   // tint DELTA relative to the authored hour — lighting moves with the clock
   // but never crushes the palette
   const tintAt = (k) => {
     const c = new THREE.Color(1, 1, 1);
     c.lerp(new THREE.Color(0.42, 0.48, 0.72), k.night * 0.8);
+    c.lerp(new THREE.Color(0.28, 0.36, 0.60), k.deep * 0.35);
     c.lerp(new THREE.Color(1.22, 0.92, 0.72), k.warm * 0.5);
     return c;
   };
@@ -1026,25 +1191,27 @@ export function applyTime(U, look, hours = 12, tune = { lights: 1, glow: 1 }) {
   mixRatio(U.uAmbG, look.light.ambG);
 
   // relative light levels — identity at defTime
-  const sunR = (k) => 0.35 + 0.75 * k.elev + k.warm * 0.45;
-  U.uSunK.value = (look.light.sunK * sunR(cur)) / Math.max(0.15, sunR(ref));
-  const glowR = (k) => 1 + k.night * 1.15;
+  const sunR = (k) => Math.max(0.12, 0.20 + 0.85 * k.elev + k.warm * 0.5 - k.deep * 0.08);
+  U.uSunK.value = (look.light.sunK * sunR(cur)) / sunR(ref);
+  const glowR = (k) => 1 + k.night * 1.15 + k.deep * 0.4;
   U.uWinGlow.value = ((look.tower.winGlow * (tune.glow ?? 1)) * glowR(cur)) / glowR(ref);
 
-  // stars: identity at defTime, more at night, fewer by day
+  // stars: identity at defTime, stronger through the night, deepest pre-dawn
   const starFloor = 0.4 * (1 - clamp01(look.sky.haze));
+  const starBoost = cur.night * 0.75 + cur.deep * 0.25;
+  const starRef = ref.night * 0.75 + ref.deep * 0.25;
   let stars = look.sky.stars;
-  stars += (Math.max(look.sky.stars, starFloor + 0.22 * (1 - clamp01(look.sky.haze))) - stars) * clamp01(cur.night - ref.night);
-  stars *= 1 - 0.8 * clamp01(ref.night - cur.night);
+  stars += (Math.max(look.sky.stars, starFloor + 0.22 * (1 - clamp01(look.sky.haze))) - stars) * clamp01(starBoost - starRef);
+  stars *= 1 - 0.8 * clamp01(starRef - starBoost);
   U.uStars.value = stars;
 
   // parametric atmosphere knobs
   U.uCloud.value = look.sky.cloud * (tune.clouds ?? 1);
   U.uHaze.value = look.sky.haze * (tune.haze ?? 1);
-  U.uSunGlow.value = 0.65 * (tune.sun ?? 1) * (0.6 + cur.warm * 0.8 + cur.night * 0.1);
+  U.uSunGlow.value = 0.65 * (tune.sun ?? 1) * Math.max(0.08, 0.6 + cur.warm * 0.8 + cur.night * 0.1 - cur.deep * 0.15);
   U.uSat.value = (tune.sat ?? 1) * (1 + cur.warm * 0.12);
-  U.uLightK.value = (tune.lights ?? 1) * (0.45 + cur.night * 0.7 + cur.warm * 0.35);
+  U.uLightK.value = (tune.lights ?? 1) * (0.45 + cur.night * 0.7 + cur.warm * 0.35 + cur.deep * 0.2);
   U.uBeaconCol.value.set(look.tower.winC === '#000000' ? look.accent : look.tower.winC);
 
-  return { hour: h, elev: cur.elev, night: cur.night, warm: cur.warm };
+  return { hour: h, elev: cur.elev, night: cur.night, warm: cur.warm, deep: cur.deep };
 }

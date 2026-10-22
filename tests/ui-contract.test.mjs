@@ -45,3 +45,10 @@ test('index.html has no accidental external network dependencies', () => {
   const externals = [...html.matchAll(/(?:src|href)="(https?:)?\/\/[^"]+"/g)].map((m) => m[0]);
   assert.deepEqual(externals, [], `unexpected external resources: ${externals}`);
 });
+
+test('the interface is toggleable', () => {
+  assert.ok(html.includes('id="b-ui"'), 'toggle button exists');
+  assert.ok(main.includes("classList.toggle('ui-off')"), 'main.js toggles the ui-off class');
+  assert.ok(html.includes('body.ui-off'), 'css hides chrome under body.ui-off');
+  assert.ok(main.includes("e.key === 'h'"), 'H key shortcut wired');
+});

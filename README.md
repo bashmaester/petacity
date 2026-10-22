@@ -68,9 +68,14 @@ a specific city + style + hour (the Copy link button does this for you).
   light trees and tent rings, ringed by string lights.
 - **Vehicles** — pods, skimmers and haulers with real silhouettes (hulls,
   canopies, fins, containers), head/tail lights, headlight beams and
-  additive light-trails.
-- **Volumetric lights** — sweeping searchlight shafts over the skyline,
-  street-lamp light pools, blinking aviation beacons, night window glow.
+  additive light-trails; articulated too: pulsing thrusters, spinning
+  rotors, swaying trailer sections, hover-bob.
+- **Volumetric lights** — animated searchlight shafts sweeping and breathing
+  over the skyline, street-lamp light pools, blinking aviation beacons,
+  night window glow.
+- **Full-day clock** — the Time slider spans 0–24 h with a moving sun path:
+  dawn golds, high noon, warm dusk, and the deep small hours. The interface
+  hides with the Hide UI button or <kbd>H</kbd>.
 - **Parametric atmospherics** — cloud deck (lit tops, silver lining), sun
   disc + glow, horizon haze and vibrance are all sliders; the horizon
   dissolves into the sky so the world has no square edges.

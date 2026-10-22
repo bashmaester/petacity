@@ -206,6 +206,22 @@ function boot() {
     }
   };
 
+  // hide / show the whole interface (H) — clean view for screenshots and flying
+  const toggleUI = () => {
+    const off = document.body.classList.toggle('ui-off');
+    const b = $('#b-ui');
+    b.textContent = off ? 'Show UI' : 'Hide UI';
+    b.setAttribute('aria-pressed', String(!off));
+    b.title = (off ? 'Show' : 'Hide') + ' the interface (H)';
+  };
+  $('#b-ui').onclick = toggleUI;
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'h' || e.key === 'H') {
+      if (e.target && e.target.tagName === 'INPUT') return;
+      toggleUI();
+    }
+  });
+
   function bindSlider(el, fn) {
     el.oninput = () => fn(parseFloat(el.value));
   }

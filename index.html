@@ -58,7 +58,21 @@ body {
   -webkit-backdrop-filter: blur(16px) saturate(1.2);
   box-shadow: 0 22px 60px -24px rgba(0, 0, 0, 0.75);
   scrollbar-width: thin;
+  transition: opacity 0.22s ease, transform 0.22s ease;
 }
+
+#b-ui {
+  position: fixed; z-index: 6;
+  top: 18px; right: 18px;
+}
+
+body.ui-off .panel,
+body.ui-off #keys {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-14px);
+}
+#keys { transition: opacity 0.22s ease, transform 0.22s ease; }
 .brand { font-weight: 800; letter-spacing: 0.14em; font-size: 13px; text-transform: uppercase; }
 .brand b { color: var(--accent); }
 .tagline { margin: 6px 0 14px; font-size: 11.5px; line-height: 1.55; color: var(--mute); }
@@ -247,6 +261,8 @@ button.action:hover { filter: brightness(1.1); }
     <div class="stat"><i>Boxes</i><b id="stat-boxes">—</b></div>
   </div>
 </aside>
+
+<button id="b-ui" class="action ghost" aria-pressed="true" aria-label="Toggle interface" title="Hide the interface (H)">Hide UI</button>
 
 <div id="keys" aria-hidden="true">
   <span><kbd>drag</kbd> look</span>

@@ -165,6 +165,51 @@ test('applyTime parametric knobs drive clouds, haze, sun glow and vibrance', () 
   assert.ok(U.uSat.value > 1.2, 'vibrance saturates');
 });
 
+test('time spans the full 24 hours: dawn, noon, dusk, midnight all differ', () => {
+  const U = makeUniforms();
+  const L = LOOK_BY_ID.outrun;
+  const hours = [0, 3.2, 4.8, 6.6, 9, 12, 15, 18.2, 21, 23.5];
+  const zens = new Set();
+  const suns = [];
+  for (const hr of hours) {
+    applyTime(U, L, hr);
+    zens.add(U.uZen.value.getHexString());
+    suns.push(U.uSunDir.value.clone());
+    assert.ok(Math.abs(U.uSunDir.value.length() - 1) < 1e-5, `sun dir normalised at ${hr}h`);
+  }
+  assert.ok(zens.size >= 7, `only ${zens.size} distinct skies across the day`);
+
+  // the sun/moon path sweeps: morning and afternoon directions differ
+  const az = (v) => Math.atan2(v.z, v.x);
+  assert.ok(Math.abs(az(suns[3]) - az(suns[6])) > 0.3, 'sun sweeps east to west');
+  assert.ok(suns[3].y > 0.12 && suns[3].y < suns[5].y, 'sun climbs from dawn');
+  assert.ok(suns[5].y > 0.9, 'noon sun is high');
+  assert.ok(suns[0].y < suns[5].y, 'midnight light sits lower than noon');
+
+  // dawn is warm, the small hours are the darkest, midnight wraps to 0
+  const dawn = applyTime(U, L, 6.6);
+  assert.ok(dawn.warm > 0.3, `dawn warm=${dawn.warm}`);
+  applyTime(U, L, 21);
+  const evening = U.uZen.value.clone();
+  applyTime(U, L, 3.2);
+  const small = U.uZen.value.clone();
+  assert.ok(small.r + small.g + small.b <= evening.r + evening.g + evening.b, 'small hours darkest');
+  const deep = applyTime(U, L, 3.2);
+  assert.ok(deep.deep > 0.5, `deep=${deep.deep}`);
+  applyTime(U, L, 24);
+  const z24 = U.uZen.value.getHexString();
+  applyTime(U, L, 0);
+  assert.equal(U.uZen.value.getHexString(), z24, 'hour 24 wraps to midnight');
+
+  // identity at defTime still holds after the rework
+  applyLook(U, L);
+  const baseZen = U.uZen.value.getHexString();
+  const baseGlow = U.uWinGlow.value;
+  applyTime(U, L, L.defTime);
+  assert.equal(U.uZen.value.getHexString(), baseZen);
+  assert.equal(U.uWinGlow.value, baseGlow);
+});
+
 test('landmarks, places, beacons, lamps and vehicles build against real three.js', () => {
   const U = makeUniforms();
   const world = makeWorld(U);
@@ -196,6 +241,8 @@ test('landmarks, places, beacons, lamps and vehicles build against real three.js
   assert.ok(veh.group.isGroup);
   assert.equal(veh.bodies.length, 3, 'pods, skimmers, haulers');
   assert.equal(veh.beams.length, 3, 'headlight beam per class');
+  assert.ok(veh.thrusters.isInstancedMesh && veh.rotors.isInstancedMesh, 'articulated sub-parts');
+  assert.equal(veh.trailers.length, 2, 'two articulated trailer sections');
   assert.ok(veh.mesh.isInstancedMesh && veh.trails.isInstancedMesh);
   assert.ok(veh.trails.geometry.getAttribute('aColor'));
   // merged silhouettes carry vertex colours (hull/canopy/lights)
@@ -217,12 +264,45 @@ test('landmarks, places, beacons, lamps and vehicles build against real three.js
   veh.mesh.getMatrixAt(0, m);
   m.decompose(p, new THREE.Quaternion(), new THREE.Vector3());
   assert.ok(p.distanceTo(before) > 0.01, 'vehicles move when updated');
+
+  // articulated sub-parts actually animate
+  const r0 = new THREE.Matrix4();
+  const r1 = new THREE.Matrix4();
+  veh.rotors.getMatrixAt(0, r0);
+  veh.update(0.5, 1);
+  veh.rotors.getMatrixAt(0, r1);
+  const q0 = new THREE.Quaternion();
+  const q1 = new THREE.Quaternion();
+  r0.decompose(new THREE.Vector3(), q0, new THREE.Vector3());
+  r1.decompose(new THREE.Vector3(), q1, new THREE.Vector3());
+  assert.ok(Math.abs(q1.y - q0.y) > 1e-4, 'rotors spin');
+  const ts0 = new THREE.Vector3();
+  const ts1 = new THREE.Vector3();
+  veh.thrusters.getMatrixAt(0, r0);
+  veh.update(0.5, 1);
+  veh.thrusters.getMatrixAt(0, r1);
+  r0.decompose(new THREE.Vector3(), new THREE.Quaternion(), ts0);
+  r1.decompose(new THREE.Vector3(), new THREE.Quaternion(), ts1);
+  assert.ok(Math.abs(ts1.x - ts0.x) > 1e-4, 'thrusters pulse');
+
+  // trailers lag behind the hauler body
+  const bodyM = new THREE.Matrix4();
+  const trM = new THREE.Matrix4();
+  const bp = new THREE.Vector3();
+  const tp = new THREE.Vector3();
+  veh.bodies[2].getMatrixAt(0, bodyM);
+  veh.trailers[1].getMatrixAt(0, trM);
+  bodyM.decompose(bp, new THREE.Quaternion(), new THREE.Vector3());
+  trM.decompose(tp, new THREE.Quaternion(), new THREE.Vector3());
+  assert.ok(tp.distanceTo(bp) > 5, 'trailers articulate behind the cab');
+
   veh.update(0, 0.1);
   const totalActive = veh.bodies.reduce((a, b) => a + b.count, 0);
   assert.equal(totalActive, 6, 'traffic slider thins the swarm');
+  assert.equal(veh.trailers[0].count, veh.bodies[2].count, 'trailer count follows haulers');
 });
 
-test('searchlights sweep and light pools cover the lamps', () => {
+test('searchlights sweep, breathe and pulse', () => {
   const U = makeUniforms();
   const world = makeWorld(U);
   const { city } = growCity(4417, 5, world.towerMat);
@@ -234,9 +314,14 @@ test('searchlights sweep and light pools cover the lamps', () => {
   sl.group.traverse((o) => { if (o.isMesh) beamMeshes++; });
   assert.equal(beamMeshes, sl.group.children.length);
   const pivot = sl.group.children[0];
+  const mesh = pivot.children[0];
   const rotY = pivot.rotation.y;
-  sl.update(1);
-  assert.notEqual(pivot.rotation.y, rotY, 'searchlights sweep slowly');
+  const tilt0 = mesh.rotation.z;
+  const k0 = world.beamMat.uniforms.uBeamK.value;
+  sl.update(1.5);
+  assert.notEqual(pivot.rotation.y, rotY, 'yaw sweep');
+  assert.notEqual(mesh.rotation.z, tilt0, 'tilt breathes');
+  assert.notEqual(world.beamMat.uniforms.uBeamK.value, k0, 'beams pulse');
 
   const pools = makeLightPools(city, world.poolMat);
   assert.ok(pools.isInstancedMesh);

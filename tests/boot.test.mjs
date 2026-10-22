@@ -23,7 +23,7 @@ test('main.js boots end-to-end (jsdom + fake WebGL)', { skip: JSDOM ? false : 'j
     <input id="sl-sun" type="range"><input id="sl-vib" type="range">
     <div id="pois"></div>
     <input id="seed-input" type="number">
-    <button id="b-new"></button><button id="b-link"></button>
+    <button id="b-new"></button><button id="b-link"></button><button id="b-ui"></button>
     <b id="stat-seed"></b><b id="stat-towers"></b><b id="stat-boxes"></b>
     <div id="hint-flash"></div><div id="loading">Growing the city…</div>
     </body></html>`, { url: 'http://localhost/?seed=42&look=tron', pretendToBeVisual: true });
