@@ -296,3 +296,97 @@ void main() {
   gl_FragColor = vec4(mix(col, fogCol, clamp(fogF, 0.0, 1.0)), 1.0);
 }
 `;
+
+/* ------------------------------------------------------------- landmarks */
+
+export const LANDMARK_VERT = /* glsl */ `
+varying vec3 vN;
+varying vec3 vWorld;
+void main() {
+  vec4 wp = modelMatrix * vec4(position, 1.0);
+  vWorld = wp.xyz;
+  vN = normalize(mat3(modelMatrix) * normal);
+  gl_Position = projectionMatrix * viewMatrix * wp;
+}
+`;
+
+export const LANDMARK_FRAG = /* glsl */ `
+uniform vec3 uCol;
+uniform vec3 uSunDir;
+uniform vec3 uSunCol;
+uniform float uSunK;
+uniform vec3 uAmb;
+uniform vec3 uAmbG;
+uniform float uWinDensity;
+uniform float uWinGlow;
+uniform vec3 uWinA;
+uniform vec3 uWinB;
+uniform float uEdge;
+uniform vec3 uEdgeCol;
+uniform vec3 uFogCol;
+uniform vec3 uSunFogCol;
+uniform float uFogDensity;
+uniform float uFogHeight;
+uniform float uHazeSun;
+uniform float uTime;
+varying vec3 vN;
+varying vec3 vWorld;
+${GLSL_NOISE}
+void main() {
+  vec3 n = normalize(vN);
+  vec3 vdir = normalize(vWorld - cameraPosition);
+  float dif = max(dot(n, normalize(uSunDir)), 0.0);
+  vec3 amb = mix(uAmbG, uAmb, n.y * 0.5 + 0.5);
+  vec3 col = uCol * (amb + uSunCol * uSunK * dif);
+
+  // world-space window speckle on vertical faces
+  if (abs(n.y) < 0.6 && uWinDensity > 0.002) {
+    vec2 cellId = floor(vWorld.xz / 6.5);
+    float f = fract(vWorld.y / 3.8);
+    float win = step(0.28, f) * step(f, 0.74);
+    float r1 = hash12(cellId + floor(vWorld.y / 3.8) * 0.13);
+    float litWin = step(r1, uWinDensity) * win;
+    litWin *= 0.85 + 0.15 * sin(uTime * 1.7 + r1 * 55.0);
+    vec3 wc = uWinA;
+    if (hash12(cellId + 3.1) > 0.62) wc = uWinB;
+    col += wc * litWin * uWinGlow;
+  }
+
+  // emissive rim so landmarks read at night
+  float rim = pow(1.0 - abs(dot(n, vdir)), 2.4);
+  col += uEdgeCol * rim * uEdge * 0.8;
+
+  float dist = length(vWorld - cameraPosition);
+  float density = uFogDensity * exp(-max(vWorld.y, 0.0) * uFogHeight);
+  float fogF = 1.0 - exp(-density * dist);
+  vec3 fogCol = mix(uFogCol, uSunFogCol, pow(max(dot(vdir, normalize(uSunDir)), 0.0), 6.0) * uHazeSun);
+  gl_FragColor = vec4(mix(col, fogCol, clamp(fogF, 0.0, 1.0)), 1.0);
+}
+`;
+
+/* --------------------------------------------------------------- beacons */
+
+export const BEACON_VERT = /* glsl */ `
+attribute float aPhase;
+attribute float aSize;
+uniform float uTime;
+varying float vPulse;
+void main() {
+  vPulse = 0.5 + 0.5 * sin(uTime * 2.1 + aPhase);
+  vec4 mv = modelViewMatrix * vec4(position, 1.0);
+  gl_PointSize = clamp(aSize * (260.0 / max(1.0, -mv.z)) * (0.55 + 0.85 * vPulse), 1.5, 42.0);
+  gl_Position = projectionMatrix * mv;
+}
+`;
+
+export const BEACON_FRAG = /* glsl */ `
+uniform vec3 uBeaconCol;
+uniform float uLightK;
+varying float vPulse;
+void main() {
+  float d = length(gl_PointCoord - 0.5);
+  float a = smoothstep(0.5, 0.06, d);
+  float k = uLightK * (0.3 + 0.7 * vPulse);
+  gl_FragColor = vec4(uBeaconCol * (0.6 + k), a * k);
+}
+`;

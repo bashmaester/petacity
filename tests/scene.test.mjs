@@ -4,11 +4,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from '../vendor/three.module.js';
 import { LOOKS, LOOK_BY_ID } from '../src/looks.js';
-import { makeUniforms, makeWorld, growCity, applyLook } from '../src/scene.js';
+import {
+  makeUniforms, makeWorld, growCity, applyLook, applyTime,
+  buildLandmarks, buildBeacons, makeVehicles, makeLandmarkMaterial,
+} from '../src/scene.js';
 
 test('every look preset has a complete schema', () => {
   for (const L of LOOKS) {
     assert.ok(L.id && L.label && L.accent, L.id);
+    assert.ok(L.defTime >= 0 && L.defTime <= 24, `${L.id}.defTime`);
     for (const k of ['zen', 'hor', 'sun', 'sunDir', 'stars', 'cloud', 'cloudCol', 'haze']) {
       assert.ok(L.sky[k] !== undefined, `${L.id}.sky.${k}`);
     }
@@ -32,7 +36,8 @@ test('shaders only use uniforms the materials actually have', () => {
     for (const m of src.matchAll(/uniform\s+\w+\s+(\w+)/g)) names.add(m[1]);
     return names;
   };
-  for (const mat of [world.skyMat, world.groundMat, world.towerMat]) {
+  const mats = [world.skyMat, world.groundMat, world.towerMat, world.beaconMat, makeLandmarkMaterial(U, '#334455')];
+  for (const mat of mats) {
     const used = new Set([...declared(mat.vertexShader), ...declared(mat.fragmentShader)]);
     for (const name of used) {
       assert.ok(mat.uniforms[name], `${name} used in shader but missing from uniforms`);
@@ -102,4 +107,74 @@ test('applyLook fills uniforms for every look, sliders scale', () => {
 test('looks are visually distinct (palettes differ)', () => {
   const keys = LOOKS.map((L) => L.sky.zen + L.tower.baseA + L.tower.edgeCol + L.ground.line);
   assert.equal(new Set(keys).size, LOOKS.length);
+});
+
+test('applyTime shifts sky, stars and lights across the day', () => {
+  const U = makeUniforms();
+  const L = LOOK_BY_ID.outrun; // dusk preset with stars
+  applyLook(U, L);
+  const night = applyTime(U, L, 23);
+  const nightZen = U.uZen.value.getHexString();
+  const nightStars = U.uStars.value;
+  const nightWin = U.uWinGlow.value;
+  const day = applyTime(U, L, 12);
+  const dayZen = U.uZen.value.getHexString();
+  const dayStars = U.uStars.value;
+  const dayWin = U.uWinGlow.value;
+
+  assert.notEqual(nightZen, dayZen, 'sky zenith moves with the hour');
+  assert.ok(night.night > 0.9 && day.night < 0.1, `night=${night.night} day=${day.night}`);
+  assert.ok(nightStars > dayStars, 'stars stronger at night');
+  assert.ok(nightWin > dayWin * 1.2, 'windows glow harder at night');
+  assert.ok(Math.abs(U.uSunDir.value.length() - 1) < 1e-5, 'sun dir stays normalised');
+  assert.ok(day.elev > 0.5, `day elev=${day.elev}`);
+
+  // warm golden hour vs deep night
+  const dusk = applyTime(U, L, 18.2);
+  assert.ok(dusk.warm > 0.2, `warm=${dusk.warm}`);
+  assert.ok(U.uLightK.value > 0.2, 'atmospheric lights get intensity');
+
+  // lights slider scales the beacon/atmosphere intensity
+  const dim = applyTime(U, L, 23, { lights: 0, glow: 1 });
+  assert.equal(U.uLightK.value, 0);
+  assert.ok(dim.night > 0.9);
+
+  // heavy-smog looks stay starless day or night (identity)
+  const br = LOOK_BY_ID.bladerunner;
+  applyTime(U, br, 23);
+  assert.equal(U.uStars.value, 0, 'smog eats the stars');
+});
+
+test('landmarks, beacons and vehicles build against real three.js', () => {
+  const U = makeUniforms();
+  const world = makeWorld(U);
+  const { city } = growCity(4417, 5, world.towerMat);
+
+  const lmGroup = buildLandmarks(city, U);
+  assert.equal(lmGroup.children.length, city.landmarks.length);
+  let meshes = 0;
+  lmGroup.traverse((o) => { if (o.isMesh) meshes++; });
+  assert.ok(meshes >= city.landmarks.length * 2, `landmark meshes=${meshes}`);
+
+  const pts = buildBeacons(city, world.beaconMat);
+  assert.ok(pts.isPoints);
+  assert.equal(pts.geometry.getAttribute('position').count, city.beacons.length);
+  assert.ok(pts.geometry.getAttribute('aPhase'));
+  assert.ok(pts.geometry.getAttribute('aSize'));
+
+  const veh = makeVehicles(city, U, 60);
+  assert.ok(veh.mesh.isInstancedMesh);
+  assert.ok(veh.mesh.count <= 60);
+  const m = new THREE.Matrix4();
+  veh.mesh.getMatrixAt(0, m);
+  const p = new THREE.Vector3();
+  m.decompose(p, new THREE.Quaternion(), new THREE.Vector3());
+  assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z));
+  const before = p.clone();
+  veh.update(1, 1);
+  veh.mesh.getMatrixAt(0, m);
+  m.decompose(p, new THREE.Quaternion(), new THREE.Vector3());
+  assert.ok(p.distanceTo(before) > 0.01, 'vehicles move when updated');
+  veh.update(0, 0.1);
+  assert.equal(veh.mesh.count, 6, 'traffic slider thins the swarm');
 });
