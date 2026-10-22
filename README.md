@@ -41,10 +41,26 @@ instead of hanging — and `npm test` includes a headless boot smoke test
 | `Shift` | speed boost |
 | mouse wheel | dolly in/out |
 
-The **Look** chips restyle the same city instantly. The sliders scale window
-density, window glow and fog on top of any look. `?seed=`, `?look=` and `?r=`
-(city scale) in the URL share a specific city + style (the Copy link button
-does this for you).
+The **Look** chips restyle the same city instantly. The tuning sliders scale
+window density, window glow and fog on top of any look. **Environment → Time**
+drives a day/night cycle (each look lands on the hour it was authored for —
+golden sunsets, starry nights, brighter days, all while keeping the look's
+identity). **Scale** sets city size (rebuild), building height and traffic
+density; **Atmosphere → Lights** drives the beacons and night lighting. The
+**Places of interest** chips fly the camera to each named landmark.
+
+`?seed=`, `?look=`, `?r=` (city scale) and `?t=` (time of day) in the URL share
+a specific city + style + hour (the Copy link button does this for you).
+
+## What's in the city
+
+- **Streets & towers** — a seeded grid of blocks, lots and stacked tower
+  segments with setbacks, podiums and roof clutter.
+- **Places of interest** — named landmark silhouettes (the Meridian Gate arch,
+  spires, domes, masts, crowns, needles) with a fly-to list in the panel.
+- **Vehicles** — light-streak traffic looping along air corridors and avenues.
+- **Atmospheric lights** — blinking aviation beacons on tower tops, emissive
+  window glow that wakes up at night, sun haze and street glow.
 
 ## Current looks
 
@@ -60,10 +76,10 @@ does this for you).
 ```
 index.html          UI shell + overlay effects (grain / scanlines / vignette)
 src/prng.js         seeded RNG + smooth value noise
-src/city.js         the scaffolding: streets, lots, tower stacks, spires (pure JS)
-src/shaders.js      GLSL: sky dome, ground grid, instanced towers w/ windows
-src/looks.js        look presets (sky, fog, light, tower, ground, post)
-src/scene.js        three.js scene layer + look -> uniform plumbing
+src/city.js         the scaffolding: streets, lots, tower stacks, landmarks, lanes (pure JS)
+src/shaders.js      GLSL: sky dome, ground grid, instanced towers w/ windows, landmarks, beacons
+src/looks.js        look presets (sky, fog, light, tower, ground, post) + authored hours
+src/scene.js        three.js scene layer: look/time -> uniforms, landmarks, traffic, beacons
 src/controls.js     fly camera
 src/main.js         wiring: renderer, UI, render loop
 vendor/three.module.js  three.js r170 (vendored, no CDN)

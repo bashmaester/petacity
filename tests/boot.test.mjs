@@ -17,6 +17,9 @@ test('main.js boots end-to-end (jsdom + fake WebGL)', { skip: JSDOM ? false : 'j
     <div id="vig"></div><div id="grain"></div><div id="scan"></div>
     <div id="chips"></div><p id="look-blurb"></p>
     <input id="sl-win" type="range"><input id="sl-glow" type="range"><input id="sl-fog" type="range">
+    <input id="sl-time" type="range"><input id="sl-radius" type="range"><input id="sl-height" type="range">
+    <input id="sl-traffic" type="range"><input id="sl-lights" type="range">
+    <div id="pois"></div>
     <input id="seed-input" type="number">
     <button id="b-new"></button><button id="b-link"></button>
     <b id="stat-seed"></b><b id="stat-towers"></b><b id="stat-boxes"></b>
@@ -103,6 +106,7 @@ test('main.js boots end-to-end (jsdom + fake WebGL)', { skip: JSDOM ? false : 'j
   assert.equal(loading.className.includes('out'), true, 'loading overlay should fade out (init completed)');
   assert.equal(loading.querySelector('.boot-error'), null, `boot error overlay should be empty, got: ${loading.textContent}`);
   assert.equal(window.document.querySelectorAll('#chips button').length, 6, 'all look chips built');
+  assert.ok(window.document.querySelectorAll('#pois button').length >= 1, 'POI buttons built');
   assert.ok(window.document.querySelector('#stat-towers').textContent.length > 0, 'stats filled');
   assert.ok(window.document.querySelector('#stat-boxes').textContent.length > 0, 'stats filled');
   assert.deepEqual(pageErrors, [], 'no page errors');
