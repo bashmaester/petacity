@@ -259,14 +259,20 @@ export function generateCity(seed = 4417, radius = 13, suburbReach = 1.0) {
           const lx = (xs[a] + xs[a + 1]) / 2;
           const lz = (zs[b] + zs[b + 1]) / 2;
           const halfDiag = 0.5 * Math.hypot(xs[a + 1] - xs[a], zs[b + 1] - zs[b]);
-          const lotInMedia = mediaZone && Math.hypot(lx - mediaZone.x, lz - mediaZone.z) <= mediaZone.r;
-          if (inWater(lx, lz) || nearBoulevard(lx, lz, lotInMedia ? 20 : 38 + halfDiag * 0.75)) continue;
-          if (lotInMedia) {
+          const distMedia = mediaZone ? Math.hypot(lx - mediaZone.x, lz - mediaZone.z) : Infinity;
+          // Inside mediaZone, interleave ~46% hero media towers with dark architectural contrast towers;
+          // outside mediaZone, sprinkle occasional focal media towers organically along major avenues & boulevards!
+          const onAveCorridor = (Math.abs(lx % (CELL * 4)) < 78 || Math.abs(lz % (CELL * 4)) < 78) && edgeT > 0.38;
+          const pickInZone = distMedia <= (mediaZone ? mediaZone.r : 0) && hash2i(i * 19 + a * 7, j * 23 + b * 11, seed ^ 0x4d3a) < 0.48;
+          const pickCorridor = distMedia > (mediaZone ? mediaZone.r * 1.35 : 0) && (onAveCorridor || nearBoulevard(lx, lz, 130)) && hash2i(i * 31 + a * 5, j * 29 + b * 13, seed ^ 0x9b71) < 0.085;
+          const useMediaTower = pickInZone || pickCorridor;
+          if (inWater(lx, lz) || nearBoulevard(lx, lz, useMediaTower ? 22 : 38 + halfDiag * 0.75)) continue;
+          if (useMediaTower) {
             const mt = addMediaTower(
               push, pushBeacon, (bl) => bills.push(bl), (sg) => signs.push(sg), (hl) => holos.push(hl),
               rand, xs[a], xs[a + 1], zs[b], zs[b + 1], h01, baseAngle
             );
-            if (mt) mediaTowers.push(mt);
+            if (mt && pickInZone) mediaTowers.push(mt);
           } else {
             addTower(
               push, pushBeacon, (bl) => bills.push(bl), (sg) => signs.push(sg),
@@ -279,21 +285,37 @@ export function generateCity(seed = 4417, radius = 13, suburbReach = 1.0) {
     }
   }
   if (mediaZone) {
-    mediaZone.towerCount = mediaTowers.length;
-    // Span holographic ad-portals right over the streets inside the Media Ward
-    for (let k = 0; k < 3; k++) {
-      const ang = (k / 3) * Math.PI + hash2i(k, 907, seed) * 0.5;
-      const off = (k - 1) * 58;
+    mediaZone.towerCount = Math.max(mediaTowers.length, 2);
+    // 2 spaced street-level holographic portals spanning avenues in the Media Ward (restrained scale, no whiteout)
+    for (let k = 0; k < 2; k++) {
+      const ang = (k / 2) * Math.PI * 0.5 + hash2i(k, 907, seed) * 0.4;
+      const off = (k === 0 ? -1 : 1) * 72;
       holos.push({
         x: mediaZone.x + Math.cos(ang) * off,
-        y: 38 + k * 18,
+        y: 38 + k * 22,
         baseY: 12,
         z: mediaZone.z + Math.sin(ang) * off,
-        w: 58 + hash2i(k, 911, seed) * 34,
-        h: 26 + hash2i(k, 919, seed) * 18,
+        w: 44 + hash2i(k, 911, seed) * 20,
+        h: 26 + hash2i(k, 919, seed) * 12,
         rot: ang,
         seed: hash2i(k, 929, seed),
         kind: 'portal',
+      });
+    }
+    // Also place 2 distant civic/plaza sky-holograms elsewhere in the city so holo landmarks feel city-wide
+    for (let k = 0; k < 2; k++) {
+      const pl = places[k % Math.max(1, places.length)];
+      if (!pl) break;
+      holos.push({
+        x: pl.x,
+        y: 52 + k * 24,
+        baseY: 16,
+        z: pl.z,
+        w: 38 + hash2i(k + 5, 937, seed) * 18,
+        h: 26 + hash2i(k + 5, 941, seed) * 12,
+        rot: hash2i(k + 5, 947, seed) * Math.PI,
+        seed: hash2i(k + 5, 953, seed),
+        kind: k === 0 ? 'cylinder' : 'panel',
       });
     }
   }
@@ -596,7 +618,7 @@ function makeLanes(seed, radius, boulevards = [], collider = null) {
   const span = radius * CELL + CELL * 0.85;
   const R = (a, b) => hash2i(a, b, seed ^ 0x2c1b3e5d);
 
-  const pushLane = (x1, z1, x2, z2, y, speed, layer, bow = 0) => {
+  const pushLane = (x1, z1, x2, z2, y, speed, layer, bow = 0, extra = null) => {
     const mx = (x1 + x2) / 2;
     const mz = (z1 + z2) / 2;
     const dx = x2 - x1;
@@ -605,81 +627,121 @@ function makeLanes(seed, radius, boulevards = [], collider = null) {
     const px = -dz / len;
     const pz = dx / len;
     const b = bow * len;
-    lanes.push({ x1, z1, cx: mx + px * b, cz: mz + pz * b, x2, z2, y, speed, layer });
+    const rec = {
+      x1, z1,
+      cx: extra && extra.cx !== undefined ? extra.cx : mx + px * b,
+      cz: extra && extra.cz !== undefined ? extra.cz : mz + pz * b,
+      x2, z2, y, speed, layer,
+    };
+    if (extra && extra.ringId !== undefined) {
+      rec.ringId = extra.ringId;
+      rec.ringSeg = extra.ringSeg;
+      rec.ringSegs = extra.ringSegs;
+    }
+    lanes.push(rec);
+    return lanes.length - 1;
   };
 
-  // Air corridors across diverse angles and altitudes — non-parallel trajectories.
+  // Sweeping multi-strata skyway corridors across 6 distinct altitude tiers (44m -> 880m),
+  // extending well past the core out across the outskirts & horizon suburbs!
   const bands = [
-    [68, 'air-low'], [115, 'air-low'], [165, 'air-mid'],
-    [225, 'air-mid'], [295, 'air-mid'], [365, 'air-high'], [455, 'air-high'],
+    [48, 'air-low'], [76, 'air-low'], [104, 'air-low'],
+    [138, 'air-mid'], [176, 'air-mid'], [218, 'air-mid'], [262, 'air-mid'],
+    [310, 'air-high'], [365, 'air-high'], [425, 'air-high'],
+    [495, 'air-high'], [575, 'air-high'],
   ];
   for (let k = 0; k < bands.length; k++) {
-    const y = bands[k][0] + R(k, 1) * 34;
+    const y = bands[k][0] + R(k, 1) * 28;
     const layer = bands[k][1];
     const ang = R(k, 2) * Math.PI * 2;
-    const spread = (R(k, 3) - 0.5) * span * 0.7;
+    const spread = (R(k, 3) - 0.5) * span * 0.85;
     const nx = -Math.sin(ang);
     const nz = Math.cos(ang);
-    const rSpan = span * (0.95 + R(k, 17) * 0.35);
+    // Higher strata reach further out toward the horizon suburbs
+    const reachMul = 1.15 + (k / bands.length) * 0.95 + R(k, 17) * 0.35;
+    const rSpan = span * reachMul;
     pushLane(
       -Math.cos(ang) * rSpan + nx * spread, -Math.sin(ang) * rSpan + nz * spread,
-      Math.cos(ang) * rSpan + nx * spread * 0.4, Math.sin(ang) * rSpan + nz * spread * 0.4,
-      y, 95 + R(k, 4) * 185, layer, (R(k, 8) - 0.5) * 0.28
+      Math.cos(ang) * rSpan - nx * spread * 0.35, Math.sin(ang) * rSpan - nz * spread * 0.35,
+      y, 88 + R(k, 4) * 165, layer, (R(k, 8) - 0.5) * 0.34
     );
-    const ang2 = ang + 1.1 + R(k, 18) * 0.9;
+    const ang2 = ang + 1.05 + R(k, 18) * 0.9;
     pushLane(
       -Math.cos(ang2) * rSpan, -Math.sin(ang2) * rSpan,
       Math.cos(ang2) * rSpan, Math.sin(ang2) * rSpan,
-      y + 18, 105 + R(k, 5) * 175, layer, (R(k, 9) - 0.5) * 0.32
+      y + 18, 96 + R(k, 5) * 160, layer, (R(k, 9) - 0.5) * 0.38
     );
   }
 
-  // Avenue air-canyons: low skimmers & pods threading directly above the wide avenues.
+  // Avenue air-canyons: low skimmers & pods threading smoothly above wide avenues.
   for (let a = -radius; a <= radius; a += 4) {
     const p = a * CELL;
-    pushLane(p + 13, -span, p + 13, span, 48 + R(a, 51) * 28, 110 + R(a, 52) * 90, 'air-low', 0);
-    pushLane(-span, p - 13, span, p - 13, 62 + R(a, 53) * 32, 110 + R(a, 54) * 90, 'air-low', 0);
+    const aveSpan = span * 1.35;
+    pushLane(p + 13, -aveSpan, p + 13, aveSpan, 46 + R(a, 51) * 28, 105 + R(a, 52) * 80, 'air-low', 0.02);
+    pushLane(-aveSpan, p - 13, aveSpan, p - 13, 62 + R(a, 53) * 32, 105 + R(a, 54) * 80, 'air-low', -0.02);
   }
 
-  // Ring & figure-arc loops at three radii and altitudes.
-  for (let ring = 0; ring < 3; ring++) {
-    const rr = (0.28 + ring * 0.27) * span;
-    const y = 95 + ring * 125 + R(ring, 31) * 35;
-    const layer = ring === 0 ? 'air-low' : ring === 1 ? 'air-mid' : 'air-high';
-    const segs = 5 + ring;
+  // Tangent-exact 360-degree orbital ring skyways at 5 radii & strata (zero polygon corners!)
+  // Using 6 sextant arcs per ring with exact tangent control points: ctrlR = rr / cos(pi / 6).
+  for (let ring = 0; ring < 5; ring++) {
+    const rr = (0.30 + ring * 0.28) * span;
+    const y = 78 + ring * 112 + R(ring, 31) * 32;
+    const layer = ring === 0 ? 'air-low' : ring <= 2 ? 'air-mid' : 'air-high';
+    const segs = 6;
+    const dAng = (Math.PI * 2) / segs;
+    const ctrlScale = 1 / Math.cos(dAng * 0.5);
+    const eX = 0.88 + R(ring, 33) * 0.24;
+    const eZ = 0.88 + R(ring, 34) * 0.24;
+    const phase0 = ring * 0.52;
+    const ringSpd = 84 + R(ring, 32) * 88;
+    const indices = [];
     for (let s = 0; s < segs; s++) {
-      const a0 = (s / segs) * Math.PI * 2 + ring * 0.4;
-      const a1 = ((s + 1) / segs) * Math.PI * 2 + ring * 0.4;
-      pushLane(
-        Math.cos(a0) * rr, Math.sin(a0) * rr,
-        Math.cos(a1) * rr, Math.sin(a1) * rr,
-        y, 82 + R(ring * 7 + s, 32) * 85, layer, 0.26
+      const a0 = s * dAng + phase0;
+      const a1 = (s + 1) * dAng + phase0;
+      const aMid = (a0 + a1) * 0.5;
+      const idx = pushLane(
+        Math.cos(a0) * rr * eX, Math.sin(a0) * rr * eZ,
+        Math.cos(a1) * rr * eX, Math.sin(a1) * rr * eZ,
+        y, ringSpd, layer, 0,
+        {
+          cx: Math.cos(aMid) * rr * ctrlScale * eX,
+          cz: Math.sin(aMid) * rr * ctrlScale * eZ,
+          ringId: ring,
+          ringSeg: s,
+          ringSegs: segs,
+        }
       );
+      indices.push(idx);
+    }
+    for (let s = 0; s < segs; s++) {
+      lanes[indices[s]].nextIdx = indices[(s + 1) % segs];
+      lanes[indices[s]].prevIdx = indices[(s - 1 + segs) % segs];
     }
   }
 
-  // Blimp lanes — grand high-altitude arcs at varied headings.
-  for (let k = 0; k < 5; k++) {
-    const y = 520 + k * 78 + R(k, 21) * 45;
+  // Blimp & stratospheric cruiser arcs — grand high-altitude trajectories up to 880m.
+  for (let k = 0; k < 7; k++) {
+    const y = 510 + k * 58 + R(k, 21) * 40;
     const a = R(k, 26) * Math.PI * 2;
-    const off = (R(k, 22) - 0.5) * span * 0.9;
-    const bSpan = span * 1.25;
+    const off = (R(k, 22) - 0.5) * span * 1.05;
+    const bSpan = span * (1.35 + k * 0.12);
     pushLane(
       -Math.cos(a) * bSpan - Math.sin(a) * off, -Math.sin(a) * bSpan + Math.cos(a) * off,
-      Math.cos(a) * bSpan - Math.sin(a) * off * 0.5, Math.sin(a) * bSpan + Math.cos(a) * off * 0.5,
-      y, 30 + R(k, 24) * 28, 'blimp', (R(k, 25) - 0.5) * 0.42
+      Math.cos(a) * bSpan - Math.sin(a) * off * 0.45, Math.sin(a) * bSpan + Math.cos(a) * off * 0.45,
+      y, 32 + R(k, 24) * 32, 'blimp', (R(k, 25) - 0.5) * 0.36
     );
   }
 
-  // Ground traffic on every 4th street (avenues), both directions.
+  // Ground traffic on every 4th street (avenues), extending out into the suburbs.
+  const groundSpan = span * 1.45;
   for (let a = -radius; a <= radius; a += 4) {
     const p = a * CELL;
-    if (R(a, 11) < 0.2) continue;
-    pushLane(p + 9, -span, p + 9, span, 5.5, 48 + R(a, 12) * 52, 'ground');
-    pushLane(p - 9, span, p - 9, -span, 5.5, 48 + R(a, 13) * 52, 'ground');
+    if (R(a, 11) < 0.18) continue;
+    pushLane(p + 9, -groundSpan, p + 9, groundSpan, 5.5, 48 + R(a, 12) * 52, 'ground');
+    pushLane(p - 9, groundSpan, p - 9, -groundSpan, 5.5, 48 + R(a, 13) * 52, 'ground');
     if (R(a, 14) < 0.65) {
-      pushLane(-span, p + 9, span, p + 9, 5.5, 48 + R(a, 15) * 52, 'ground');
-      pushLane(span, p - 9, -span, p - 9, 5.5, 48 + R(a, 16) * 52, 'ground');
+      pushLane(-groundSpan, p + 9, groundSpan, p + 9, 5.5, 48 + R(a, 15) * 52, 'ground');
+      pushLane(groundSpan, p - 9, -groundSpan, p - 9, 5.5, 48 + R(a, 16) * 52, 'ground');
     }
   }
 
@@ -698,13 +760,13 @@ function makeLanes(seed, radius, boulevards = [], collider = null) {
 
   // Glide nodes: every lane carries a 33-node vertical profile guaranteed to
   // clear all building rooftops, landmarks and venues along its route (including
-  // lateral weave margin), dilated + floor-clamped so smoothing never dips into walls.
+  // wide lateral weave margin), dilated +-3 + 8-pass smoothed for silky C1 arcs!
   const NS = 33;
   for (const L of lanes) {
     const floor = new Array(NS).fill(L.y);
     if (collider) {
-      const margin = L.layer === 'ground' ? 14 : L.layer === 'blimp' ? 66 : 52;
-      const clearH = L.layer === 'ground' ? 16 : 34;
+      const margin = L.layer === 'ground' ? 14 : L.layer === 'blimp' ? 72 : 60;
+      const clearH = L.layer === 'ground' ? 16 : 36;
       for (let s = 0; s < NS; s++) {
         const t = s / (NS - 1);
         const u = 1 - t;
@@ -725,7 +787,6 @@ function makeLanes(seed, radius, boulevards = [], collider = null) {
         }
       }
     }
-    // Dilate by +-2 nodes so climbs begin well before a facade and descend after
     const dil = new Array(NS);
     for (let s = 0; s < NS; s++) {
       let m = floor[s];
@@ -734,9 +795,20 @@ function makeLanes(seed, radius, boulevards = [], collider = null) {
       }
       dil[s] = m;
     }
-    // Smooth for graceful arcs while clamping >= dil[s] so clearance is strict
+    // Two-pass bounded-slope upper envelope: guarantees |dY / dS| <= 0.24 (~13.5 deg)
+    // everywhere while strictly >= dil[s] (no 80-degree spire cliffs, zero building hits!)
+    const approxLen = Math.hypot(L.cx - L.x1, L.cz - L.z1) + Math.hypot(L.x2 - L.cx, L.z2 - L.cz);
+    const stepDist = Math.max(45, approxLen / (NS - 1));
+    const maxDelta = stepDist * 0.24;
+    for (let s = 1; s < NS; s++) {
+      if (dil[s - 1] - maxDelta > dil[s]) dil[s] = dil[s - 1] - maxDelta;
+    }
+    for (let s = NS - 2; s >= 0; s--) {
+      if (dil[s + 1] - maxDelta > dil[s]) dil[s] = dil[s + 1] - maxDelta;
+    }
+    // Smooth curvature transitions and add uniform sag lift so clearance remains 100% strict
     let sm = dil.slice();
-    for (let pass = 0; pass < 3; pass++) {
+    for (let pass = 0; pass < 5; pass++) {
       const next = new Array(NS);
       for (let s = 0; s < NS; s++) {
         const a = sm[Math.max(0, s - 1)];
@@ -746,7 +818,30 @@ function makeLanes(seed, radius, boulevards = [], collider = null) {
       }
       sm = next;
     }
-    L.prof = sm.map((v, s) => Math.max(dil[s], v));
+    let sag = 0;
+    for (let s = 0; s < NS; s++) {
+      if (dil[s] - sm[s] > sag) sag = dil[s] - sm[s];
+    }
+    L.prof = sm.map((v) => v + sag);
+  }
+  // Stitch ring loop arc endpoints so altitude & slope are continuous across ring handoffs!
+  for (let pass = 0; pass < 2; pass++) {
+    for (const L of lanes) {
+      if (L.nextIdx !== undefined) {
+        const N = lanes[L.nextIdx];
+        const joinY = Math.max(L.prof[NS - 1], N.prof[0]);
+        L.prof[NS - 1] = joinY;
+        N.prof[0] = joinY;
+        const approxLen = Math.hypot(L.cx - L.x1, L.cz - L.z1) + Math.hypot(L.x2 - L.cx, L.z2 - L.cz);
+        const maxDelta = Math.max(45, approxLen / (NS - 1)) * 0.24;
+        for (let s = NS - 2; s >= 0; s--) {
+          if (L.prof[s + 1] - maxDelta > L.prof[s]) L.prof[s] = L.prof[s + 1] - maxDelta;
+        }
+        for (let s = 1; s < NS; s++) {
+          if (N.prof[s - 1] - maxDelta > N.prof[s]) N.prof[s] = N.prof[s - 1] - maxDelta;
+        }
+      }
+    }
   }
   return lanes;
 }
@@ -1085,17 +1180,20 @@ function addTower(push, pushBeacon, pushBill, pushSign, rand, x0, x1, z0, z1, h0
   const tw = Math.max(10, w - iw * 2) * 0.92;
   const td = Math.max(10, dp - id * 2) * 0.92;
   push(cx, y + 1.1, cz, tw, 2.2, td, rand(), KIND.SLAB, style, rot);
-  // illuminated billboards riding the facade of medium & tall towers
-  if (H > 110 && rand() < 0.52) {
-    const bh = 11 + rand() * 19;
-    const bw = Math.min(50, Math.max(14, (rand() < 0.5 ? tw : td) * (0.72 + rand() * 0.48)));
-    const by = H * (0.4 + rand() * 0.42);
+  // illuminated billboards on ~28% of medium & tall towers (organic spacing, varied aspect ratios)
+  if (H > 115 && rand() < 0.28) {
+    const portrait = rand() < 0.38;
+    const bh = portrait ? 24 + rand() * 28 : 9 + rand() * 14;
+    const bw = portrait
+      ? Math.min(24, Math.max(10, (rand() < 0.5 ? tw : td) * (0.42 + rand() * 0.25)))
+      : Math.min(46, Math.max(14, (rand() < 0.5 ? tw : td) * (0.68 + rand() * 0.35)));
+    const by = Math.max(46, H * (0.34 + rand() * 0.46));
     if (rand() < 0.5) {
-      const [bx, bz] = rotOff(cx, cz, (rand() < 0.5 ? 1 : -1) * (tw / 2 + 1.3), 0, segRot);
-      pushBill({ x: bx, y: by, z: bz, w: 2.4, h: bh, d: bw, rot: segRot, seed: rand() });
+      const [bx, bz] = rotOff(cx, cz, (rand() < 0.5 ? 1 : -1) * (tw / 2 + 1.2), 0, segRot);
+      pushBill({ x: bx, y: by, z: bz, w: 2.2, h: bh, d: bw, rot: segRot, seed: rand() });
     } else {
-      const [bx, bz] = rotOff(cx, cz, 0, (rand() < 0.5 ? 1 : -1) * (td / 2 + 1.3), segRot);
-      pushBill({ x: bx, y: by, z: bz, w: bw, h: bh, d: 2.4, rot: segRot, seed: rand() });
+      const [bx, bz] = rotOff(cx, cz, 0, (rand() < 0.5 ? 1 : -1) * (td / 2 + 1.2), segRot);
+      pushBill({ x: bx, y: by, z: bz, w: bw, h: bh, d: 2.2, rot: segRot, seed: rand() });
     }
   }
   if (H > 170 && rand() < 0.7) {
@@ -1739,8 +1837,9 @@ function addStreetBase(push, pushSign, rand, cx, cz, w, dp, d, rot = 0) {
 }
 
 /**
- * Media / Holo-Ad Tower: an entire building whose shaft is a floor-to-crown
- * billboard & holographic display monolith (Times Square / Akihabara / Shibuya).
+ * Media / Commercial Landmark Tower: dark architectural megastructure with
+ * selective framed LED screens, asymmetric staggered billboards & restrained
+ * accent holograms (never uniform 4-sided checkerboard stacks!).
  */
 function addMediaTower(push, pushBeacon, pushBill, pushSign, pushHolo, rand, x0, x1, z0, z1, h01, baseAngle = 0) {
   const w0 = x1 - x0;
@@ -1748,77 +1847,78 @@ function addMediaTower(push, pushBeacon, pushBill, pushSign, pushHolo, rand, x0,
   if (w0 < 14 || d0 < 14) return null;
   const cx = (x0 + x1) * 0.5;
   const cz = (z0 + z1) * 0.5;
-  const rot = baseAngle * 0.25 + (rand() - 0.5) * 0.08;
-  const w = Math.max(16, w0 * 0.88);
-  const dp = Math.max(16, d0 * 0.88);
-  const H = Math.max(95, Math.min(360, (115 + 230 * h01) * (0.75 + rand() * 0.55)));
+  const rot = baseAngle * 0.25 + (rand() - 0.5) * 0.10;
+  const w = Math.max(16, w0 * 0.86);
+  const dp = Math.max(16, d0 * 0.86);
+  const H = Math.max(98, Math.min(350, (112 + 225 * h01) * (0.72 + rand() * 0.56)));
 
-  // Vibrant street-level arcade & marquee canopy base
-  addStreetBase(push, pushSign, rand, cx, cz, w, dp, { signs: 1.8 }, rot);
+  // Street-level arcade & marquee canopy base
+  addStreetBase(push, pushSign, rand, cx, cz, w, dp, { signs: 1.5 }, rot);
 
-  // Full-height style=3 Media LED tower core + stepped upper media crown
-  const hMain = H * 0.72;
-  const hCrown = H * 0.28;
-  push(cx, hMain * 0.5, cz, w, hMain, dp, rand(), KIND.WALL, 3, rot);
-  push(cx, hMain + 1.1, cz, w * 1.06, 2.2, dp * 1.06, rand(), KIND.BAND, 3, rot);
-  push(cx, hMain + hCrown * 0.5, cz, w * 0.78, hCrown, dp * 0.78, rand(), KIND.WALL, 3, rot);
-  push(cx, H + 1.2, cz, w * 0.84, 2.4, dp * 0.84, rand(), KIND.BAND, 3, rot);
+  // Architectural dark shaft + selective style=3 upper/mid media volume
+  const archKind = Math.floor(rand() * 3);
+  const hMain = H * 0.68;
+  const hCrown = H * 0.32;
+  const lowStyle = archKind === 0 ? 3 : (rand() < 0.5 ? 0 : 2);
+  const topStyle = archKind === 0 ? 0 : 3;
+  push(cx, hMain * 0.5, cz, w, hMain, dp, rand(), KIND.WALL, lowStyle, rot);
+  push(cx, hMain + 1.0, cz, w * 1.04, 2.0, dp * 1.04, rand(), KIND.BAND, 3, rot);
+  push(cx, hMain + hCrown * 0.5, cz, w * 0.76, hCrown, dp * 0.76, rand(), KIND.WALL, topStyle, rot);
+  push(cx, H + 1.1, cz, w * 0.80, 2.2, dp * 0.80, rand(), KIND.SLAB, 2, rot);
 
-  // Wrap ALL FOUR FACES from street marquee (y=18m) to roof in stacked giant billboards!
-  const tiers = Math.max(3, Math.min(7, Math.floor((H - 20) / 30)));
-  const usableH = H - 20;
-  const tierH = usableH / tiers;
-  for (let t = 0; t < tiers; t++) {
-    const by = 18 + (t + 0.5) * tierH;
-    const bh = tierH * 0.84;
-    const scaleTop = t >= Math.floor(tiers * 0.72) ? 0.78 : 1.0;
-    const fw = w * scaleTop;
-    const fd = dp * scaleTop;
-    for (const side of [-1, 1]) {
-      const [bx1, bz1] = rotOff(cx, cz, side * (fw * 0.5 + 1.1), 0, rot);
-      const [bx2, bz2] = rotOff(cx, cz, 0, side * (fd * 0.5 + 1.1), rot);
-      const emit = by > 41 ? pushBill : pushSign;
-      emit({ x: bx1, y: by, z: bz1, w: 2.0, h: bh, d: fd * 0.92, rot, seed: rand() });
-      emit({ x: bx2, y: by, z: bz2, w: fw * 0.92, h: bh, d: 2.0, rot, seed: rand() });
+  // Asymmetric billboards (2 to 4 varied panels on 1-2 faces — leaving dark architecture visible!)
+  const priSide = rand() < 0.5 ? -1 : 1;
+  const secSide = rand() < 0.5 ? -1 : 1;
+  if (archKind === 0) {
+    // Tall portrait hero screen on primary face + low horizontal marquee on adjacent face
+    const [bx1, bz1] = rotOff(cx, cz, priSide * (w * 0.5 + 1.1), (rand() - 0.5) * dp * 0.18, rot);
+    pushBill({ x: bx1, y: Math.max(48, H * 0.52), z: bz1, w: 2.0, h: Math.min(56, H * 0.36), d: dp * 0.56, rot, seed: rand() });
+    const [bx2, bz2] = rotOff(cx, cz, 0, secSide * (dp * 0.5 + 1.1), rot);
+    pushBill({ x: bx2, y: 46 + rand() * 14, z: bz2, w: w * 0.78, h: 12 + rand() * 7, d: 2.0, rot, seed: rand() });
+  } else if (archKind === 1) {
+    // Staggered corner L-ribbons at two distinct altitudes
+    const yA = 46 + rand() * 18;
+    const yB = Math.max(yA + 28, H * 0.68);
+    const [bx1, bz1] = rotOff(cx, cz, priSide * (w * 0.5 + 1.1), 0, rot);
+    const [bx2, bz2] = rotOff(cx, cz, 0, secSide * (dp * 0.38 + 1.1), rot);
+    pushBill({ x: bx1, y: yA, z: bz1, w: 2.0, h: 13 + rand() * 8, d: dp * 0.82, rot, seed: rand() });
+    pushBill({ x: bx2, y: yB, z: bz2, w: w * 0.68, h: 15 + rand() * 10, d: 2.0, rot, seed: rand() });
+    if (rand() < 0.65) {
+      const [bx3, bz3] = rotOff(cx, cz, -priSide * (w * 0.38 + 1.1), 0, rot);
+      pushBill({ x: bx3, y: Math.max(50, H * 0.80), z: bz3, w: 2.0, h: 16 + rand() * 9, d: dp * 0.58, rot, seed: rand() });
     }
+  } else {
+    // Twin staggered widescreen panels + low canyon sign
+    const [bx1, bz1] = rotOff(cx, cz, 0, priSide * (dp * 0.5 + 1.1), rot);
+    const [bx2, bz2] = rotOff(cx, cz, secSide * (w * 0.5 + 1.1), 0, rot);
+    pushBill({ x: bx1, y: Math.max(46, H * 0.38), z: bz1, w: w * 0.76, h: 16 + rand() * 10, d: 2.0, rot, seed: rand() });
+    pushBill({ x: bx2, y: Math.max(68, H * 0.66), z: bz2, w: 2.0, h: 20 + rand() * 12, d: dp * 0.64, rot, seed: rand() });
+    const [sx1, sz1] = rotOff(cx, cz, 0, -priSide * (dp * 0.5 + 1.1), rot);
+    pushSign({ x: sx1, y: 22 + rand() * 8, z: sz1, w: w * 0.68, h: 9 + rand() * 5, d: 1.8, rot, seed: rand() });
   }
 
-  // Corner vertical fin blade signs running up the building edges
-  for (const sx of [-1, 1]) {
-    for (const sz of [-1, 1]) {
-      if (rand() < 0.75) {
-        const [fx, fz] = rotOff(cx, cz, sx * (w * 0.5 + 2.4), sz * (dp * 0.5 + 2.4), rot);
-        pushSign({ x: fx, y: H * 0.46, z: fz, w: 3.2, h: H * 0.62, d: 7.5, rot: rot + Math.PI * 0.25 * sx * sz, seed: rand() });
-      }
-    }
+  // Single vertical blade fin on one corner (not all 4 corners!)
+  if (rand() < 0.68) {
+    const [fx, fz] = rotOff(cx, cz, priSide * (w * 0.5 + 2.2), secSide * (dp * 0.5 + 2.2), rot);
+    pushSign({ x: fx, y: H * 0.38, z: fz, w: 2.6, h: Math.min(48, H * 0.34), d: 6.5, rot: rot + Math.PI * 0.25 * priSide * secSide, seed: rand() });
   }
 
-  // Enveloping full-building holographic sleeve / crown projection!
-  const holoWrapKind = rand() < 0.5 ? 'cylinder' : 'portal';
-  pushHolo({
-    x: cx,
-    y: H * 0.58,
-    baseY: 14,
-    z: cz,
-    w: Math.max(w, dp) * 1.48,
-    h: H * 0.78,
-    rot,
-    seed: rand(),
-    kind: holoWrapKind,
-  });
-  // Towering holographic crown sign above the roof
-  pushHolo({
-    x: cx,
-    y: H + 34 + rand() * 26,
-    baseY: H,
-    z: cz,
-    w: Math.max(w, dp) * 1.35,
-    h: 36 + rand() * 24,
-    rot: rot + Math.PI * 0.25,
-    seed: rand(),
-    kind: 'panel',
-  });
-  pushBeacon(cx, H + 8, cz, rand());
+  // Restrained holographic accent on ~55% of media towers (compact scale, never enveloping whole blocks!)
+  if (rand() < 0.58) {
+    const onRoof = rand() < 0.55;
+    pushHolo({
+      x: cx,
+      y: onRoof ? H + 20 + rand() * 14 : H * (0.55 + rand() * 0.2),
+      baseY: onRoof ? H : 14,
+      z: cz,
+      w: Math.max(38, Math.max(w, dp) * (onRoof ? 0.96 : 1.16)),
+      h: onRoof ? 26 + rand() * 12 : 28 + rand() * 16,
+      rot: rot + (onRoof ? Math.PI * 0.25 : 0),
+      seed: rand(),
+      kind: onRoof ? 'panel' : 'cylinder',
+    });
+  }
+  pushBeacon(cx, H + 6, cz, rand());
   return { x: cx, z: cz, w, d: dp, h: H };
 }
 

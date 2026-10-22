@@ -230,8 +230,8 @@ void main() {
 }
 `;
 
-// True 3D spherical environment dome: ray-intersects a curved 3D atmospheric
-// cloud shell (wrapping all 360 deg in orbital/sphere mode — no flat ceiling!).
+// True 3D spherical environment dome: volumetric Beer-Lambert raymarch through
+// a curved concentric 3D atmospheric cumulus shell (zero polygons, zero plane cutoff!).
 export const SKY_FRAG = /* glsl */ `
 uniform vec3 uZen;
 uniform vec3 uHor;
@@ -251,10 +251,34 @@ uniform float uMoonGlow;
 uniform float uMoonPhase;
 uniform float uFlash;
 uniform float uWorldCurve;
+uniform float uPlanetR;
 varying vec3 vDir;
 ${GLSL_NOISE}
 ${GLSL_UTIL}
 ${GLSL_STORMY_PLATE}
+
+vec2 intersectSphereShell(vec3 oc, vec3 rd, float rad) {
+  float b = dot(oc, rd);
+  float c = dot(oc, oc) - rad * rad;
+  float disc = b * b - c;
+  if (disc < 0.0) return vec2(1e9, -1e9);
+  float s = sqrt(disc);
+  return vec2(-b - s, -b + s);
+}
+
+// Continuous 3D cumulus cloud density inside concentric spherical shell
+float skyCumulusDensity(vec3 p, float h01, float covK, float t) {
+  vec3 wind = vec3(t * 22.0, 0.0, t * 9.5);
+  vec3 q = (p + wind) * vec3(0.00034, 0.00072, 0.00034);
+  float macro = fbm3(q);
+  float billow = fbm3(q * 2.35 + vec3(3.7, -1.9, 5.1));
+  float detail = vnoise3(q * 5.8 - vec3(t * 0.08, 0.0, 0.0));
+  // Cumulus anvil profile: flat condensation base, rounded billowing cauliflower tops
+  float prof = smoothstep(0.02, 0.22, h01) * smoothstep(1.0, 0.36, h01);
+  float shape = (macro * 0.66 + billow * 0.34) * (0.55 + 0.62 * prof) - detail * 0.14;
+  float thresh = clamp(0.56 - covK * 0.21, 0.22, 0.62);
+  return clamp((shape - thresh) * 2.85, 0.0, 1.0) * prof;
+}
 
 void main() {
   vec3 d = normalize(vDir);
@@ -269,61 +293,21 @@ void main() {
   float halo = pow(s, 14.0) * 0.55 + pow(s, 5.0) * 0.18;
   col += uSkySunCol * (disc * 2.8 + halo * (0.55 + uSunGlow * 1.4)) * (0.35 + uSunGlow * 0.75);
 
-  // 3D spherical atmosphere shell clouds (no planar d.xz/d.y projection!)
-  float minElev = mix(-0.22, -1.02, clamp(uWorldCurve * 1.4, 0.0, 1.0));
-  if (uCloud > 0.002 && d.y > minElev) {
-    // Intersect view ray with a curved 3D atmospheric shell (radius ratio 1 : 1.24)
-    float atmR = 4.2;
-    float topR = 5.22;
-    float bTerm = atmR * d.y;
-    float radTerm = max(bTerm * bTerm + topR * topR - atmR * atmR, 0.001);
-    float rayLen = -bTerm + sqrt(radTerm);
-    vec3 shellDir = normalize(vec3(0.0, atmR, 0.0) + d * rayLen);
-    vec3 sampleVec = mix(shellDir * 4.4, d * 3.1, uWorldCurve * 0.58);
-
-    float iso = clamp(0.58 - uCloud * 0.27, 0.16, 0.62);
-    float base = cloudField3(sampleVec, uTime);
-    float cover = smoothstep(iso - 0.06, iso + 0.22, base);
-
-    // 3D shadow probe toward the sun in spherical cloud volume
-    float probe = cloudField3(sampleVec + sd * 0.42, uTime);
-    float sh = smoothstep(iso - 0.05, iso + 0.22, probe);
-    float heightUp = smoothstep(iso - 0.04, iso + 0.30, base);
-    float lit = clamp((1.0 - 0.88 * sh) * (0.68 + 0.34 * heightUp) + 0.06, 0.0, 1.25);
-
-    vec3 darkBelly = uCloudCol * 0.36;
-    vec3 brightTop = mix(uCloudCol + uSkySunCol * 0.95, vec3(0.96, 0.95, 0.92), 0.28);
-    vec2 fc = gl_FragCoord.xy;
-    float g1 = cloudField3(sampleVec + vec3(0.08, 0.0, 0.0), uTime) - base;
-    float g2 = cloudField3(sampleVec + vec3(0.0, 0.0, 0.08), uTime) - base;
-    vec4 plate = evalStormyPlate(lit, uCloudStyle, fc, vec2(-g2, g1), darkBelly, brightTop, uTime);
-    vec3 cl = plate.rgb;
-    float alphaMul = plate.a;
-
-    // Aerosol storm drips when style == 2 near lower cloud band
-    if (uCloudStyle >= 1.5 && uCloudStyle < 2.5 && d.y > -0.05 && d.y < 0.34) {
-      float colId = floor(fc.x / 19.0);
-      float colH = grainHash(vec2(colId, 4.7));
-      if (colH > 0.62) {
-        float cyc = fract(uTime / (15.0 + colH * 9.0) + colH * 5.0);
-        float lenY = smoothstep(0.0, 0.55, cyc) * (1.0 - smoothstep(0.82, 1.0, cyc)) * 0.14;
-        float xWob = (colId + 0.5) * 19.0 + sin(fc.y * 0.06 + colH * 30.0) * 1.6;
-        float bandD = smoothstep(0.34, 0.34 - lenY, d.y) * step(0.34 - lenY, d.y);
-        float inStem = (1.0 - smoothstep(0.7, 1.7, abs(fc.x - xWob))) * bandD * cover;
-        cl = mix(cl, brightTop * 0.95, inStem * 0.78);
-        cover = max(cover, inStem * 0.65);
-      }
-    }
-
-    float edge = cover * (1.0 - cover) * 4.0;
-    float facing = pow(max(dot(d, sd), 0.0), 3.0);
-    cl += uSkySunCol * edge * facing * (0.45 + uSunGlow * 1.1);
-    float sphereWrap = mix(smoothstep(-0.18, 0.08, d.y), 0.78, clamp(uWorldCurve * 1.25, 0.0, 1.0));
-    float amt = clamp(cover * sphereWrap * clamp(uCloud, 0.0, 1.6) * alphaMul * 0.72, 0.0, 0.94);
-    col = mix(col, cl, amt);
+  // Stars sit behind volumetric clouds so clouds naturally occlude starlight
+  float starFloor = mix(-0.02, -1.02, clamp(uWorldCurve * 1.3, 0.0, 1.0));
+  if (uStars > 0.002 && d.y > starFloor) {
+    vec2 sph = vec2(atan(d.z, d.x), asin(clamp(d.y, -1.0, 1.0)));
+    vec2 g = sph * 42.0;
+    vec2 id = floor(g);
+    vec2 f = fract(g) - 0.5;
+    float sh = hash12(id + 0.5);
+    float star = step(0.982, sh) * (1.0 - smoothstep(0.0, 0.1, length(f)));
+    star *= 0.65 + 0.35 * sin(uTime * 2.4 + sh * 60.0);
+    float starVis = mix(smoothstep(-0.02, 0.12, d.y), 1.0, clamp(uWorldCurve * 1.2, 0.0, 1.0));
+    col += vec3(0.82, 0.88, 1.0) * star * uStars * starVis;
   }
 
-  // moon: soft disc with crater speckle, phase shadow and glow halo
+  // Moon also sits behind volumetric clouds so cloud banks drift naturally across the moon
   if (uMoonGlow > 0.003) {
     vec3 md = normalize(uMoonDir);
     vec3 mright = normalize(cross(md, vec3(0.0, 1.0, 0.0)) + vec3(1e-4));
@@ -337,22 +321,107 @@ void main() {
     float mBody = mDisc * (1.0 - shadow * 0.94);
     float crater = 0.78 + 0.22 * vnoise(muv * 95.0 + 3.7);
     col += vec3(0.86, 0.9, 1.0) * mBody * crater * (1.15 + uMoonGlow * 1.3);
-    float halo = 1.0 - smoothstep(moonR, moonR * 3.4, mAng);
-    col += vec3(0.62, 0.72, 1.0) * halo * uMoonGlow * 0.34;
+    float haloM = 1.0 - smoothstep(moonR, moonR * 3.4, mAng);
+    col += vec3(0.62, 0.72, 1.0) * haloM * uMoonGlow * 0.34;
   }
 
-  // stars wrap all 360 deg around the orbital sky as world curves into a sphere
-  float starFloor = mix(-0.02, -1.02, clamp(uWorldCurve * 1.3, 0.0, 1.0));
-  if (uStars > 0.002 && d.y > starFloor) {
-    vec2 sph = vec2(atan(d.z, d.x), asin(clamp(d.y, -1.0, 1.0)));
-    vec2 g = sph * 42.0;
-    vec2 id = floor(g);
-    vec2 f = fract(g) - 0.5;
-    float sh = hash12(id + 0.5);
-    float star = step(0.982, sh) * (1.0 - smoothstep(0.0, 0.1, length(f)));
-    star *= 0.65 + 0.35 * sin(uTime * 2.4 + sh * 60.0);
-    float starVis = mix(smoothstep(-0.02, 0.12, d.y), 1.0, clamp(uWorldCurve * 1.2, 0.0, 1.0));
-    col += vec3(0.82, 0.88, 1.0) * star * uStars * starVis;
+  // True 3D volumetric raymarch through concentric spherical cloud shell
+  float minElev = mix(-0.14, -1.02, clamp(uWorldCurve * 1.4, 0.0, 1.0));
+  if (uCloud > 0.01 && d.y > minElev) {
+    float curveBlend = smoothstep(0.02, 0.35, uWorldCurve);
+    float globeR = max(uPlanetR, 1200.0) / max(uWorldCurve, 0.04);
+    float atmoR = mix(15500.0, globeR, curveBlend);
+    // In flat mode, anchor horizontal coordinates softly so flying through the world shifts clouds with real parallax!
+    vec3 sphereCenter = mix(
+      vec3(cameraPosition.x * 0.65, -atmoR, cameraPosition.z * 0.65),
+      vec3(0.0, -atmoR, 0.0),
+      curveBlend
+    );
+    vec3 oc = cameraPosition - sphereCenter;
+    float rCam = length(oc);
+    float rBase = atmoR + 620.0;
+    float rTop = atmoR + 1660.0;
+    float shellThick = rTop - rBase;
+
+    vec2 hit0 = intersectSphereShell(oc, d, rBase);
+    vec2 hit1 = intersectSphereShell(oc, d, rTop);
+    float tStart = 0.0;
+    float tEnd = -1.0;
+
+    if (rCam < rBase) {
+      tStart = max(0.0, hit0.y);
+      tEnd = hit1.y;
+    } else if (rCam <= rTop) {
+      tStart = 0.0;
+      tEnd = (hit0.x > 0.0) ? min(hit0.x, hit1.y) : hit1.y;
+    } else if (hit1.x > 0.0) {
+      tStart = hit1.x;
+      tEnd = (hit0.x > 0.0) ? hit0.x : hit1.y;
+    }
+
+    float maxMarch = mix(13500.0, max(atmoR * 2.8, 9000.0), curveBlend);
+    tEnd = min(tEnd, tStart + maxMarch);
+
+    if (tEnd > tStart + 8.0) {
+      vec2 fc = gl_FragCoord.xy;
+      float jit = grainHash(fc + fract(uTime * 7.31) * 113.0);
+      float span = tEnd - tStart;
+      float dtStep = span / 9.0;
+      float covK = clamp(uCloud, 0.0, 1.6);
+
+      float Tr = 1.0;
+      vec3 accum = vec3(0.0);
+      float avgLit = 0.0;
+      float wSum = 0.0;
+      vec3 repP = cameraPosition + d * (tStart + span * 0.45);
+
+      vec3 darkBelly = mix(uCloudCol * 0.34, uHor * 0.48, 0.28);
+      vec3 brightTop = mix(uCloudCol + uSkySunCol * 0.92, vec3(0.97, 0.96, 0.93), 0.30);
+      float cosTheta = dot(d, sd);
+      float hgPhase = 0.25 + 0.95 * pow(max(cosTheta, 0.0), 6.0) * (0.4 + uSunGlow * 0.85);
+
+      for (int i = 0; i < 9; i++) {
+        if (Tr < 0.03) break;
+        float tCur = tStart + (float(i) + jit) * dtStep;
+        vec3 p = cameraPosition + d * tCur;
+        float h01 = clamp((length(p - sphereCenter) - rBase) / shellThick, 0.0, 1.0);
+        float dens = skyCumulusDensity(p, h01, covK, uTime);
+        if (dens > 0.004) {
+          vec3 pSun = p + sd * 145.0;
+          float hSun = clamp((length(pSun - sphereCenter) - rBase) / shellThick, 0.0, 1.0);
+          float shDens = skyCumulusDensity(pSun, hSun, covK, uTime);
+          float sunTrans = exp(-shDens * 2.6);
+          float powder = 1.0 - exp(-dens * 3.4);
+          float lit = clamp(sunTrans * (0.52 + 0.55 * h01) + 0.10 + 0.16 * h01, 0.0, 1.25);
+          vec3 stepCol = mix(darkBelly, brightTop, clamp(lit, 0.0, 1.0));
+          stepCol += uSkySunCol * sunTrans * (0.35 + 0.65 * powder) * hgPhase * 0.55;
+
+          float sig = dens * (0.0026 + covK * 0.0012);
+          float stepT = exp(-sig * dtStep);
+          float w = Tr * (1.0 - stepT);
+          accum += w * stepCol;
+          avgLit += w * lit;
+          wSum += w;
+          Tr *= stepT;
+        }
+      }
+
+      float cloudAlpha = 1.0 - Tr;
+      if (cloudAlpha > 0.004) {
+        vec3 cRgb = accum / max(wSum, 1e-4);
+        float meanLit = avgLit / max(wSum, 1e-4);
+        if (uCloudStyle > 0.5) {
+          vec4 plate = evalStormyPlate(meanLit, uCloudStyle, fc, repP.xz * 0.0012, darkBelly, brightTop, uTime);
+          cRgb = mix(cRgb, plate.rgb, 0.85);
+          cloudAlpha *= plate.a;
+        }
+        // Horizon atmospheric perspective softly blends very distant cloud rims into horizon haze
+        float distFade = mix(smoothstep(-0.10, 0.07, d.y), 1.0, clamp(uWorldCurve * 1.3, 0.0, 1.0));
+        float farAtmo = smoothstep(3500.0, 14500.0, tStart) * (1.0 - curveBlend * 0.65);
+        cRgb = mix(cRgb, mix(uHor, uSkySunCol, pow(s, 5.0) * 0.35), farAtmo * 0.58);
+        col = mix(col, cRgb, clamp(cloudAlpha * distFade, 0.0, 0.96));
+      }
+    }
   }
 
   // horizon haze band — softens in orbital sphere mode so space stays crisp
@@ -367,42 +436,43 @@ void main() {
 }
 `;
 
-/* ---------------------------------------------------- 3D cloud geometry */
-// Real 3D scene cloud shells & sculpted cumulus volumes that wrap around the
-// flat or spherical world so you can fly under, through and above the clouds.
+/* ---------------------------------------------------- 3D cloud volumes */
+// Raymarched 3D volumetric cumulus banks inside BackSide bounding boxes.
+// Density falls strictly to 0.0 inside local radius 0.88 (well inside [-1, 1]^3),
+// guaranteeing ZERO polygon edges or silhouettes from outside or inside!
 
 export const CLOUD_VERT = /* glsl */ `
+attribute vec3 aCenter;
+attribute vec3 aScale;
 attribute float aSeed;
-uniform float uTime;
-varying vec3 vFlat;
 varying vec3 vWorld;
-varying vec3 vN;
+varying vec3 vCenterW;
+varying vec3 vAxisX;
+varying vec3 vAxisY;
+varying vec3 vAxisZ;
+varying vec3 vHalfExt;
 varying float vSeed;
-varying float vRimMask;
-${GLSL_NOISE}
 ${GLSL_CURVE}
 void main() {
   vSeed = aSeed;
-  vec4 wp = vec4(position, 1.0);
-  #ifdef USE_INSTANCING
-    wp = instanceMatrix * wp;
-  #endif
-  wp = modelMatrix * wp;
-  // Gentle 3D billow displacement so cloud shells & cumulus puffs breathe in 3D
-  float billow = (vnoise3(wp.xyz * 0.0022 + vec3(uTime * 0.018, 0.0, uTime * 0.011) + aSeed * 13.0) - 0.5) * 46.0;
-  wp.y += billow;
-  vFlat = wp.xyz;
-  vec3 rawN = normal;
-  #ifdef USE_INSTANCING
-    rawN = mat3(instanceMatrix) * rawN;
-  #endif
-  rawN = normalize(mat3(modelMatrix) * rawN);
-  vN = bendNormal(wp.xz, rawN);
-  // Radial fade for dome shells (aSeed < 0 marks shell vertices with radial t in -aSeed)
-  vRimMask = aSeed < 0.0 ? clamp(1.0 - smoothstep(0.58, 0.98, -aSeed), 0.0, 1.0) : 1.0;
-  wp.xyz = bendWorld(wp.xyz);
-  vWorld = wp.xyz;
-  gl_Position = projectionMatrix * viewMatrix * wp;
+  vHalfExt = max(aScale * 0.5, vec3(1.0));
+  vCenterW = bendWorld(aCenter);
+  vec3 upAxis = normalize(bendNormal(aCenter.xz, vec3(0.0, 1.0, 0.0)));
+  float yaw = aSeed * 6.2831853;
+  vec3 refH = vec3(cos(yaw), 0.0, sin(yaw));
+  vec3 axX = cross(upAxis, refH);
+  if (dot(axX, axX) < 1e-4) axX = cross(upAxis, vec3(1.0, 0.0, 0.0));
+  axX = normalize(axX);
+  vec3 axZ = normalize(cross(axX, upAxis));
+  vAxisX = axX;
+  vAxisY = upAxis;
+  vAxisZ = axZ;
+
+  // position is unit cube [-0.5, 0.5]^3 => local [-1, 1]^3 scaled by vHalfExt
+  vec3 loc = position * 2.0;
+  vec3 wp = vCenterW + axX * (loc.x * vHalfExt.x) + upAxis * (loc.y * vHalfExt.y) + axZ * (loc.z * vHalfExt.z);
+  vWorld = wp;
+  gl_Position = projectionMatrix * viewMatrix * vec4(wp, 1.0);
 }
 `;
 
@@ -418,53 +488,121 @@ uniform float uCloudStyle;
 uniform float uSunGlow;
 uniform float uTime;
 uniform float uSat;
-varying vec3 vFlat;
 varying vec3 vWorld;
-varying vec3 vN;
+varying vec3 vCenterW;
+varying vec3 vAxisX;
+varying vec3 vAxisY;
+varying vec3 vAxisZ;
+varying vec3 vHalfExt;
 varying float vSeed;
-varying float vRimMask;
 ${GLSL_NOISE}
 ${GLSL_UTIL}
 ${GLSL_STORMY_PLATE}
+
+vec3 worldToCloudLocal(vec3 p) {
+  vec3 d = p - vCenterW;
+  return vec3(
+    dot(d, vAxisX) / vHalfExt.x,
+    dot(d, vAxisY) / vHalfExt.y,
+    dot(d, vAxisZ) / vHalfExt.z
+  );
+}
+
+float puffVolDensity(vec3 pL, float covK, float seed, float t) {
+  // Ellipsoidal radial falloff strictly reaches 0.0 at r = 0.88 (< 1.0 cube wall!)
+  vec3 sq = vec3(pL.x, pL.y * 1.12 - 0.06, pL.z);
+  float r = length(sq);
+  if (r >= 0.88) return 0.0;
+  float env = (1.0 - smoothstep(0.22, 0.87, r)) * smoothstep(-0.78, -0.20, pL.y);
+  vec3 drift = vec3(t * 0.045, 0.0, t * 0.022) + seed * 17.3;
+  float n1 = fbm3(pL * 2.15 + drift);
+  float n2 = fbm3(pL * 4.6 - drift * 1.4);
+  float raw = (n1 * 0.68 + n2 * 0.32) * env;
+  float cut = clamp(0.26 - covK * 0.09, 0.08, 0.30);
+  return clamp((raw - cut) * 3.1, 0.0, 1.0) * env;
+}
+
 void main() {
-  if (uCloud < 0.02) discard;
+  if (uCloud < 0.05) discard;
+  vec3 rayVec = vWorld - cameraPosition;
+  float distToBack = length(rayVec);
+  if (distToBack < 1e-3) discard;
+  vec3 rdW = rayVec / distToBack;
+
+  // Transform camera ray into normalized ellipsoid space where unit sphere r<=0.88 is inside [-1,1]^3
+  vec3 roL = worldToCloudLocal(cameraPosition);
+  vec3 backL = worldToCloudLocal(vWorld);
+  vec3 segL = backL - roL;
+  float segLenL = length(segL);
+  if (segLenL < 1e-4) discard;
+  vec3 rdL = segL / segLenL;
+
+  float b = dot(roL, rdL);
+  float c = dot(roL, roL) - 0.7744; // 0.88^2
+  float disc = b * b - c;
+  if (disc <= 0.0) discard;
+  float sqD = sqrt(disc);
+  float t0 = max(0.0, -b - sqD);
+  float t1 = min(segLenL, -b + sqD);
+  if (t1 <= t0 + 0.01) discard;
+
   vec3 sd = normalize(uSunDir);
-  vec3 n = normalize(vN);
-  vec3 vdir = normalize(vWorld - cameraPosition);
+  vec3 sdL = normalize(vec3(
+    dot(sd, vAxisX) / vHalfExt.x,
+    dot(sd, vAxisY) / vHalfExt.y,
+    dot(sd, vAxisZ) / vHalfExt.z
+  ));
 
-  // 3D volumetric cloud density in flat-world canopy coordinates (drifts with wind)
-  vec3 q = vFlat * vec3(0.00095, 0.0024, 0.00095) + vec3(uTime * 0.014, 0.0, uTime * 0.006);
-  float dens = cloudField3(q, uTime);
-  float isPuff = step(0.0, vSeed);
-  float iso = mix(clamp(0.60 - uCloud * 0.25, 0.20, 0.62), clamp(0.44 - uCloud * 0.16, 0.16, 0.50), isPuff);
-  float cover = smoothstep(iso - 0.07, iso + 0.22, dens);
-  // Sculpted cumulus puffs soften smoothly at grazing silhouette angles
-  float puffSil = isPuff > 0.5 ? pow(abs(dot(n, -vdir)), 0.75) : 1.0;
-  float alphaBase = cover * vRimMask * puffSil * clamp(uCloud, 0.0, 1.5) * (isPuff > 0.5 ? 0.68 : 0.46);
-  // Camera fly-through proximity fade so flying right through a cloud shell feels misty, never a hard plane
-  float camDist = length(vWorld - cameraPosition);
-  alphaBase *= smoothstep(18.0, 130.0, camDist);
-  if (alphaBase < 0.006) discard;
+  float jit = grainHash(gl_FragCoord.xy + fract(uTime * 9.17) * 83.0);
+  float dtL = (t1 - t0) / 7.0;
+  float covK = clamp(uCloud, 0.0, 1.6);
 
-  float probe = cloudField3(q + sd * 0.35, uTime);
-  float sh = smoothstep(iso - 0.05, iso + 0.22, probe);
-  float topLight = clamp(dot(n, sd) * 0.45 + 0.55, 0.0, 1.0);
-  float lit = clamp((1.0 - 0.84 * sh) * (0.55 + 0.52 * topLight) + 0.08, 0.0, 1.25);
+  float Tr = 1.0;
+  vec3 accum = vec3(0.0);
+  float avgLit = 0.0;
+  float wSum = 0.0;
 
   vec3 darkBelly = uCloudCol * 0.38;
-  vec3 brightTop = mix(uCloudCol + uSkySunCol * 0.95, vec3(0.97, 0.96, 0.93), 0.32);
-  vec4 plate = evalStormyPlate(lit, uCloudStyle, gl_FragCoord.xy, vFlat.xz * 0.002, darkBelly, brightTop, uTime);
-  vec3 cl = plate.rgb;
+  vec3 brightTop = mix(uCloudCol + uSkySunCol * 0.95, vec3(0.97, 0.96, 0.93), 0.30);
+  float fwd = pow(max(dot(rdW, sd), 0.0), 5.0);
 
-  // Forward-scattered silver lining around the sun
-  float fwd = pow(max(dot(vdir, sd), 0.0), 5.0);
-  float edge = cover * (1.0 - cover) * 4.0;
-  cl += uSkySunCol * (edge * 0.65 + 0.22) * fwd * (0.45 + uSunGlow * 1.05);
+  for (int i = 0; i < 7; i++) {
+    if (Tr < 0.04) break;
+    float tCur = t0 + (float(i) + jit) * dtL;
+    vec3 pL = roL + rdL * tCur;
+    float dens = puffVolDensity(pL, covK, vSeed, uTime);
+    if (dens > 0.005) {
+      float shD = puffVolDensity(pL + sdL * 0.32, covK, vSeed, uTime);
+      float sunT = exp(-shD * 2.4);
+      float hUp = clamp(pL.y * 0.5 + 0.5, 0.0, 1.0);
+      float lit = clamp(sunT * (0.55 + 0.52 * hUp) + 0.12, 0.0, 1.22);
+      vec3 sc = mix(darkBelly, brightTop, clamp(lit, 0.0, 1.0));
+      sc += uSkySunCol * sunT * fwd * (0.35 + uSunGlow * 0.75);
 
-  vec3 fogCol = mix(uFogCol, uSunFogCol, pow(max(dot(vdir, sd), 0.0), 6.0) * uHazeSun);
-  float farMix = smoothstep(4500.0, 13000.0, camDist) * 0.55;
+      float stepT = exp(-dens * dtL * (1.85 + covK * 0.95));
+      float w = Tr * (1.0 - stepT);
+      accum += w * sc;
+      avgLit += w * lit;
+      wSum += w;
+      Tr *= stepT;
+    }
+  }
+
+  float alpha = (1.0 - Tr) * 0.78;
+  if (alpha < 0.008) discard;
+
+  vec3 cl = accum / max(wSum, 1e-4);
+  if (uCloudStyle > 0.5) {
+    vec4 plate = evalStormyPlate(avgLit / max(wSum, 1e-4), uCloudStyle, gl_FragCoord.xy, vCenterW.xz * 0.001, darkBelly, brightTop, uTime);
+    cl = mix(cl, plate.rgb, 0.80);
+    alpha *= plate.a;
+  }
+
+  float camDist = length(vCenterW - cameraPosition);
+  vec3 fogCol = mix(uFogCol, uSunFogCol, pow(max(dot(rdW, sd), 0.0), 6.0) * uHazeSun);
+  float farMix = smoothstep(3200.0, 11500.0, camDist) * 0.62;
   cl = saturate3(mix(cl, fogCol, farMix), uSat);
-  gl_FragColor = vec4(cl, clamp(alphaBase * plate.a, 0.0, 0.88));
+  gl_FragColor = vec4(cl, clamp(alpha, 0.0, 0.82));
 }
 `;
 
@@ -778,24 +916,44 @@ void main() {
   else { uvm = vLocal.xy * vDims.xy; face = 2.0; }
 
   if ((face < 0.5 || face > 1.5) && vKind < 1.5) {
-    if (isMedia > 0.5 && wy > 5.5) {
-      vec2 scrUv = vec2(uvm.x / max(vDims.x, 18.0) + 0.5, wy / 26.0);
-      vec2 panelId = floor(vec2(scrUv.x * 2.0, scrUv.y));
-      vec2 pf = fract(vec2(scrUv.x * 2.0, scrUv.y));
-      float frame = step(0.05, pf.x) * step(pf.x, 0.95) * step(0.07, pf.y) * step(pf.y, 0.93);
-      float pHash = hash12(panelId + vSeed * 43.0);
-      float rate = (0.18 + 0.35 * pHash) * (pHash > 0.5 ? 1.0 : -1.0);
-      vec2 subG = vec2(pf.x * (4.0 + floor(pHash * 4.0)), pf.y * 4.0 - uTime * rate);
-      float cellH = hash12(floor(subG) + panelId * 7.1 + vSeed * 19.0);
-      float bar = step(0.32, cellH) * (0.55 + 0.45 * sin(uTime * 2.2 + pHash * 30.0));
-      float wave = 0.5 + 0.5 * sin(pf.x * 9.0 - pf.y * 6.0 - uTime * 2.6 + pHash * 12.0);
-      float ticker = step(pf.y, 0.22) * step(0.35, fract(pf.x * 14.0 - uTime * 1.4));
-      vec3 adCol = mix(uBillA, uBillB, step(0.48, fract(pHash * 5.7 + wave * 0.45)));
-      adCol = mix(adCol, (uBillA + uBillB) * 0.85 + vec3(0.25), ticker * 0.7);
-      adCol = styleBillColor(adCol);
-      float scan = 0.80 + 0.20 * sin(wy * 5.5 + uTime * 8.0);
-      float emK = uBillK * max(uLightK, 0.32) * (0.75 + 0.55 * bar + 0.35 * wave + 0.5 * ticker);
-      col = mix(col * 0.35, saturate3(adCol, uSat) * emK * scan, frame);
+    if (isMedia > 0.5 && wy > 14.0) {
+      // Selective architectural media facade: mostly dark glass/mullions with 1-2 framed LED screens
+      float faceHash = hash12(vec2(face * 13.7, floor(vSeed * 89.0)));
+      vec2 scrUv = vec2(uvm.x / max(vDims.x, 22.0) + 0.5, (wy - 14.0) / 38.0);
+      vec2 panelId = floor(vec2(scrUv.x * 1.5, scrUv.y));
+      vec2 pf = fract(vec2(scrUv.x * 1.5, scrUv.y));
+      float pHash = hash12(panelId * 3.7 + faceHash * 19.0 + vSeed * 43.0);
+      // Only ~32% of facade zones carry an inset LED screen; the rest stays dark structural glass!
+      float activeScreen = step(0.68, pHash) * step(0.10, pf.x) * step(pf.x, 0.90) * step(0.12, pf.y) * step(pf.y, 0.88);
+      if (activeScreen > 0.5) {
+        vec2 uvS = (pf - vec2(0.10, 0.12)) / vec2(0.80, 0.76);
+        float mode = fract(pHash * 7.31);
+        float motif = 0.0;
+        if (mode < 0.34) {
+          float sunR = length((uvS - vec2(0.5, 0.56)) * vec2(1.3, 1.0));
+          motif = (1.0 - smoothstep(0.22, 0.27, sunR)) * step(0.18, fract(uvS.y * 9.0));
+        } else if (mode < 0.68) {
+          float diag = smoothstep(0.08, 0.0, abs(uvS.x * 0.8 + uvS.y * 0.6 - fract(uTime * 0.12 + pHash) * 1.4));
+          float chyron = step(uvS.y, 0.18) * step(0.45, fract(uvS.x * 12.0 - uTime * 0.9));
+          motif = clamp(diag * 0.9 + chyron * 0.8, 0.0, 1.0);
+        } else {
+          float wave = smoothstep(0.12, 0.0, abs(uvS.y - 0.5 - 0.24 * sin(uvS.x * 6.28 + uTime * 1.3 + pHash * 9.0)));
+          motif = wave;
+        }
+        vec3 adBg = mix(base * 0.35, styleBillColor(uBillB) * 0.22, 0.55);
+        vec3 adFg = styleBillColor(mix(uBillA, uBillB, fract(pHash * 4.1)));
+        vec3 screenRgb = mix(adBg, saturate3(adFg, uSat), motif);
+        float scan = 0.86 + 0.14 * sin(wy * 6.0 + uTime * 6.0);
+        float emK = clamp(uBillK * max(uLightK, 0.28), 0.0, 1.35) * 0.78;
+        col = mix(col, screenRgb * (0.45 + emK) * scan, 0.92);
+      } else {
+        // Dark architectural office windows on the non-screen structural bays
+        vec2 wg = uvm / vec2(3.6, 3.8);
+        vec2 wf = fract(wg);
+        float winM = step(0.22, wf.x) * step(wf.x, 0.78) * step(0.24, wf.y) * step(wf.y, 0.76);
+        float wr = hash12(floor(wg) + vSeed * 53.0);
+        col += saturate3(uWinA, uSat) * winM * step(wr, uWinDensity * 0.32) * uWinGlow * 0.55;
+      }
     } else if (vDims.y < 13.5 && isStreetPod < 0.5) {
       // Suburban residential house / cottage windows: warm domestic lights & porch door
       vec2 hg = uvm / vec2(4.2, 3.2);
@@ -1061,6 +1219,93 @@ void main() {
 }
 `;
 
+/* ------------------------------------------- GPU multi-strata swarm */
+// Evaluates smooth 3D quadratic Bezier + coordinated banking + portal taper
+// directly on the GPU so 18,000+ vehicles across 6 vertical strata cost 0ms CPU!
+
+export const SWARM_VERT = /* glsl */ `
+attribute vec4 aCurveA; // x1, z1, yBase, rate
+attribute vec4 aCurveB; // cx, cz, yArch, phase
+attribute vec4 aCurveC; // x2, z2, scale, closedLoop
+attribute vec3 aColor;
+uniform float uTime;
+uniform float uHeightScale;
+varying vec3 vColor;
+varying vec3 vLocalP;
+varying float vFade;
+${GLSL_CURVE}
+
+vec3 evalSwarmPos(float tt) {
+  float u = 1.0 - tt;
+  float px = u * u * aCurveA.x + 2.0 * u * tt * aCurveB.x + tt * tt * aCurveC.x;
+  float pz = u * u * aCurveA.y + 2.0 * u * tt * aCurveB.y + tt * tt * aCurveC.y;
+  float arch = sin(tt * 3.14159265) * aCurveB.z;
+  float bob = sin(uTime * 1.7 + aCurveB.w * 25.0) * 1.4;
+  float py = (aCurveA.z + arch + bob) * uHeightScale;
+  return vec3(px, py, pz);
+}
+
+void main() {
+  vColor = aColor;
+  vLocalP = position;
+  float rawT = aCurveB.w + uTime * aCurveA.w;
+  float tt = fract(rawT);
+  // Smooth fade-in/out at open corridor portals so vehicles never pop at endpoints
+  float portal = aCurveC.w > 0.5 ? 1.0 : smoothstep(0.0, 0.045, tt) * smoothstep(1.0, 0.955, tt);
+  vFade = portal;
+
+  float eps = 0.008;
+  float tPrev = aCurveC.w > 0.5 ? fract(tt - eps) : max(0.0, tt - eps);
+  float tNext = aCurveC.w > 0.5 ? fract(tt + eps) : min(1.0, tt + eps);
+  vec3 p0 = evalSwarmPos(tPrev);
+  vec3 pC = evalSwarmPos(tt);
+  vec3 p1 = evalSwarmPos(tNext);
+
+  vec3 vel = p1 - p0;
+  float vLen = length(vel);
+  vec3 fwd = vLen > 1e-4 ? vel / vLen : vec3(1.0, 0.0, 0.0);
+  vec3 upRef = vec3(0.0, 1.0, 0.0);
+  vec3 right = normalize(cross(upRef, fwd) + vec3(1e-5, 0.0, 0.0));
+  vec3 up = normalize(cross(fwd, right));
+
+  // Gentle coordinated banking into curve
+  vec3 turnVec = (p1 - pC) - (pC - p0);
+  float bankAng = clamp(dot(turnVec, right) * 0.12, -0.42, 0.42);
+  float cb = cos(bankAng);
+  float sb = sin(bankAng);
+  vec3 bRight = right * cb + up * sb;
+  vec3 bUp = -right * sb + up * cb;
+
+  float sc = aCurveC.z * portal;
+  // Sleek fusiform craft + trailing light wake (+X is forward)
+  vec3 hull = vec3(position.x * 11.5, position.y * 1.45, position.z * 3.4) * sc;
+  vec3 wp = pC + fwd * hull.x + bUp * hull.y + bRight * hull.z;
+  wp = bendWorld(wp);
+  gl_Position = projectionMatrix * viewMatrix * vec4(wp, 1.0);
+}
+`;
+
+export const SWARM_FRAG = /* glsl */ `
+uniform float uLightK;
+varying vec3 vColor;
+varying vec3 vLocalP;
+varying float vFade;
+void main() {
+  if (vFade < 0.02) discard;
+  // Dark metallic nose/hull with bright forward headlights (+x) and look-tinted thruster tail (-x)
+  float nose = smoothstep(0.18, 0.48, vLocalP.x);
+  float tail = smoothstep(-0.12, -0.48, vLocalP.x);
+  float sidePod = smoothstep(0.18, 0.45, abs(vLocalP.z));
+  vec3 hullCol = vec3(0.08, 0.10, 0.15) + vColor * 0.18;
+  vec3 headCol = mix(vec3(1.0, 0.95, 0.84), vColor, 0.25) * (0.85 + uLightK * 0.95);
+  vec3 tailCol = vColor * (0.95 + uLightK * 1.15);
+  vec3 col = hullCol;
+  col = mix(col, headCol, nose * (0.55 + 0.45 * sidePod));
+  col = mix(col, tailCol, tail * (0.65 + 0.35 * sidePod));
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
 /* ---------------------------------------------------------- searchlights */
 
 export const BEAM_VERT = /* glsl */ `
@@ -1220,25 +1465,53 @@ ${GLSL_NOISE}
 ${GLSL_UTIL}
 
 void main() {
-  float scroll = uTime * (0.12 + vSeed * 0.22);
-  vec2 g = vec2(vUv.x * 5.0, vUv.y * 3.0 - scroll);
-  float slab = hash12(floor(g) + vSeed * 31.0);
-  float lit = step(0.34, slab) * (0.55 + 0.45 * hash12(floor(g) * 1.7 + 2.0));
-  vec3 col = mix(uBillA, uBillB, step(0.58, fract(slab * 7.31)));
-  col *= lit;
+  // Dark architectural bezel around every billboard so panels never fuse into a solid blob
+  float bezel = smoothstep(0.0, 0.045, vUv.x) * smoothstep(1.0, 0.955, vUv.x)
+              * smoothstep(0.0, 0.06, vUv.y) * smoothstep(1.0, 0.94, vUv.y);
+  float layoutId = fract(vSeed * 13.37);
+  vec3 darkBg = mix(uBillB, uBillA, 0.25) * 0.09;
+  vec3 col = darkBg;
 
-  float frame = max(abs(vUv.x - 0.5), abs(vUv.y - 0.5)) * 2.0;
-  col += uBillA * smoothstep(0.86, 1.0, frame) * 1.05;
+  if (layoutId < 0.22) {
+    // 1. Cyber-sun horizon disc + segmented scan bands
+    vec2 dc = (vUv - vec2(0.5, 0.54)) * vec2(1.45, 1.0);
+    float sunDisc = (1.0 - smoothstep(0.24, 0.27, length(dc))) * step(0.22, fract(vUv.y * 11.0));
+    float horLine = smoothstep(0.03, 0.0, abs(vUv.y - 0.28));
+    col = mix(darkBg, mix(uBillB, uBillA, clamp(vUv.y * 1.2, 0.0, 1.0)), clamp(sunDisc + horLine * 0.8, 0.0, 1.0));
+  } else if (layoutId < 0.46) {
+    // 2. Bold diagonal slash + vertical glyph column (high negative space)
+    float slash = smoothstep(0.11, 0.01, abs((vUv.x - 0.46) * 0.85 + (vUv.y - 0.5) * 0.55));
+    float glyphCol = step(0.74, vUv.x) * step(vUv.x, 0.88) * step(0.38, fract(vUv.y * 8.0 - uTime * 0.25)) * step(0.35, hash12(vec2(floor(vUv.y * 8.0), vSeed * 31.0)));
+    col = mix(darkBg, uBillA, slash * 0.88);
+    col = mix(col, uBillB, glyphCol * 0.92);
+  } else if (layoutId < 0.70) {
+    // 3. Minimalist flowing sine wave + bottom scrolling ticker
+    float wY = 0.56 + 0.20 * sin(vUv.x * 6.283 + uTime * (0.8 + vSeed) + vSeed * 12.0);
+    float ribbon = smoothstep(0.09, 0.01, abs(vUv.y - wY));
+    float chyron = step(0.08, vUv.y) * step(vUv.y, 0.20) * step(0.42, fract(vUv.x * 14.0 - uTime * 0.65));
+    col = mix(darkBg, uBillB, ribbon * 0.9);
+    col = mix(col, uBillA, chyron * 0.85);
+  } else {
+    // 4. Asymmetric hero portrait block + crisp caption bars
+    float portrait = step(0.08, vUv.x) * step(vUv.x, 0.46) * step(0.16, vUv.y) * step(vUv.y, 0.84);
+    float ring = smoothstep(0.035, 0.0, abs(length((vUv - vec2(0.27, 0.52)) * vec2(1.4, 1.0)) - 0.14));
+    float copyBars = step(0.54, vUv.x) * step(vUv.x, 0.90) * step(0.48, fract(vUv.y * 5.0)) * step(0.22, vUv.y) * step(vUv.y, 0.78);
+    col = mix(darkBg, uBillB * 0.55, portrait * 0.65);
+    col = mix(col, uBillA, clamp(ring + copyBars * 0.82, 0.0, 1.0));
+  }
+
+  // Thin inner neon trim line
+  float innerRim = smoothstep(0.025, 0.0, abs(max(abs(vUv.x - 0.5), abs(vUv.y - 0.5)) - 0.45));
+  col += mix(uBillA, uBillB, 0.5) * innerRim * 0.35;
 
   float lum = dot(col, vec3(0.299, 0.587, 0.114));
-  vec3 mono = mix(uBillB * 0.35, uBillA * 1.12, clamp(lum, 0.0, 1.3));
+  vec3 mono = mix(uBillB * 0.30, uBillA * 0.95, clamp(lum, 0.0, 1.2));
   col = mix(col, mono, clamp(uBillMono, 0.0, 1.0));
   col = saturate3(col, uSat * (1.0 - 0.85 * clamp(uBillMono, 0.0, 1.0)));
 
-  col *= 0.82 + 0.18 * sin(vUv.y * 90.0 + uTime * 3.0);
-  float vig = 1.0 - smoothstep(0.55, 1.02, length(vUv - 0.5) * 1.6);
-  float k = uBillK * max(uLightK, 0.25) * (0.72 + 0.28 * sin(uTime * 1.7 + vSeed * 20.0));
-  gl_FragColor = vec4(col * (0.32 + k) * vig, 1.0);
+  col *= 0.88 + 0.12 * sin(vUv.y * 85.0 + uTime * 2.5);
+  float k = clamp(uBillK * max(uLightK, 0.25), 0.0, 1.25) * (0.68 + 0.16 * sin(uTime * 1.3 + vSeed * 20.0));
+  gl_FragColor = vec4(col * (0.28 + k * 0.72) * bezel, 1.0);
 }
 `;
 
@@ -1346,27 +1619,26 @@ ${GLSL_UTIL}
 
 void main() {
   vec2 cUv = vUv - 0.5;
-  float r = length(cUv * vec2(1.4, 1.0));
-  float rings = smoothstep(0.05, 0.0, abs(fract(r * 5.0 - uTime * 0.32 + vSeed * 4.0) - 0.5));
-  float band = vnoise(vec2(vUv.y * 6.5 - uTime * 0.38, vSeed * 20.0 + uTime * 0.09));
-  float rows = step(0.28, fract(vUv.y * 15.0 - uTime * 0.24 + band));
-  vec2 g = vec2(vUv.x * 7.0, vUv.y * 5.0 - uTime * 0.22);
+  float r = length(cUv * vec2(1.35, 1.0));
+  // Crisp thin wireframe rings & sparse telemetry lines (mostly transparent negative space!)
+  float rings = smoothstep(0.024, 0.0, abs(fract(r * 4.0 - uTime * 0.24 + vSeed * 4.0) - 0.5)) * smoothstep(0.52, 0.12, r);
+  float horiz = smoothstep(0.018, 0.0, abs(fract(vUv.y * 9.0 - uTime * 0.18 + vSeed * 3.0) - 0.5)) * 0.38;
+  vec2 g = vec2(vUv.x * 9.0, vUv.y * 6.0 - uTime * 0.18);
   float blocks = hash12(floor(g) + vSeed * 17.0);
-  float glyphs = step(0.58, blocks) * step(0.22, fract(g.x)) * step(0.22, fract(g.y));
-  float motif = clamp(rows * (0.45 + 0.55 * band) + rings * 0.85 + glyphs * 0.75, 0.0, 1.35);
+  float glyphs = step(0.78, blocks) * step(0.28, fract(g.x)) * step(fract(g.x), 0.72) * step(0.28, fract(g.y));
+  float motif = clamp(rings * 0.95 + glyphs * 0.75 + horiz, 0.0, 1.0);
+  if (motif < 0.03) discard;
 
-  vec3 col = mix(uBillB, uBillA, clamp(band + rings * 0.45, 0.0, 1.0));
-  col = mix(col, (uBillA + uBillB) * 0.9 + vec3(0.18 * (1.0 - uBillMono)), glyphs * 0.65);
+  vec3 col = mix(uBillB, uBillA, clamp(rings * 0.65 + fract(vSeed * 5.3) * 0.45, 0.0, 1.0));
   float lum = dot(col, vec3(0.299, 0.587, 0.114));
-  vec3 mono = mix(uBillB * 0.4, uBillA * 1.15, clamp(lum, 0.0, 1.3));
+  vec3 mono = mix(uBillB * 0.4, uBillA * 1.05, clamp(lum, 0.0, 1.2));
   col = mix(col, mono, clamp(uBillMono, 0.0, 1.0));
   col = saturate3(col, uSat * (1.0 - 0.85 * clamp(uBillMono, 0.0, 1.0)));
 
-  float scan = 0.58 + 0.42 * sin(vUv.y * 170.0 + uTime * 10.0);
-  float flick = 0.84 + 0.16 * sin(uTime * 3.3 + vSeed * 40.0);
-  float edge = smoothstep(0.0, 0.06, vUv.x) * smoothstep(1.0, 0.94, vUv.x)
-             * smoothstep(0.0, 0.12, vUv.y) * smoothstep(1.0, 0.88, vUv.y);
-  float a = (0.26 + 0.58 * motif) * scan * flick * edge * uBillK * max(uLightK, 0.35);
-  gl_FragColor = vec4(col * (0.7 + motif * 0.65), clamp(a, 0.0, 0.95));
+  float scan = 0.68 + 0.32 * sin(vUv.y * 160.0 + uTime * 8.0);
+  float edge = smoothstep(0.0, 0.08, vUv.x) * smoothstep(1.0, 0.92, vUv.x)
+             * smoothstep(0.0, 0.14, vUv.y) * smoothstep(1.0, 0.86, vUv.y);
+  float a = motif * scan * edge * clamp(uBillK, 0.0, 1.3) * max(uLightK, 0.3) * 0.36;
+  gl_FragColor = vec4(col * 0.85, clamp(a, 0.0, 0.38));
 }
 `;

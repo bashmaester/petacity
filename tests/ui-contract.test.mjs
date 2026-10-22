@@ -85,6 +85,7 @@ test('UI toggle sits in top corner of panel, #keys avoids panel overlap, and gly
     'b-ui', 'b-glide', 'b-collide', 'b-export',
     'b-new', 'b-link', 'b-seed-pal',
     'b-preset-save', 'b-preset-del', 'b-poi-go', 'b-bm-go', 'b-bm-add', 'b-bm-del',
+    'b-snap', 'b-vid', 'b-path-render', 'b-rec', 'b-kf-add', 'b-play', 'b-loop', 'b-path-exp', 'b-path-clear',
   ]) {
     const tag = html.match(new RegExp(`<button[^>]*id="${id}"[^>]*>`));
     assert.ok(tag, `button #${id} found`);
@@ -108,3 +109,15 @@ test('Phase-7 dropdowns, whole-config presets, place bookmarks, curvature, subur
   assert.match(html, /<select[^>]*id="sel-preset"/, 'Whole-config Presets is a <select> dropdown');
   assert.match(html, /<select[^>]*id="sel-bookmark"/, 'Bookmarks has its own <select> dropdown');
 });
+
+test('Phase-8 scene render export, camera path recorder & multi-strata traffic controls exist', () => {
+  for (const id of [
+    'traffic-label', 'sel-res', 'b-snap', 'b-vid', 'b-path-render',
+    'b-rec', 'b-kf-add', 'b-play', 'b-loop', 'b-path-exp', 'b-path-clear',
+    'sl-scrub', 'path-label',
+  ]) {
+    assert.ok(html.includes(`id="${id}"`), `#${id} present in index.html`);
+  }
+  assert.match(html, /<select[^>]*id="sel-res"/, 'Render resolution selector is a <select> dropdown');
+});
+

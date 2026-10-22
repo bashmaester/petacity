@@ -108,6 +108,20 @@ test('main.js boots end-to-end (jsdom + fake WebGL)', { skip: JSDOM ? false : 'j
   assert.ok(window.document.querySelectorAll('#sel-bookmark option').length >= 3, 'Default place bookmarks built');
   assert.ok(window.document.querySelector('#stat-towers').textContent.length > 0, 'stats filled');
   assert.ok(window.document.querySelector('#stat-boxes').textContent.length > 0, 'stats filled');
+
+  // Verify Phase-8 traffic density slider scales up to 20.0k live in the HUD
+  const slTraffic = window.document.querySelector('#sl-traffic');
+  slTraffic.value = '1';
+  slTraffic.oninput();
+  assert.equal(window.document.querySelector('#traffic-label').textContent, '20.0k', 'traffic slider reaches 20,000 vehicles');
+
+  // Verify Phase-8 camera path recorder keyframe UI enables playback & scrubber
+  const bKf = window.document.querySelector('#b-kf-add');
+  bKf.click();
+  bKf.click();
+  assert.equal(window.document.querySelector('#b-play').disabled, false, '2 keyframes enable path playback');
+  assert.equal(window.document.querySelector('#sl-scrub').disabled, false, '2 keyframes enable timeline scrubber');
+
   assert.deepEqual(pageErrors, [], 'no page errors');
   assert.deepEqual(uncaught.map((e) => e.stack || String(e)), [], 'no uncaught exceptions');
   window.close();

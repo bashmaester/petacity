@@ -7,7 +7,7 @@ import {
   SKY_VERT, SKY_FRAG, CLOUD_VERT, CLOUD_FRAG,
   GROUND_VERT, GROUND_FRAG, TOWER_VERT, TOWER_FRAG,
   LANDMARK_VERT, LANDMARK_FRAG, SOLID_CURVED_VERT, SOLID_CURVED_FRAG,
-  BEACON_VERT, BEACON_FRAG, TRAIL_VERT, TRAIL_FRAG,
+  BEACON_VERT, BEACON_FRAG, TRAIL_VERT, TRAIL_FRAG, SWARM_VERT, SWARM_FRAG,
   BEAM_VERT, BEAM_FRAG, POOL_VERT, POOL_FRAG,
   WATER_VERT, WATER_FRAG, BILL_VERT, BILL_FRAG, WEATHER_VERT, WEATHER_FRAG,
   DUST_VERT, DUST_FRAG,
@@ -92,6 +92,7 @@ export function makeUniforms() {
     uGroundRadius: { value: 13500 },
     uWorldCurve: { value: 0 },
     uPlanetR: { value: 2100 },
+    uHeightScale: { value: 1 },
     uWetness: { value: 0 },
     uLightK: { value: 1 },
     uBeaconCol: { value: col('#ff3b30') },
@@ -200,52 +201,50 @@ export function makeCurvedBasicMaterial(U, hex = '#ffffff', { vertexColors = fal
 }
 
 /**
- * Multi-layer 3D scene cloud geometry: two concentric curved 3D cloud strata
- * domes + 160 sculpted 3D cumulus volumes floating across the skyline & suburbs.
+ * True volumetric 3D scene cloud puffs: sparse BackSide bounding boxes around
+ * mid/high spires raymarched in CLOUD_FRAG with analytical ellipsoid density
+ * reaching strict 0.0 inside r <= 0.88 (zero polygonal silhouettes or disc edges;
+ * the horizon-to-horizon cloud canopy is raymarched seamlessly inside SKY_FRAG).
  */
 export function buildCloudLayers(cloudMat, seed = 4417) {
   const group = new THREE.Group();
+  const puffCount = 48;
+  const baseBox = new THREE.BoxGeometry(1, 1, 1);
+  const instGeo = new THREE.InstancedBufferGeometry();
+  instGeo.index = baseBox.index;
+  instGeo.attributes.position = baseBox.attributes.position;
+  instGeo.instanceCount = puffCount;
 
-  // Two concentric curved 3D cloud-deck shells (you can fly under, through & above)
-  for (const [alt, span] of [[440, 8800], [630, 9600]]) {
-    const shellGeo = makeGroundDiscGeometry(span, 42, 72, alt, true);
-    const shell = new THREE.Mesh(shellGeo, cloudMat);
-    shell.frustumCulled = false;
-    shell.renderOrder = 2;
-    group.add(shell);
-  }
+  const centers = new Float32Array(puffCount * 3);
+  const scales = new Float32Array(puffCount * 3);
+  const seeds = new Float32Array(puffCount);
 
-  // Sculpted 3D cumulus cloud volumes distributed across city & horizon suburbs
-  const puffCount = 160;
-  const puffGeo = new THREE.IcosahedronGeometry(1, 2);
-  const puffSeeds = new Float32Array(puffCount);
-  const puffs = new THREE.InstancedMesh(puffGeo, cloudMat, puffCount);
-  puffs.frustumCulled = false;
-  puffs.renderOrder = 3;
-  const m = new THREE.Matrix4();
-  const q = new THREE.Quaternion();
-  const p = new THREE.Vector3();
-  const s = new THREE.Vector3();
-  const yAxis = new THREE.Vector3(0, 1, 0);
   for (let i = 0; i < puffCount; i++) {
     const r01 = hash2i(i, 17, seed ^ 0x3c91);
     const a01 = hash2i(i, 29, seed ^ 0x3c91);
     const h01 = hash2i(i, 43, seed ^ 0x3c91);
-    const dist = 260 + Math.pow(r01, 0.78) * 5200;
+    const dist = 220 + Math.pow(r01, 0.78) * 4400;
     const ang = a01 * Math.PI * 2;
-    const alt = 340 + h01 * 420;
-    const w = 150 + hash2i(i, 53, seed ^ 0x3c91) * 280;
-    const h = 42 + hash2i(i, 61, seed ^ 0x3c91) * 72;
-    const d = 130 + hash2i(i, 71, seed ^ 0x3c91) * 250;
-    p.set(Math.cos(ang) * dist, alt, Math.sin(ang) * dist);
-    q.setFromAxisAngle(yAxis, hash2i(i, 83, seed ^ 0x3c91) * Math.PI * 2);
-    s.set(w, h, d);
-    m.compose(p, q, s);
-    puffs.setMatrixAt(i, m);
-    puffSeeds[i] = 0.05 + hash2i(i, 97, seed ^ 0x3c91) * 0.94;
+    const alt = 330 + h01 * 390;
+    const sx = 460 + hash2i(i, 53, seed ^ 0x3c91) * 580;
+    const sy = 155 + hash2i(i, 61, seed ^ 0x3c91) * 165;
+    const sz = 430 + hash2i(i, 71, seed ^ 0x3c91) * 540;
+    centers[i * 3 + 0] = Math.cos(ang) * dist;
+    centers[i * 3 + 1] = alt;
+    centers[i * 3 + 2] = Math.sin(ang) * dist;
+    scales[i * 3 + 0] = sx;
+    scales[i * 3 + 1] = sy;
+    scales[i * 3 + 2] = sz;
+    seeds[i] = 0.05 + hash2i(i, 97, seed ^ 0x3c91) * 0.94;
   }
-  puffs.instanceMatrix.needsUpdate = true;
-  puffGeo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(puffSeeds, 1));
+
+  instGeo.setAttribute('aCenter', new THREE.InstancedBufferAttribute(centers, 3));
+  instGeo.setAttribute('aScale', new THREE.InstancedBufferAttribute(scales, 3));
+  instGeo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seeds, 1));
+
+  const puffs = new THREE.Mesh(instGeo, cloudMat);
+  puffs.frustumCulled = false;
+  puffs.renderOrder = 3;
   group.add(puffs);
   return group;
 }
@@ -258,7 +257,7 @@ export function makeWorld(U) {
     uniforms: pick(U, [
       'uZen', 'uHor', 'uSkySunCol', 'uSunDir', 'uCloudCol', 'uStars', 'uCloud', 'uCloudStyle',
       'uHaze', 'uTime', 'uSunGlow', 'uSat', 'uMoonDir', 'uMoonSize', 'uMoonGlow', 'uMoonPhase',
-      'uFlash', 'uWorldCurve',
+      'uFlash', 'uWorldCurve', 'uPlanetR',
     ]),
     side: THREE.BackSide,
     depthWrite: false,
@@ -292,7 +291,7 @@ export function makeWorld(U) {
     ]),
     transparent: true,
     depthWrite: false,
-    side: THREE.DoubleSide,
+    side: THREE.BackSide,
   });
   const clouds = buildCloudLayers(cloudMat);
 
@@ -392,9 +391,15 @@ export function makeWorld(U) {
     side: THREE.DoubleSide,
   });
 
+  const swarmMat = new THREE.ShaderMaterial({
+    vertexShader: SWARM_VERT,
+    fragmentShader: SWARM_FRAG,
+    uniforms: pick(U, ['uTime', 'uHeightScale', 'uLightK', 'uWorldCurve', 'uPlanetR']),
+  });
+
   return {
     sky, skyMat, ground, groundMat, clouds, cloudMat,
-    towerMat, beaconMat, lampMat, trailMat, beamMat, poolMat, waterMat, billMat, holoMat,
+    towerMat, beaconMat, lampMat, trailMat, swarmMat, beamMat, poolMat, waterMat, billMat, holoMat,
   };
 }
 
@@ -1263,10 +1268,12 @@ function spinnerParts() {
  * switching lanes at endpoints, varying speed/scale/banking, never clipping
  * through buildings, and maintaining safe spacing when collision is enabled.
  */
-export function makeVehicles(city, trailMat, count = 260, collider = null) {
+export function makeVehicles(city, trailMat, count = 260, collider = null, opts = {}) {
   const lanes = city.lanes.length ? city.lanes : [{ x1: -400, z1: 0, cx: 0, cz: 0, x2: 400, z2: 0, y: 90, speed: 100, layer: 'air-low' }];
   const colCheck = collider || makeCityCollider(city);
-  const total = Math.min(count, 520);
+  const total = Math.max(1, Math.min(count, 2400));
+  const swarmMat = opts.swarmMat || null;
+  const swarmCap = swarmMat ? Math.max(0, opts.swarmCount ?? 18600) : 0;
   const group = new THREE.Group();
   const nCls = VEHICLE_CLASSES.length;
 
@@ -1304,7 +1311,7 @@ export function makeVehicles(city, trailMat, count = 260, collider = null) {
     fragmentShader: BEAM_FRAG,
     uniforms: {
       uBeamCol: { value: col('#fff3d8') },
-      uBeamK: { value: 0.55 },
+      uBeamK: { value: 0.52 },
       uTime: { value: 0 },
       uLightK: { value: 1 },
       uWorldCurve: (curveU && curveU.uWorldCurve) || { value: 0 },
@@ -1316,9 +1323,14 @@ export function makeVehicles(city, trailMat, count = 260, collider = null) {
     side: THREE.DoubleSide,
   });
 
-  const lanePool = VEHICLE_CLASSES.map((V) => {
-    const pool = lanes.filter((l) => V.layers.includes(l.layer));
-    return pool.length ? pool : lanes;
+  // Store integer indices into `lanes` so ring-loop `L.nextIdx`/`L.prevIdx` handoffs stay O(1) & exact!
+  const allIndices = lanes.map((_, idx) => idx);
+  const lanePoolIdx = VEHICLE_CLASSES.map((V) => {
+    const pool = [];
+    for (let idx = 0; idx < lanes.length; idx++) {
+      if (V.layers.includes(lanes[idx].layer)) pool.push(idx);
+    }
+    return pool.length ? pool : allIndices;
   });
 
   const bodies = [];
@@ -1369,6 +1381,104 @@ export function makeVehicles(city, trailMat, count = 260, collider = null) {
   trails.frustumCulled = false;
   group.add(trails);
 
+  // ---- Tier 2: GPU-evaluated multi-strata Bézier skyway swarm (up to 18,600+ craft, 0ms CPU loop!) ----
+  let swarmMesh = null;
+  let swarmGeo = null;
+  let swarmColors = null;
+  if (swarmCap > 0 && swarmMat) {
+    const baseHull = new THREE.BoxGeometry(1, 1, 1);
+    swarmGeo = new THREE.InstancedBufferGeometry();
+    swarmGeo.index = baseHull.index;
+    swarmGeo.attributes.position = baseHull.attributes.position;
+    swarmGeo.instanceCount = 0;
+
+    const curveA = new Float32Array(swarmCap * 4);
+    const curveB = new Float32Array(swarmCap * 4);
+    const curveC = new Float32Array(swarmCap * 4);
+    swarmColors = new Float32Array(swarmCap * 3);
+
+    // 6 distinct vertical altitude strata from street canyons (18m) up to stratospheric cruisers (920m)
+    const strataHeights = [
+      [18, 42],   // Stratum 0: avenue & low-canyon skimmers
+      [54, 118],  // Stratum 1: lower commercial skyways
+      [135, 240], // Stratum 2: mid-tower commuter rivers
+      [260, 415], // Stratum 3: upper-spire expressways
+      [440, 640], // Stratum 4: cloud-skimming cruisers
+      [665, 920], // Stratum 5: high-orbital shuttles
+    ];
+
+    const laneRoofMax = lanes.map((L) => {
+      if (!L.prof) return L.y;
+      let mx = L.y;
+      for (let sIdx = 0; sIdx < L.prof.length; sIdx++) if (L.prof[sIdx] > mx) mx = L.prof[sIdx];
+      return mx;
+    });
+
+    for (let i = 0; i < swarmCap; i++) {
+      // Interleave strata across indices so any prefix [0..swarmActive] spans ALL 6 vertical strata!
+      const sPick = h01(i, 101);
+      const stratum = sPick < 0.14 ? 0 : sPick < 0.38 ? 1 : sPick < 0.62 ? 2 : sPick < 0.80 ? 3 : sPick < 0.93 ? 4 : 5;
+      const [yLo, yHi] = strataHeights[stratum];
+      const lIdx = Math.floor(h01(i, 103) * lanes.length) % lanes.length;
+      const L = lanes[lIdx];
+      const fwdSign = h01(i, 107) < 0.5 ? 1 : -1;
+
+      const xStart = fwdSign > 0 ? L.x1 : L.x2;
+      const zStart = fwdSign > 0 ? L.z1 : L.z2;
+      const xEnd = fwdSign > 0 ? L.x2 : L.x1;
+      const zEnd = fwdSign > 0 ? L.z2 : L.z1;
+      const dx = xEnd - xStart;
+      const dz = zEnd - zStart;
+      const chord = Math.hypot(dx, dz) || 1;
+      const nx = -dz / chord;
+      const nz = dx / chord;
+
+      const ribbonW = stratum === 0 ? 7.5 : 22 + stratum * 14;
+      const lat = (h01(i, 109) - 0.5) * ribbonW * 2;
+      const x1 = xStart + nx * lat;
+      const z1 = zStart + nz * lat;
+      const x2 = xEnd + nx * lat;
+      const z2 = zEnd + nz * lat;
+      const cx = L.cx + nx * (lat + (h01(i, 113) - 0.5) * 26);
+      const cz = L.cz + nz * (lat + (h01(i, 127) - 0.5) * 26);
+
+      const rawY = yLo + h01(i, 131) * (yHi - yLo);
+      const safeY = stratum === 0 && L.layer === 'ground'
+        ? Math.max(6.2, L.y + h01(i, 137) * 2.5)
+        : Math.max(rawY, laneRoofMax[lIdx] + 12 + h01(i, 137) * 28);
+      const yArch = stratum === 0 ? 1.5 : 10 + h01(i, 139) * (16 + stratum * 8);
+
+      const approxLen = Math.max(180, Math.hypot(cx - x1, cz - z1) + Math.hypot(x2 - cx, z2 - cz));
+      const worldSpd = (58 + stratum * 28 + h01(i, 149) * 95);
+      const rate = worldSpd / approxLen;
+      const closed = L.ringId !== undefined ? 1.0 : 0.0;
+      const craftScale = 0.68 + h01(i, 151) * 0.72 + (stratum >= 4 ? 0.35 : 0);
+
+      curveA[i * 4 + 0] = x1;
+      curveA[i * 4 + 1] = z1;
+      curveA[i * 4 + 2] = safeY;
+      curveA[i * 4 + 3] = rate;
+
+      curveB[i * 4 + 0] = cx;
+      curveB[i * 4 + 1] = cz;
+      curveB[i * 4 + 2] = yArch;
+      curveB[i * 4 + 3] = h01(i, 157);
+
+      curveC[i * 4 + 0] = x2;
+      curveC[i * 4 + 1] = z2;
+      curveC[i * 4 + 2] = craftScale;
+      curveC[i * 4 + 3] = closed;
+    }
+
+    swarmGeo.setAttribute('aCurveA', new THREE.InstancedBufferAttribute(curveA, 4));
+    swarmGeo.setAttribute('aCurveB', new THREE.InstancedBufferAttribute(curveB, 4));
+    swarmGeo.setAttribute('aCurveC', new THREE.InstancedBufferAttribute(curveC, 4));
+    swarmGeo.setAttribute('aColor', new THREE.InstancedBufferAttribute(swarmColors, 3));
+    swarmMesh = new THREE.Mesh(swarmGeo, swarmMat);
+    swarmMesh.frustumCulled = false;
+    group.add(swarmMesh);
+  }
+
   const laneIdx = new Int32Array(total);
   const laps = new Int32Array(total);
   const t = new Float32Array(total);
@@ -1380,8 +1490,10 @@ export function makeVehicles(city, trailMat, count = 260, collider = null) {
   const spin = new Float32Array(total);
   const latOf = new Float32Array(total);
   const vOf = new Float32Array(total);
-  const weaveRate = new Float32Array(total);
   let elapsed = 0;
+  let curHeightScale = 1;
+  let lastActiveCount = 0;
+
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const e = new THREE.Euler(0, 0, 0, 'YXZ');
@@ -1389,14 +1501,29 @@ export function makeVehicles(city, trailMat, count = 260, collider = null) {
   const s = new THREE.Vector3();
   const c = new THREE.Color();
 
+  // Smooth C1 Catmull-Rom cubic interpolation along the 33-node rooftop-cleared profile (zero slope kinks!)
   const laneY = (L, tt) => {
-    if (!L.prof) return L.y;
-    const f = tt * (L.prof.length - 1);
-    const i0 = Math.floor(f);
-    const i1 = Math.min(L.prof.length - 1, i0 + 1);
-    const fr = f - i0;
-    return L.prof[i0] * (1 - fr) + L.prof[i1] * fr;
+    const prof = L.prof;
+    if (!prof) return L.y;
+    const nMax = prof.length - 1;
+    const f = Math.max(0, Math.min(1, tt)) * nMax;
+    const i1 = Math.min(nMax, Math.floor(f));
+    const i2 = Math.min(nMax, i1 + 1);
+    const i0 = Math.max(0, i1 - 1);
+    const i3 = Math.min(nMax, i2 + 1);
+    const fr = f - i1;
+    const p0 = prof[i0], p1 = prof[i1], p2 = prof[i2], p3 = prof[i3];
+    const fr2 = fr * fr;
+    const fr3 = fr2 * fr;
+    const cr = 0.5 * (
+      (2 * p1) +
+      (-p0 + p2) * fr +
+      (2 * p0 - 5 * p1 + 4 * p2 - p3) * fr2 +
+      (-p0 + 3 * p1 - 3 * p2 + p3) * fr3
+    );
+    return Math.max(Math.min(p1, p2), cr);
   };
+
   const evalLane = (L, tt, out) => {
     const u = 1 - tt;
     out.x = u * u * L.x1 + 2 * u * tt * L.cx + tt * tt * L.x2;
@@ -1410,19 +1537,19 @@ export function makeVehicles(city, trailMat, count = 260, collider = null) {
     return out;
   };
   const tmp = { x: 0, z: 0, dx: 1, dz: 0, len: 1 };
+  const tmpA = { x: 0, z: 0, dx: 1, dz: 0, len: 1 };
+  const tmpB = { x: 0, z: 0, dx: 1, dz: 0, len: 1 };
 
   const assignRoute = (i, lap) => {
-    const pool = lanePool[classOf[i]];
+    const pool = lanePoolIdx[classOf[i]];
     const V = VEHICLE_CLASSES[classOf[i]];
-    laneIdx[i] = Math.floor(h01(i + lap * 997, 23) * pool.length) % pool.length;
-    const L = pool[laneIdx[i]];
+    laneIdx[i] = pool[Math.floor(h01(i + lap * 997, 23) * pool.length) % pool.length];
+    const L = lanes[laneIdx[i]];
     dir[i] = h01(i + lap * 613, 31) < 0.5 ? 1 : -1;
-    // Separate opposing directions laterally so oncoming traffic passes cleanly
-    const sideSpread = L.layer === 'ground' ? 2.4 : 7.5;
+    const sideSpread = L.layer === 'ground' ? 2.4 : 8.5;
     latOf[i] = dir[i] * sideSpread * 0.55 + (h01(i + lap * 317, 41) - 0.5) * sideSpread;
-    vOf[i] = L.layer === 'ground' ? 0 : (h01(i + lap * 419, 43) - 0.5) * 9;
-    weaveRate[i] = V.weaveF * (0.65 + h01(i + lap * 521, 47) * 0.85);
-    baseSpd[i] = V.spd * (0.54 + h01(i + lap * 733, 53) * 1.05);
+    vOf[i] = L.layer === 'ground' ? 0 : (h01(i + lap * 419, 43) - 0.5) * 8;
+    baseSpd[i] = V.spd * (0.68 + h01(i + lap * 733, 53) * 0.72);
     spd[i] = baseSpd[i];
   };
 
@@ -1452,6 +1579,17 @@ export function makeVehicles(city, trailMat, count = 260, collider = null) {
     if (thrusters.instanceColor) thrusters.instanceColor.needsUpdate = true;
     for (const tr of trailers) if (tr.instanceColor) tr.instanceColor.needsUpdate = true;
     trailGeo.getAttribute('aColor').needsUpdate = true;
+
+    if (swarmColors && swarmGeo) {
+      for (let i = 0; i < swarmCap; i++) {
+        c.set(pal[Math.floor(h01(i, 173) * pal.length) % pal.length]);
+        c.offsetHSL(mono ? 0 : (h01(i, 179) - 0.5) * 0.05, 0, (h01(i, 181) - 0.5) * 0.12);
+        swarmColors[i * 3 + 0] = c.r;
+        swarmColors[i * 3 + 1] = c.g;
+        swarmColors[i * 3 + 2] = c.b;
+      }
+      swarmGeo.getAttribute('aColor').needsUpdate = true;
+    }
   }
 
   for (let i = 0; i < total; i++) {
@@ -1464,65 +1602,105 @@ export function makeVehicles(city, trailMat, count = 260, collider = null) {
   }
   setPalette(VEHICLE_COLORS);
 
-  const composeAt = (i, tVal, o = {}) => {
+  // Evaluate exact 3D position at (tVal, elTime) so velocity tangent includes curve + glide + weave!
+  const samplePos3 = (i, tVal, elTime, bobOff, out) => {
     const cc = classOf[i];
-    const pool = lanePool[cc];
-    const L = pool[laneIdx[i]];
-    const tt = ((tVal % 1) + 1) % 1;
+    const V = VEHICLE_CLASSES[cc];
+    let L = lanes[laneIdx[i]];
+    let tt = tVal;
+    if (L.nextIdx !== undefined && L.prevIdx !== undefined) {
+      if (tt >= 1) { L = lanes[L.nextIdx]; tt -= 1; }
+      else if (tt < 0) { L = lanes[L.prevIdx]; tt += 1; }
+    }
+    tt = Math.max(0, Math.min(1, tt));
     evalLane(L, tt, tmp);
     const sign = dir[i];
     const tx = tmp.dx * sign;
     const tz = tmp.dz * sign;
-    const V = VEHICLE_CLASSES[cc];
-    const wAmp = L.layer === 'ground' ? Math.min(1.6, V.weaveA * 0.15) : V.weaveA;
-    const wArg = tt * Math.PI * 2 * weaveRate[i] + phase[i];
+    const wAmp = L.layer === 'ground' ? 0.25 : Math.min(6.5, V.weaveA * 0.28);
+    const wArg = elTime * 0.28 + phase[i];
     const weave = Math.sin(wArg) * wAmp;
     const nx = -tz;
     const nz = tx;
-    const px = tmp.x + nx * (weave + latOf[i]);
-    const pz = tmp.z + nz * (weave + latOf[i]);
+    out.x = tmp.x + nx * (weave + latOf[i]);
+    out.z = tmp.z + nz * (weave + latOf[i]);
+    out.y = L.layer === 'ground'
+      ? Math.max(5.2, laneY(L, tt))
+      : (laneY(L, tt) + vOf[i]) * curHeightScale + bobOff;
+    out.len = tmp.len;
+    out.tt = tt;
+    out.closed = L.nextIdx !== undefined;
+    out.isGround = L.layer === 'ground';
+    return out;
+  };
+  const posCur = { x: 0, y: 0, z: 0, len: 1, tt: 0, closed: false, isGround: false };
+  const posPrev = { x: 0, y: 0, z: 0, len: 1, tt: 0, closed: false, isGround: false };
+  const posNext = { x: 0, y: 0, z: 0, len: 1, tt: 0, closed: false, isGround: false };
 
-    // Glide elevation + strict runtime building floor so no vehicle ever clips a building
-    let py = laneY(L, tt) + (o.bob || 0) + vOf[i];
-    if (L.layer !== 'ground') {
-      const roof = colCheck.maxHeightNear(px, pz, 9);
-      if (roof > 0 && py < roof + 14) py = roof + 14;
-    } else {
-      py = Math.max(5.2, py);
-    }
+  // Smooth C1 position + true 3D velocity-aligned yaw/pitch + curvature-driven aerodynamic banking
+  const composeAt = (i, tVal, o = {}) => {
+    const L = lanes[laneIdx[i]];
+    samplePos3(i, tVal, elapsed, o.bob || 0, posCur);
+    const dtLook = 0.05;
+    const worldSpdEst = Math.max(36, L.speed) * (0.85 + 0.55 * spd[i]);
+    const dParam = (worldSpdEst * dtLook * dir[i]) / Math.max(45, posCur.len);
+    samplePos3(i, tVal - dParam, elapsed - dtLook, o.bob || 0, posPrev);
+    samplePos3(i, tVal + dParam, elapsed + dtLook, o.bob || 0, posNext);
 
-    // Climb/descent pitch along the glide profile + bank into weave
-    const tAhead = Math.max(0, Math.min(1, tt + sign * 0.02));
-    const dy = laneY(L, tAhead) - laneY(L, tt);
-    const pitch = L.layer === 'ground' ? 0 : Math.max(-0.28, Math.min(0.28, Math.atan2(dy, Math.max(14, tmp.len * 0.02)) * 0.55));
-    const yaw = Math.atan2(-tz, tx) + (o.sway || 0);
-    const bank = -Math.cos(wArg) * (wAmp * 0.0045) + (o.roll || 0);
+    const vx = posNext.x - posPrev.x;
+    const vy = posNext.y - posPrev.y;
+    const vz = posNext.z - posPrev.z;
+    const hLen = Math.hypot(vx, vz) || 1e-4;
+    const yaw = Math.atan2(-vz, vx) + (o.sway || 0);
+    const pitch = posCur.isGround ? 0 : Math.max(-0.42, Math.min(0.42, Math.atan2(vy, hLen)));
 
-    p.set(px, py, pz);
-    e.set(bank, yaw + (o.spinY || 0), pitch, 'YXZ');
+    // Aerodynamic banking proportional to horizontal turn curvature
+    const v1x = posCur.x - posPrev.x, v1z = posCur.z - posPrev.z;
+    const v2x = posNext.x - posCur.x, v2z = posNext.z - posCur.z;
+    const l1 = Math.hypot(v1x, v1z) || 1, l2 = Math.hypot(v2x, v2z) || 1;
+    const turnCross = (v1x * v2z - v1z * v2x) / (l1 * l2);
+    const curveBank = posCur.isGround ? 0 : Math.max(-0.42, Math.min(0.42, -turnCross * 6.5));
+    const bank = curveBank + (o.roll || 0);
+
+    const portal = posCur.closed
+      ? 1
+      : smoothstep(0, 0.035, posCur.tt) * smoothstep(1, 0.965, posCur.tt);
+
+    p.set(posCur.x, posCur.y, posCur.z);
+    // Note: in YXZ Euler order, e.y rotates yaw around world Y, then e.z pitches nose (+X) up/down,
+    // and we compose roll around local +X via quaternion multiplication so forward (+X) NEVER skews!
+    e.set(0, yaw + (o.spinY || 0), pitch, 'YXZ');
     q.setFromEuler(e);
-    const sc = scl[i] * (o.pulse || 1);
+    if (bank !== 0) {
+      const hb = bank * 0.5;
+      const sx = Math.sin(hb), cx = Math.cos(hb);
+      // Post-multiply q * quatX(bank) -> rolls strictly around local forward +X axis!
+      const qx = q.x, qy = q.y, qz = q.z, qw = q.w;
+      q.set(
+        qw * sx + qx * cx,
+        qy * cx + qz * sx,
+        qz * cx - qy * sx,
+        qw * cx - qx * sx
+      );
+    }
+    const sc = scl[i] * (o.pulse || 1) * (0.15 + 0.85 * portal);
     s.set(sc * (o.stretch || 1), sc, sc * (o.wMul || 1));
     m.compose(p, q, s);
   };
 
   let collision = true;
-  /**
-   * Vehicle-vehicle collision avoidance: vehicles sharing a lane & direction
-   * maintain safe headways instead of overlapping.
-   */
   function applyCollision(n) {
+    const capN = Math.min(n, 360);
     const byKey = new Map();
-    for (let i = 0; i < n; i++) {
-      const pool = lanePool[classOf[i]];
-      const L = pool[laneIdx[i]];
+    for (let i = 0; i < capN; i++) {
+      const L = lanes[laneIdx[i]];
       const dirBit = dir[i] > 0 ? 1 : 0;
       let arr = byKey.get(L);
       if (!arr) { arr = [[], []]; byKey.set(L, arr); }
       arr[dirBit].push(i);
     }
     for (const [L, pair] of byKey.entries()) {
-      const spanLen = Math.max(140, Math.hypot(L.x2 - L.x1, L.z2 - L.z1));
+      const spanLen = Math.max(180, Math.hypot(L.x2 - L.x1, L.z2 - L.z1));
       for (let dBit = 0; dBit < 2; dBit++) {
         const arr = pair[dBit];
         if (arr.length < 2) continue;
@@ -1533,7 +1711,7 @@ export function makeVehicles(city, trailMat, count = 260, collider = null) {
           const gap = dBit === 1 ? (t[leader] - t[follower]) : (t[follower] - t[leader]);
           const need = (VEHICLE_CLASSES[classOf[follower]].len + VEHICLE_CLASSES[classOf[leader]].len + 18) / spanLen;
           if (gap > 0 && gap < need && spd[follower] > spd[leader] * 0.85) {
-            spd[follower] = Math.max(spd[leader] * 0.85, spd[follower] * 0.92);
+            spd[follower] = Math.max(spd[leader] * 0.85, spd[follower] * 0.94);
           } else if (gap > need * 1.45 && spd[follower] < baseSpd[follower]) {
             spd[follower] = Math.min(baseSpd[follower], spd[follower] * 1.03);
           }
@@ -1542,34 +1720,67 @@ export function makeVehicles(city, trailMat, count = 260, collider = null) {
     }
   }
 
-  function update(dt, density = 1) {
+  function update(dt, density = 1, heightScale = 1) {
     elapsed += dt;
-    const n = Math.max(0, Math.min(total, Math.round(total * density)));
+    curHeightScale = heightScale;
+    const dClamped = Math.max(0, density);
+
+    let n = 0;
+    let swarmActive = 0;
+    if (swarmCap > 0) {
+      const targetTotal = Math.min(total + swarmCap, Math.round(320 * dClamped));
+      const baseHero = Math.min(total, 220);
+      if (dClamped <= 1) {
+        n = Math.min(total, Math.round(baseHero * dClamped));
+      } else {
+        const extraFrac = Math.pow(Math.min(1, (dClamped - 1) / 18), 0.72);
+        n = Math.min(total, Math.round(baseHero + (total - baseHero) * extraFrac));
+      }
+      n = Math.min(n, targetTotal);
+      swarmActive = Math.max(0, Math.min(swarmCap, targetTotal - n));
+      if (swarmGeo) swarmGeo.instanceCount = swarmActive;
+    } else {
+      n = Math.max(0, Math.min(total, Math.round(total * dClamped)));
+    }
+    lastActiveCount = n + swarmActive;
+
     const active = new Array(nCls).fill(0);
     if (collision && dt > 0) applyCollision(n);
     for (let i = 0; i < n; i++) {
       const cc = classOf[i];
       const V = VEHICLE_CLASSES[cc];
-      const pool = lanePool[cc];
-      const L = pool[laneIdx[i]];
+      const L = lanes[laneIdx[i]];
       const ph = phase[i];
-      // Dynamic throttle breathing + occasional drone/heli hover pauses
-      let throttle = 1 + 0.22 * Math.sin(elapsed * 0.45 + ph * 1.7);
+      let throttle = 1 + 0.14 * Math.sin(elapsed * 0.42 + ph * 1.7);
       if (V.hover) {
-        const hv = Math.sin(elapsed * 0.33 + ph * 3.1);
-        if (hv > 0.78) throttle *= 0.16;
+        const hv = Math.sin(elapsed * 0.31 + ph * 3.1);
+        if (hv > 0.82) throttle *= 0.28;
       }
       if (!collision) spd[i] = baseSpd[i];
-      t[i] += spd[i] * throttle * dt * dir[i] * Math.max(22, L.speed) * 0.055;
+
+      evalLane(L, Math.max(0, Math.min(1, t[i])), tmp);
+      const worldSpeed = Math.max(36, L.speed) * (0.85 + 0.55 * spd[i]) * throttle;
+      t[i] += (worldSpeed * dt * dir[i]) / Math.max(45, tmp.len);
+
       if (t[i] > 1 || t[i] < 0) {
-        laps[i]++;
-        const wasOver = t[i] > 1;
-        assignRoute(i, laps[i]);
-        t[i] = dir[i] > 0 ? (wasOver ? t[i] % 1 : 0.002) : (wasOver ? 0.998 : ((t[i] % 1) + 1) % 1);
+        if (L.nextIdx !== undefined && L.prevIdx !== undefined) {
+          if (t[i] > 1) {
+            laneIdx[i] = L.nextIdx;
+            t[i] -= Math.floor(t[i]);
+          } else {
+            laneIdx[i] = L.prevIdx;
+            t[i] = ((t[i] % 1) + 1) % 1;
+          }
+        } else {
+          laps[i]++;
+          const wasOver = t[i] > 1;
+          assignRoute(i, laps[i]);
+          t[i] = dir[i] > 0 ? (wasOver ? t[i] % 1 : 0.002) : (wasOver ? 0.998 : ((t[i] % 1) + 1) % 1);
+        }
       }
 
-      const bob = L.layer === 'ground' ? 0 : Math.sin(elapsed * V.bobF + ph) * V.bobA;
-      const roll = L.layer === 'ground' ? 0 : Math.sin(elapsed * 0.9 + ph) * 0.06;
+      const bob = L.layer === 'ground' ? 0 : Math.sin(elapsed * V.bobF + ph) * V.bobA * 0.75;
+      const roll = L.layer === 'ground' ? 0 : Math.sin(elapsed * 0.75 + ph) * 0.04;
       const li = local[i];
 
       composeAt(i, t[i], { bob, roll });
@@ -1577,7 +1788,7 @@ export function makeVehicles(city, trailMat, count = 260, collider = null) {
       if (beams[cc]) beams[cc].setMatrixAt(li, m);
 
       if (cc === 0) {
-        composeAt(i, t[i], { bob, roll, pulse: 0.78 + 0.36 * Math.sin(elapsed * 7 + ph) });
+        composeAt(i, t[i], { bob, roll, pulse: 0.82 + 0.28 * Math.sin(elapsed * 7 + ph) });
         thrusters.setMatrixAt(li, m);
       }
       if (rotors[cc]) {
@@ -1586,19 +1797,17 @@ export function makeVehicles(city, trailMat, count = 260, collider = null) {
         rotors[cc].setMatrixAt(li, m);
       }
       if (cc === 2) {
-        const lag = V.trailerLag;
-        composeAt(i, t[i] - dir[i] * lag, { bob: bob * 0.7, roll: roll * 0.6, sway: Math.sin(elapsed * 0.8 + ph) * 0.05 });
+        const lag = Math.min(0.06, 22 / Math.max(180, tmp.len));
+        composeAt(i, t[i] - dir[i] * lag, { bob: bob * 0.7, roll: roll * 0.6, sway: Math.sin(elapsed * 0.8 + ph) * 0.035 });
         trailers[0].setMatrixAt(li, m);
-        composeAt(i, t[i] - dir[i] * lag * 2, { bob: bob * 0.55, roll: roll * 0.4, sway: Math.sin(elapsed * 0.8 + ph - 0.7) * 0.09 });
+        composeAt(i, t[i] - dir[i] * lag * 2, { bob: bob * 0.55, roll: roll * 0.4, sway: Math.sin(elapsed * 0.8 + ph - 0.7) * 0.06 });
         trailers[1].setMatrixAt(li, m);
       }
       active[cc]++;
 
-      const savedT = t[i];
-      t[i] = savedT - dir[i] * 0.012;
-      composeAt(i, t[i], { bob: bob * 0.5, stretch: 2.4, wMul: 0.75 });
+      const trailLag = Math.min(0.025, 10 / Math.max(150, tmp.len));
+      composeAt(i, t[i] - dir[i] * trailLag, { bob: bob * 0.5, stretch: 2.4, wMul: 0.75 });
       trails.setMatrixAt(i, m);
-      t[i] = savedT;
     }
     for (let cIdx = 0; cIdx < nCls; cIdx++) {
       bodies[cIdx].count = active[cIdx];
@@ -1632,6 +1841,10 @@ export function makeVehicles(city, trailMat, count = 260, collider = null) {
     thrusters,
     trailers,
     trails,
+    swarm: swarmMesh,
+    swarmGeo,
+    capacity: total + swarmCap,
+    get activeCount() { return lastActiveCount; },
     update,
     setPalette,
     get collision() { return collision; },

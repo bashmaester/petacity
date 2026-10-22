@@ -261,6 +261,16 @@ button.action.ghost {
   color: var(--text); background: rgba(255, 255, 255, 0.08); border: 1px solid var(--line);
 }
 button.action:hover { filter: brightness(1.12); }
+button.icon-btn.rec-on, button.action.rec-on {
+  background: #ff4757; color: #fff; border-color: #ff6b81;
+  box-shadow: 0 0 12px rgba(255, 71, 87, 0.55);
+}
+.cap-row { display: flex; gap: 5px; align-items: center; margin-top: 5px; }
+.cap-row select {
+  flex: 1; min-width: 0; height: 29px; padding: 0 7px; border-radius: 8px;
+  border: 1px solid var(--line); background: rgba(255, 255, 255, 0.07);
+  color: var(--text); font-size: 11.5px;
+}
 
 .stats {
   display: flex; gap: 6px; margin-top: 8px;
@@ -413,7 +423,11 @@ button.action:hover { filter: brightness(1.12); }
       <div class="slider-row" title="City core size (radius)"><span>&#x2B1A;</span><input id="sl-radius" type="range" min="1" max="15" step="1" value="5" aria-label="City size"></div>
       <div class="slider-row" title="Horizon suburbs reach"><span>&#x2302;</span><input id="sl-suburbs" type="range" min="0" max="1.6" step="0.05" value="1" aria-label="Horizon suburbs reach"></div>
       <div class="slider-row" title="Building height scale"><span>&#x2195;</span><input id="sl-height" type="range" min="0.5" max="2" step="0.02" value="1" aria-label="Height scale"></div>
-      <div class="slider-row" title="Aerial traffic density"><span>&#x21C4;</span><input id="sl-traffic" type="range" min="0" max="1.5" step="0.02" value="1" aria-label="Traffic density"></div>
+      <div class="slider-row wide" title="Multi-strata traffic density (0 to 20,000 vehicles)">
+        <span>&#x21C4;</span>
+        <input id="sl-traffic" type="range" min="0" max="1" step="0.005" value="0.25" aria-label="Multi-strata traffic density">
+        <em id="traffic-label">320</em>
+      </div>
     </div>
 
     <span class="lab">Places &amp; Bookmarks</span>
@@ -475,6 +489,34 @@ button.action:hover { filter: brightness(1.12); }
       <div class="slider-row wide" title="Old-film grain, specks &amp; scratches"><span>&#x2338;</span><input id="sl-film" type="range" min="0" max="1.5" step="0.02" value="0.16" aria-label="Old film grain, dust specks and scratches"></div>
     </div>
 
+    <span class="lab">Capture &amp; Camera Path</span>
+    <div class="cap-row" title="Clean HUD-free scene render export (PNG still or WebM/MP4 video)">
+      <select id="sel-res" aria-label="Render export resolution" title="Still PNG render resolution">
+        <option value="view">Viewport</option>
+        <option value="1080p" selected>1080p HD</option>
+        <option value="2x">2× Super</option>
+        <option value="4k">4K UHD</option>
+      </select>
+      <button id="b-snap" type="button" class="action" aria-label="Export clean PNG render" title="Export clean PNG still render">&#x2316; PNG</button>
+      <button id="b-vid" type="button" class="action ghost" aria-pressed="false" aria-label="Record live scene video" title="Start / stop live WebM video capture">&#x25CF; Vid</button>
+      <button id="b-path-render" type="button" class="icon-btn" aria-label="Render camera path to video" title="Play recorded camera path &amp; export video" disabled>&#x23FA;</button>
+    </div>
+    <div class="cap-row" title="Camera path recorder — record live flight (R), add keyframe (K), replay smoothly (P)">
+      <button id="b-rec" type="button" class="icon-btn" aria-pressed="false" aria-label="Record camera path" title="Record live camera flight path (R)">&#x25CF;</button>
+      <button id="b-kf-add" type="button" class="icon-btn" aria-label="Add camera keyframe" title="Add camera keyframe at current pose (K)">&#x25C7;</button>
+      <button id="b-play" type="button" class="icon-btn" aria-pressed="false" aria-label="Play or pause camera path" title="Play / pause smooth camera path (P)" disabled>&#x25B6;</button>
+      <button id="b-loop" type="button" class="icon-btn on" aria-pressed="true" aria-label="Loop camera path playback" title="Loop camera path playback">&#x21BB;</button>
+      <button id="b-path-exp" type="button" class="icon-btn" aria-label="Export camera path JSON" title="Download recorded camera path JSON" disabled>&#x2913;</button>
+      <button id="b-path-clear" type="button" class="icon-btn" aria-label="Clear recorded camera path" title="Clear recorded camera path" disabled>&#x2715;</button>
+    </div>
+    <div class="slider-grid" style="margin-top: 5px;">
+      <div class="slider-row wide" title="Scrub along recorded camera path">
+        <span>&#x29BF;</span>
+        <input id="sl-scrub" type="range" min="0" max="1" step="0.001" value="0" aria-label="Camera path timeline scrubber" disabled>
+        <em id="path-label">0 kf</em>
+      </div>
+    </div>
+
     <div class="seed-row">
       <input id="seed-input" type="number" min="1" max="999999999" aria-label="City seed" title="City seed">
       <button class="action" id="b-new" type="button" aria-label="New random city" title="New random city">&#x21BB;</button>
@@ -497,6 +539,8 @@ button.action:hover { filter: brightness(1.12); }
   <span title="Dolly / speed"><kbd>&#x27F3;</kbd>&#x00B1;</span>
   <span title="Glide mode"><kbd>G</kbd>&#x2708;&#xFE0E;</span>
   <span title="Collision"><kbd>C</kbd>&#x2B21;</span>
+  <span title="Record path"><kbd>R</kbd>&#x25CF;</span>
+  <span title="Play path"><kbd>P</kbd>&#x25B6;</span>
   <span title="Toggle UI"><kbd>H</kbd>&#x25E7;</span>
 </div>
 

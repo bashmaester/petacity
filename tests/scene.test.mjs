@@ -19,6 +19,7 @@ import {
   WORLD_PRESETS, DEFAULT_BOOKMARKS, encodeExactState, decodeExactState,
 } from '../src/presets.js';
 import { FlyControls } from '../src/controls.js';
+import { CameraPathRecorder, makeSceneExporter } from '../src/recorder.js';
 
 test('every look preset has a complete schema', () => {
   for (const L of LOOKS) {
@@ -728,16 +729,20 @@ test('ground is a polar radial disc whose edge disappears smoothly via alpha', (
   assert.ok(Math.abs(maxDist - maxR) < 1, `polar ground disc outer radius=${maxDist} matches uGroundRadius=${maxR} (no square corners)`);
 });
 
-test('clouds live on 3D curved strata domes + instanced 3D cumulus puffs and spherical sky dome (not flat sky plane)', () => {
+test('clouds are genuinely volumetric raymarched (BackSide ellipsoid puffs + spherical sky cumulus shell, zero polygon shading)', () => {
   const U = makeUniforms();
   const world = makeWorld(U);
   assert.ok(world.clouds && world.clouds.isGroup, 'world.clouds 3D group exists');
-  assert.equal(world.clouds.children.length, 3, '2 curved 3D strata shells + 1 instanced 3D cumulus volume mesh');
-  const puffs = world.clouds.children[2];
-  assert.ok(puffs.isInstancedMesh && puffs.count >= 120, 'instanced 3D cumulus cloud volumes built');
+  assert.equal(world.cloudMat.side, THREE.BackSide, 'cloud bounding volumes render BackSide for interior/exterior raymarching');
+  assert.equal(world.clouds.children.length, 1, 'volumetric cloud bounding-box batch');
+  const puffs = world.clouds.children[0];
+  assert.ok(puffs.isMesh && puffs.geometry.instanceCount >= 32, 'instanced volumetric 3D cloud volumes built');
+  assert.ok(puffs.geometry.getAttribute('aCenter') && puffs.geometry.getAttribute('aScale'), 'analytic ellipsoid center/scale attributes present');
   assert.ok(CLOUD_VERT.includes('bendWorld') && CLOUD_FRAG.includes('evalStormyPlate'), '3D cloud shaders bend with world & support StormyClouds plates');
+  assert.ok(CLOUD_FRAG.includes('puffVolDensity') && !CLOUD_FRAG.includes('vN'), 'CLOUD_FRAG raymarches 3D density without polygon normal shading');
   const skyCodeOnly = SKY_FRAG.replace(/\/\/[^\n]*/g, '');
   assert.equal(/d\.xz\s*\/\s*\(?d\.y/.test(skyCodeOnly), false, 'SKY_FRAG no longer projects clouds onto a flat d.xz / d.y plane');
+  assert.ok(skyCodeOnly.includes('intersectSphereShell') && skyCodeOnly.includes('skyCumulusDensity'), 'SKY_FRAG raymarches concentric spherical volumetric cumulus shell');
 });
 
 test('world curvature smoothly morphs Plane <-> Sphere and FlyControls resolves radially around globe', () => {
@@ -832,4 +837,166 @@ test('whole-config presets and exact-state export/decode roundtrip losslessly', 
   assert.equal(fromJson.seed, 987654);
   assert.equal(fromJson.bookmarks[0].name, 'Custom Spire');
 });
+
+test('multi-strata traffic scales smoothly across 2+ orders of magnitude (0 to 20,000 vehicles) with zero vertical snap cliffs', () => {
+  const U = makeUniforms();
+  const world = makeWorld(U);
+  const { city, collider } = growCity(4417, 5, world.towerMat);
+  const veh = makeVehicles(city, world.trailMat, 1400, collider, {
+    swarmMat: world.swarmMat,
+    swarmCount: 18600,
+  });
+
+  assert.equal(veh.capacity, 20000, 'combined hero + GPU swarm capacity is 20,000 vehicles');
+
+  veh.update(0, 0, 1);
+  assert.equal(veh.activeCount, 0, 'density=0 disables all vehicles');
+
+  veh.update(0, 0.1, 1);
+  assert.equal(veh.activeCount, 32, 'sparse density=0.1 yields ~32 vehicles');
+
+  veh.update(0, 1.0, 1);
+  assert.equal(veh.activeCount, 320, 'baseline density=1.0 yields ~320 vehicles');
+
+  veh.update(0, 10.0, 1);
+  assert.equal(veh.activeCount, 3200, 'high density=10 yields ~3,200 vehicles');
+
+  veh.update(0, 62.5, 1);
+  assert.equal(veh.activeCount, 20000, 'max density=62.5 yields 20,000 active vehicles (2.5+ orders of magnitude over sparse!)');
+  assert.ok(veh.swarm && veh.swarmGeo.instanceCount >= 18000, 'GPU Bézier swarm carries >18,000 instances');
+
+  // Verify swarm spans at least 5 distinct vertical strata from <50m up to >660m
+  const curveA = veh.swarmGeo.getAttribute('aCurveA').array;
+  const strataSeen = new Set();
+  for (let i = 0; i < 600; i++) {
+    const yBase = curveA[i * 4 + 2];
+    if (yBase < 50) strataSeen.add('canyon');
+    else if (yBase < 130) strataSeen.add('low');
+    else if (yBase < 255) strataSeen.add('mid');
+    else if (yBase < 435) strataSeen.add('spire');
+    else if (yBase < 660) strataSeen.add('cloud');
+    else strataSeen.add('orbital');
+  }
+  assert.ok(strataSeen.size >= 5, `expected >=5 distinct altitude strata, saw ${[...strataSeen].join(',')}`);
+
+  // Verify smooth C1 frame-to-frame motion (no per-frame rooftop snap jumps!)
+  veh.update(0, 1.0, 1);
+  const m = new THREE.Matrix4();
+  const prevY = new Float32Array(12);
+  const prevX = new Float32Array(12);
+  const p = new THREE.Vector3();
+  const q = new THREE.Quaternion();
+  const s = new THREE.Vector3();
+  const checkCount = Math.min(12, veh.mesh.count);
+  for (let i = 0; i < checkCount; i++) {
+    veh.mesh.getMatrixAt(i, m);
+    m.decompose(p, q, s);
+    prevX[i] = p.x;
+    prevY[i] = p.y;
+  }
+  for (let step = 0; step < 30; step++) {
+    veh.update(1 / 60, 1.0, 1);
+    for (let i = 0; i < checkCount; i++) {
+      veh.mesh.getMatrixAt(i, m);
+      m.decompose(p, q, s);
+      const dx = Math.abs(p.x - prevX[i]);
+      const dy = Math.abs(p.y - prevY[i]);
+      // Ignore rare open-corridor horizon wrap where X jumps >200m
+      if (dx < 80) {
+        assert.ok(dy < 4.0, `vehicle ${i} had vertical jump dy=${dy.toFixed(2)}m in 16ms frame`);
+      }
+      prevX[i] = p.x;
+      prevY[i] = p.y;
+    }
+  }
+});
+
+test('CameraPathRecorder & makeSceneExporter record, smoothly interpolate, round-trip JSON, and export clean renders', async () => {
+  const rec = new CameraPathRecorder();
+  assert.equal(rec.hasPath, false);
+
+  // Live flight recording mode with temporal smoothing & subsampling
+  rec.startRecording({ x: 0, y: 100, z: 0, yaw: 0, pitch: 0 });
+  assert.equal(rec.recording, true);
+  for (let i = 1; i <= 30; i++) {
+    rec.recordSample(0.05, {
+      x: i * 10,
+      y: 100 + Math.sin(i * 0.2) * 20,
+      z: -i * 8,
+      yaw: -0.04 * i,
+      pitch: -0.05,
+    });
+  }
+  rec.stopRecording({ x: 310, y: 112, z: -248, yaw: -1.24, pitch: -0.05 });
+  assert.equal(rec.recording, false);
+  assert.equal(rec.hasPath, true);
+  assert.ok(rec.count >= 6 && rec.duration > 1.4, `recorded count=${rec.count} dur=${rec.duration}`);
+
+  // Exact endpoint & smooth interior Catmull-Rom + quaternion slerp evaluation
+  const pStart = rec.evaluate(0);
+  const pMid = rec.evaluate(rec.duration * 0.5);
+  const pEnd = rec.evaluate(rec.duration);
+  assert.ok(Math.abs(pStart.x - 0) < 1e-3 && Math.abs(pEnd.x - 310) < 1e-2);
+  assert.ok(pMid.x > 80 && pMid.x < 240 && Number.isFinite(pMid.yaw));
+
+  // Apply to real THREE.PerspectiveCamera & round-trip JSON + ExactState
+  const cam = new THREE.PerspectiveCamera(60, 16 / 9, 2, 30000);
+  rec.applyAt(rec.duration * 0.5, cam);
+  assert.ok(Math.abs(cam.position.x - pMid.x) < 1e-4);
+
+  const json = rec.toJSON();
+  const rec2 = new CameraPathRecorder();
+  assert.equal(rec2.fromJSON(json), true);
+  assert.equal(rec2.count, rec.count);
+  assert.ok(Math.abs(rec2.duration - rec.duration) < 0.01);
+
+  const tok = encodeExactState({ seed: 4417, path: json });
+  const dec = decodeExactState(tok);
+  assert.ok(dec.path && dec.path.frames.length === json.frames.length, 'exact-state token preserves recorded camera path');
+
+  // Discrete keyframe builder + non-looping playback completion
+  rec2.clear();
+  rec2.loop = false;
+  rec2.addKeyframe({ x: 10, y: 80, z: 20, yaw: 3.05, pitch: 0 });
+  rec2.addKeyframe({ x: 110, y: 120, z: -60, yaw: -3.05, pitch: -0.1 }, 2.0); // crosses +-PI wrap!
+  const wrapMid = rec2.evaluate(1.0);
+  assert.ok(Math.abs(wrapMid.yaw) > 2.9, `shortest-arc slerp across +-PI gave yaw=${wrapMid.yaw}`);
+  rec2.play(true);
+  assert.equal(rec2.updatePlayback(1.0, cam), true);
+  assert.equal(rec2.updatePlayback(1.2, cam), false, 'non-loop playback stops cleanly at end');
+
+  // SceneExporter clean high-res PNG capture restores viewport size & pixelRatio
+  let curW = 800, curH = 450, curDpr = 1.25, postCalls = 0;
+  const fakeCanvas = {
+    clientWidth: 800,
+    clientHeight: 450,
+    toBlob(cb) { cb(new Blob(['png'], { type: 'image/png' })); },
+  };
+  const fakeRenderer = {
+    domElement: fakeCanvas,
+    getPixelRatio: () => curDpr,
+    setPixelRatio(d) { curDpr = d; },
+    getSize(v) { v.set(curW, curH); return v; },
+    setSize(w, h) { curW = w; curH = h; },
+  };
+  const fakePost = {
+    setSize() {},
+    render() { postCalls++; },
+  };
+  const exp = makeSceneExporter({
+    renderer: fakeRenderer,
+    post: fakePost,
+    scene: new THREE.Scene(),
+    camera: cam,
+    getTime: () => 4.2,
+  });
+  const snap = await exp.captureStillPNG('4k', null);
+  assert.equal(snap.width, 3840);
+  assert.equal(snap.height, 2160);
+  assert.ok(snap.blob && postCalls === 1);
+  assert.equal(curW, 800, 'viewport width restored after 4K capture');
+  assert.equal(curH, 450, 'viewport height restored after 4K capture');
+  assert.equal(curDpr, 1.25, 'pixelRatio restored after 4K capture');
+});
+
 

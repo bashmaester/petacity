@@ -16,6 +16,7 @@ import {
 } from './scene.js';
 import { makePostProcessor } from './post.js';
 import { FlyControls } from './controls.js';
+import { CameraPathRecorder, makeSceneExporter } from './recorder.js';
 
 // Colours are authored as plain sRGB and written straight out — keep THREE's
 // colour management out of the way.
@@ -31,6 +32,27 @@ function clampFloat(v, lo, hi, dflt) {
   return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : dflt;
 }
 
+// Multi-order-of-magnitude traffic slider mapping:
+// slider [0..1] -> density [0..62.5] (0 -> 0, 0.25 -> 1.0 (~320), 0.60 -> ~2.2k, 1.0 -> 20,000!)
+const MAX_TRAFFIC_DENSITY = 62.5;
+function sliderToTraffic(s) {
+  const x = Math.max(0, Math.min(1, s));
+  if (x <= 0.001) return 0;
+  if (x <= 0.25) return x / 0.25;
+  return Math.pow(MAX_TRAFFIC_DENSITY, (x - 0.25) / 0.75);
+}
+function trafficToSlider(d) {
+  const v = Math.max(0, d);
+  if (v <= 0) return 0;
+  if (v <= 1) return 0.25 * v;
+  return Math.min(1, 0.25 + 0.75 * (Math.log(Math.min(MAX_TRAFFIC_DENSITY, v)) / Math.log(MAX_TRAFFIC_DENSITY)));
+}
+function formatVehicleCount(cnt) {
+  if (cnt >= 10000) return `${(cnt / 1000).toFixed(1)}k`;
+  if (cnt >= 1000) return `${(cnt / 1000).toFixed(1)}k`;
+  return String(cnt);
+}
+
 const $ = (sel) => {
   const el = document.querySelector(sel);
   if (!el) throw new Error(`missing element for selector: ${sel}`);
@@ -39,6 +61,7 @@ const $ = (sel) => {
 
 const STORAGE_PRESETS_KEY = 'petacity.presets.v1';
 const STORAGE_BOOKMARKS_KEY = 'petacity.bookmarks.v1';
+const STORAGE_PATH_KEY = 'petacity.campath.v1';
 
 function readStorageJSON(key, fallback) {
   try {
@@ -198,6 +221,26 @@ function boot() {
   scene.add(weather.group);
 
   const controls = new FlyControls(camera, canvas);
+  const pathRecorder = new CameraPathRecorder();
+  const exporter = makeSceneExporter({
+    renderer,
+    post,
+    scene,
+    camera,
+    getTime: () => U.uTime.value,
+  });
+
+  // Restore saved camera path if present in initial exact state or localStorage
+  if (initialExact && initialExact.path) {
+    pathRecorder.fromJSON(initialExact.path);
+  } else {
+    try {
+      const rawPath = window.localStorage && window.localStorage.getItem(STORAGE_PATH_KEY);
+      if (rawPath) pathRecorder.fromJSON(rawPath);
+    } catch {
+      /* ignore sandboxed storage */
+    }
+  }
 
   /* --------------------------------------------------- state & storage */
 
@@ -267,7 +310,10 @@ function boot() {
     lamps = makeLamps(city, world.lampMat);
     pools = makeLightPools(city, world.poolMat);
     searchlights = makeSearchlights(city, world.beamMat);
-    vehicles = makeVehicles(city, world.trailMat, 260, cityCollider);
+    vehicles = makeVehicles(city, world.trailMat, 1400, cityCollider, {
+      swarmMat: world.swarmMat,
+      swarmCount: 18600,
+    });
     vehicles.setCollision(collideOn);
     vehicles.setPalette(look);
     waterGroup = buildWater(city, world.waterMat);
@@ -307,11 +353,22 @@ function boot() {
     syncURL();
   }
 
+  function syncTrafficLabel() {
+    const cnt = vehicles ? vehicles.activeCount : Math.round(tune.traffic * 320);
+    const el = $('#traffic-label');
+    el.textContent = formatVehicleCount(cnt);
+    el.title = `${cnt.toLocaleString('en-US')} active multi-strata vehicles`;
+  }
+
   function applyHeight() {
     cityGroup.scale.y = heightScale;
+    U.uHeightScale.value = heightScale;
     controls.heightScale = heightScale;
     syncGlideNode();
-    if (vehicles) vehicles.update(0, tune.traffic);
+    if (vehicles) {
+      vehicles.update(0, tune.traffic, heightScale);
+      syncTrafficLabel();
+    }
   }
 
   /* ------------------------------------------------------------- look */
@@ -331,7 +388,7 @@ function boot() {
     $('#sl-radius').value = String(cityRadius);
     $('#sl-suburbs').value = String(suburbReach);
     $('#sl-height').value = String(heightScale);
-    $('#sl-traffic').value = String(tune.traffic);
+    $('#sl-traffic').value = String(trafficToSlider(tune.traffic));
     $('#sl-win').value = String(tune.win);
     $('#sl-glow').value = String(tune.glow);
     $('#sl-fog').value = String(tune.fog);
@@ -350,6 +407,7 @@ function boot() {
     syncPostSliders();
     syncWeatherLabel();
     syncWorldGeometry();
+    syncTrafficLabel();
   }
 
   function syncPostUniforms(look) {
@@ -451,6 +509,7 @@ function boot() {
       custom: LOOK_BY_ID.custom.customConfig ? { ...LOOK_BY_ID.custom.customConfig } : { ...DEFAULT_CUSTOM },
       camera: controls.getPose(),
       bookmarks,
+      path: pathRecorder.hasPath ? pathRecorder.toJSON() : undefined,
     });
   }
 
@@ -495,6 +554,11 @@ function boot() {
     if (applyCamera && st.camera) {
       fly = null;
       controls.setPose(st.camera);
+    }
+    if (st.path) {
+      pathRecorder.fromJSON(st.path);
+      persistPath();
+      syncPathUI();
     }
     syncURL();
   }
@@ -714,6 +778,22 @@ function boot() {
   $('#b-apply-state').onclick = () => {
     const raw = ($('#export-text').value || '').trim();
     if (!raw) return;
+    // Allow pasting a standalone camera path JSON directly into the import field!
+    if (raw.startsWith('{')) {
+      try {
+        const maybeObj = JSON.parse(raw);
+        if (maybeObj && (Array.isArray(maybeObj.frames) || Array.isArray(maybeObj.k)) && maybeObj.seed === undefined) {
+          if (pathRecorder.fromJSON(maybeObj)) {
+            persistPath();
+            syncPathUI();
+            flash(`Loaded camera path (${pathRecorder.count} kf · ${pathRecorder.duration.toFixed(1)}s)`);
+            return;
+          }
+        }
+      } catch {
+        /* fall through to full state decode */
+      }
+    }
     let token = raw;
     try {
       if (raw.includes('?')) {
@@ -758,6 +838,9 @@ function boot() {
     if (e.key === 'h' || e.key === 'H') toggleUI();
     else if (e.key === 'g' || e.key === 'G') toggleGlide();
     else if (e.key === 'c' || e.key === 'C') toggleCollision();
+    else if (e.key === 'r' || e.key === 'R') togglePathRecord();
+    else if (e.key === 'p' || e.key === 'P') togglePathPlay();
+    else if (e.key === 'k' || e.key === 'K') addPathKeyframe();
   });
 
   const WEATHER_GLYPHS = [
@@ -787,7 +870,11 @@ function boot() {
   bindSlider($('#sl-radius'), (v) => { cityRadius = clampInt(v, 1, 15, cityRadius); rebuild(); });
   bindSlider($('#sl-suburbs'), (v) => { suburbReach = clampFloat(v, 0, 1.6, suburbReach); rebuild(); });
   bindSlider($('#sl-height'), (v) => { heightScale = v; applyHeight(); });
-  bindSlider($('#sl-traffic'), (v) => { tune.traffic = v; if (vehicles) vehicles.update(0, tune.traffic); });
+  bindSlider($('#sl-traffic'), (v) => {
+    tune.traffic = sliderToTraffic(v);
+    if (vehicles) vehicles.update(0, tune.traffic, heightScale);
+    syncTrafficLabel();
+  });
   bindSlider($('#sl-win'), (v) => { tune.win = v; refreshLook(); });
   bindSlider($('#sl-glow'), (v) => { tune.glow = v; refreshLook(); });
   bindSlider($('#sl-fog'), (v) => { tune.fog = v; refreshLook(); });
@@ -819,6 +906,211 @@ function boot() {
   bindSlider($('#sl-contrast'), (v) => { postState.contrast = v; syncPostUniforms(LOOK_BY_ID[lookId]); });
   bindSlider($('#sl-temp'), (v) => { postState.temp = v; syncPostUniforms(LOOK_BY_ID[lookId]); });
   bindSlider($('#sl-film'), (v) => { postState.film = v; syncPostUniforms(LOOK_BY_ID[lookId]); });
+
+  /* ------------------------------ scene render export & path recorder */
+
+  let renderingPathVideo = false;
+  let savedLoopBeforeRender = true;
+
+  function persistPath() {
+    try {
+      if (!window.localStorage) return;
+      if (pathRecorder.hasPath) {
+        window.localStorage.setItem(STORAGE_PATH_KEY, JSON.stringify(pathRecorder.toJSON()));
+      } else {
+        window.localStorage.removeItem(STORAGE_PATH_KEY);
+      }
+    } catch {
+      /* ignore sandboxed storage */
+    }
+  }
+
+  function syncPathUI() {
+    const rec = pathRecorder.recording;
+    const play = pathRecorder.playing;
+    const has = pathRecorder.hasPath;
+    const kfCount = pathRecorder.count;
+    const dur = pathRecorder.duration;
+
+    const bRec = $('#b-rec');
+    bRec.classList.toggle('rec-on', rec);
+    bRec.setAttribute('aria-pressed', String(rec));
+    bRec.textContent = rec ? '\u25A0' : '\u25CF';
+    bRec.title = rec ? 'Stop recording camera path (R)' : 'Record live camera flight path (R)';
+
+    const bPlay = $('#b-play');
+    bPlay.disabled = !has || rec;
+    bPlay.classList.toggle('on', play);
+    bPlay.setAttribute('aria-pressed', String(play));
+    bPlay.textContent = play ? '\u275A\u275A' : '\u25B6';
+
+    const bLoop = $('#b-loop');
+    bLoop.classList.toggle('on', pathRecorder.loop);
+    bLoop.setAttribute('aria-pressed', String(pathRecorder.loop));
+
+    $('#b-path-exp').disabled = !has;
+    $('#b-path-clear').disabled = kfCount === 0 && !rec;
+    $('#b-path-render').disabled = !has || rec || renderingPathVideo;
+    $('#b-path-render').classList.toggle('rec-on', renderingPathVideo);
+
+    const scrub = $('#sl-scrub');
+    scrub.disabled = !has || rec;
+    if (has && dur > 0) {
+      scrub.value = String(Math.max(0, Math.min(1, pathRecorder.playhead / dur)));
+    } else {
+      scrub.value = '0';
+    }
+
+    const lbl = $('#path-label');
+    if (rec) {
+      lbl.textContent = `REC ${dur.toFixed(1)}s`;
+    } else if (play && dur > 0) {
+      lbl.textContent = `${pathRecorder.playhead.toFixed(1)}/${dur.toFixed(1)}s`;
+    } else if (has) {
+      lbl.textContent = `${kfCount}kf · ${dur.toFixed(1)}s`;
+    } else if (kfCount === 1) {
+      lbl.textContent = '1 kf (+1 more)';
+    } else {
+      lbl.textContent = '0 kf';
+    }
+  }
+
+  function syncVidBtn() {
+    const on = exporter.capturingVideo;
+    const b = $('#b-vid');
+    b.classList.toggle('rec-on', on);
+    b.setAttribute('aria-pressed', String(on));
+    b.textContent = on ? '\u25A0 Stop' : '\u25CF Vid';
+  }
+
+  function togglePathRecord() {
+    if (renderingPathVideo) return;
+    if (pathRecorder.recording) {
+      pathRecorder.stopRecording(camera);
+      persistPath();
+      syncPathUI();
+      flash(`Recorded path · ${pathRecorder.count} kf (${pathRecorder.duration.toFixed(1)}s)`);
+    } else {
+      pathRecorder.startRecording(camera);
+      syncPathUI();
+      flash('\u25CF Recording camera flight path…');
+    }
+  }
+
+  function addPathKeyframe() {
+    if (pathRecorder.recording) return;
+    pathRecorder.addKeyframe(camera);
+    persistPath();
+    syncPathUI();
+    flash(`Added keyframe #${pathRecorder.count} (${pathRecorder.duration.toFixed(1)}s)`);
+  }
+
+  function togglePathPlay() {
+    if (!pathRecorder.hasPath || pathRecorder.recording) return;
+    if (pathRecorder.playing) {
+      pathRecorder.pause();
+      controls.syncFromCamera();
+      if (renderingPathVideo) {
+        renderingPathVideo = false;
+        pathRecorder.loop = savedLoopBeforeRender;
+        exporter.stopVideoCapture();
+        syncVidBtn();
+      }
+      syncPathUI();
+      flash('Path paused');
+    } else {
+      fly = null;
+      if (glideOn) setGlideState(false, false);
+      pathRecorder.play();
+      syncPathUI();
+      flash('\u25B6 Playing camera path');
+    }
+  }
+
+  $('#b-rec').onclick = togglePathRecord;
+  $('#b-kf-add').onclick = addPathKeyframe;
+  $('#b-play').onclick = togglePathPlay;
+  $('#b-loop').onclick = () => {
+    pathRecorder.loop = !pathRecorder.loop;
+    persistPath();
+    syncPathUI();
+    flash(pathRecorder.loop ? 'Path loop: on' : 'Path loop: once');
+  };
+  $('#b-path-exp').onclick = () => {
+    if (!pathRecorder.hasPath) return;
+    const json = JSON.stringify(pathRecorder.toJSON(), null, 2);
+    $('#export-text').value = json;
+    try {
+      const blob = new Blob([json], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `petacity-path-${seed}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+      flash('Exported camera path JSON');
+    } catch {
+      flash('Path JSON written to export field');
+    }
+  };
+  $('#b-path-clear').onclick = () => {
+    pathRecorder.clear();
+    persistPath();
+    syncPathUI();
+    flash('Cleared camera path');
+  };
+  bindSlider($('#sl-scrub'), (v) => {
+    if (!pathRecorder.hasPath) return;
+    if (pathRecorder.playing) pathRecorder.pause();
+    fly = null;
+    const tSec = v * pathRecorder.duration;
+    pathRecorder.applyAt(tSec, camera, controls);
+    syncPathUI();
+  });
+
+  // Scene Render Export: high-res clean PNG still + live WebM/MP4 video + automated Path->Video render!
+  $('#b-snap').onclick = async () => {
+    const resPreset = $('#sel-res').value || '1080p';
+    const fname = `petacity-${seed}-${lookId}-${resPreset}.png`;
+    try {
+      const info = await exporter.captureStillPNG(resPreset, fname);
+      flash(`Saved ${info.width}\u00D7${info.height} PNG render`);
+    } catch (err) {
+      flash('PNG render failed: ' + ((err && err.message) || err));
+    }
+  };
+
+  $('#b-vid').onclick = async () => {
+    if (exporter.capturingVideo) {
+      renderingPathVideo = false;
+      const res = await exporter.stopVideoCapture();
+      syncVidBtn();
+      syncPathUI();
+      flash(res ? 'Saved scene video capture' : 'Video capture stopped');
+    } else {
+      const fname = `petacity-${seed}-${lookId}.webm`;
+      const started = exporter.startVideoCapture({ fps: 60, filename: fname });
+      syncVidBtn();
+      flash(`Recording ${started.ext.toUpperCase()} scene video…`);
+    }
+  };
+
+  $('#b-path-render').onclick = () => {
+    if (!pathRecorder.hasPath || pathRecorder.recording || renderingPathVideo) return;
+    fly = null;
+    if (glideOn) setGlideState(false, false);
+    savedLoopBeforeRender = pathRecorder.loop;
+    pathRecorder.loop = false;
+    renderingPathVideo = true;
+    pathRecorder.applyAt(0, camera, controls);
+    const fname = `petacity-path-${seed}-${lookId}.webm`;
+    exporter.startVideoCapture({ fps: 60, filename: fname });
+    pathRecorder.play(true);
+    syncVidBtn();
+    syncPathUI();
+    flash(`Rendering ${pathRecorder.duration.toFixed(1)}s camera path to video…`);
+  };
+  syncPathUI();
+  syncVidBtn();
 
   /* ------------------------------------ places dropdown & bookmarks */
 
@@ -1073,7 +1365,27 @@ function boot() {
     try {
       const dt = Math.min(clock.getDelta(), 0.05);
       U.uTime.value += dt;
-      if (fly) {
+      if (pathRecorder.playing) {
+        // User manual input gracefully interrupts path playback unless rendering a path video
+        const manualBreak = !renderingPathVideo && (controls.keys.size || controls._drag);
+        if (manualBreak) {
+          pathRecorder.pause();
+          controls.syncFromCamera();
+          syncPathUI();
+        } else {
+          const stillPlaying = pathRecorder.updatePlayback(dt, camera, controls);
+          syncPathUI();
+          if (!stillPlaying && renderingPathVideo) {
+            renderingPathVideo = false;
+            pathRecorder.loop = savedLoopBeforeRender;
+            exporter.stopVideoCapture().then(() => {
+              syncVidBtn();
+              syncPathUI();
+              flash('Camera path video exported!');
+            });
+          }
+        }
+      } else if (fly) {
         fly.t = Math.min(1, fly.t + dt / 1.55);
         const e = fly.t < 0.5 ? 2 * fly.t * fly.t : 1 - Math.pow(-2 * fly.t + 2, 2) / 2;
         camera.position.lerpVectors(fly.from, fly.to, e);
@@ -1102,7 +1414,11 @@ function boot() {
         }
         controls.update(dt);
       }
-      if (vehicles) vehicles.update(dt, tune.traffic);
+      if (pathRecorder.recording) {
+        pathRecorder.recordSample(dt, camera);
+        syncPathUI();
+      }
+      if (vehicles) vehicles.update(dt, tune.traffic, heightScale);
       if (searchlights) searchlights.update(dt);
       if (weather) weather.update(dt, camera.position);
       world.sky.position.copy(camera.position);

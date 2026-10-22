@@ -180,6 +180,36 @@ export function normalizeExactState(raw = {}) {
       pitch: roundN(Number(b.pitch), 4),
     }));
   }
+  if (raw.path && typeof raw.path === 'object') {
+    const srcFrames = Array.isArray(raw.path.frames) ? raw.path.frames : (Array.isArray(raw.path.k) ? raw.path.k : null);
+    if (srcFrames && srcFrames.length >= 2) {
+      out.path = {
+        v: 1,
+        loop: raw.path.loop !== false,
+        frames: srcFrames.slice(0, 600).map((row) => (
+          row.length >= 8
+            ? [
+                roundN(Number(row[0]) || 0, 3),
+                roundN(Number(row[1]) || 0, 2),
+                roundN(Number(row[2]) || 0, 2),
+                roundN(Number(row[3]) || 0, 2),
+                roundN(Number(row[4]) || 0, 5),
+                roundN(Number(row[5]) || 0, 5),
+                roundN(Number(row[6]) || 0, 5),
+                roundN(Number(row[7] ?? 1), 5),
+              ]
+            : [
+                roundN(Number(row[0]) || 0, 3),
+                roundN(Number(row[1]) || 0, 2),
+                roundN(Number(row[2]) || 0, 2),
+                roundN(Number(row[3]) || 0, 2),
+                roundN(Number(row[4]) || 0, 4),
+                roundN(Number(row[5]) || 0, 4),
+              ]
+        )),
+      };
+    }
+  }
   return out;
 }
 

@@ -331,3 +331,48 @@ test('horizon suburbs extend procedurally into the distance and scale with subur
   assert.equal(cMid.suburbCount, cMid2.suburbCount);
 });
 
+test('billboards & holograms are de-concentrated across avenues (not 100% crammed in mediaZone) and lanes have gentle C1 slopes & orbital rings', () => {
+  const c = generateCity(4417, 6, 1.0);
+  const mz = c.mediaZone;
+  assert.ok(mz, 'mediaZone exists');
+
+  let inMediaBills = 0;
+  let citywideBills = 0;
+  for (const b of c.bills) {
+    if (Math.hypot(b.x - mz.x, b.z - mz.z) <= mz.r + 45) inMediaBills++;
+    else citywideBills++;
+  }
+  assert.ok(inMediaBills >= 12 && inMediaBills <= 45, `mediaZone billboards=${inMediaBills} are balanced, not over-stacked`);
+  assert.ok(citywideBills >= 10, `expected >=10 billboards distributed across avenues outside mediaZone, got ${citywideBills}`);
+
+  // Inside mediaZone, dark architectural contrast walls (style != 3) coexist with selective style=3 walls
+  let darkInMedia = 0;
+  let ledInMedia = 0;
+  for (let i = 0; i < c.count; i++) {
+    if (c.kind[i] === 0 && Math.hypot(c.x[i] - mz.x, c.z[i] - mz.z) <= mz.r) {
+      if (c.style[i] === 3) ledInMedia++;
+      else darkInMedia++;
+    }
+  }
+  assert.ok(ledInMedia >= 4 && darkInMedia >= 4, `mediaZone mixes LED (${ledInMedia}) & dark contrast (${darkInMedia}) architecture`);
+
+  // Lane profiles obey bounded gentle slopes (no 80-degree spire cliffs!) and stitch orbital rings continuously
+  let ringLinks = 0;
+  for (const L of c.lanes) {
+    const approxLen = Math.hypot(L.cx - L.x1, L.cz - L.z1) + Math.hypot(L.x2 - L.cx, L.z2 - L.cz);
+    const stepDist = Math.max(45, approxLen / (L.prof.length - 1));
+    for (let s = 0; s < L.prof.length - 1; s++) {
+      const slope = Math.abs(L.prof[s + 1] - L.prof[s]) / stepDist;
+      assert.ok(slope <= 0.28, `lane ${L.layer} slope=${slope.toFixed(3)} exceeds gentle glide limit`);
+    }
+    if (L.nextIdx !== undefined) {
+      ringLinks++;
+      const N = c.lanes[L.nextIdx];
+      assert.ok(Math.abs(L.prof[L.prof.length - 1] - N.prof[0]) < 1e-6, 'orbital ring altitude stitched continuously');
+      assert.ok(Math.hypot(L.x2 - N.x1, L.z2 - N.z1) < 1e-4, 'orbital ring XZ endpoint stitched continuously');
+    }
+  }
+  assert.ok(ringLinks >= 24, `expected >=24 stitched orbital ring segments, got ${ringLinks}`);
+});
+
+
