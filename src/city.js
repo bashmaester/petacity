@@ -20,20 +20,44 @@ export function streetWidth(idx) {
  */
 export const KIND = { WALL: 0, SLAB: 1, MAST: 2, BAND: 3 };
 
+/** Landmark (place of interest) silhouettes — built from three.js primitives in scene.js. */
+export const LM_KINDS = ['arch', 'spire', 'dome', 'mast', 'crown', 'needle'];
+
+const LM_NAMES = {
+  arch: ['Meridian Gate', 'Sunset Arc', 'Harbor Arch', 'The Gateway', 'Twin Curve', 'Old Mill Arch'],
+  spire: ['Zenith Spire', 'Aurora Spire', 'Skyline Needle', 'Pillar of Dawn', 'Vantage Spire', 'The Obelisk'],
+  dome: ['Atlas Dome', 'Civic Rotunda', 'Weather Dome', 'Grand Conservatory', 'Solarium', 'The Vault'],
+  mast: ['Signal Crown', 'Broadcast One', 'Relay Tower', 'North Mast', 'Sky Radio', 'The Aerial'],
+  crown: ['Imperial Terrace', 'Regalia Tower', 'Stepped Palace', 'Court of Blocks', 'The Ziggurat', 'High Terrace'],
+  needle: ['Needle Nine', 'Orbital Needle', 'Slim Jim', 'The Lancet', 'Pin Tower', 'Vector Needle'],
+};
+
+/** Public-space kinds — living, lit, low-rise places (geometry lives in scene.js). */
+export const PLACE_KINDS = ['market', 'plaza', 'park', 'fair'];
+
+const PLACE_NAMES = {
+  market: ['Night Market', 'Lantern Bazaar', 'Spice Row', 'The Exchange', 'Covered Market', 'Ember Stalls'],
+  plaza: ['Signal Plaza', 'Founders Square', 'Civic Plaza', 'The Forum', 'Assembly Ground', 'Echo Square'],
+  park: ['Hanging Gardens', 'The Terraces', 'Light Grove', 'Quiet Grounds', 'Sky Park', 'The Ramble'],
+  fair: ['Midway Fair', 'Carnival Strip', 'The Promenade', 'Rideside', 'Neon Midway', 'Festival Row'],
+};
+
 /**
  * Grow the city.
  * @param {number} seed
  * @param {number} radius blocks each way from the centre
- * @returns flat instance arrays + stats
+ * @returns flat instance arrays + landmarks (POIs) + vehicle lanes + beacon lights
  */
 export function generateCity(seed = 4417, radius = 13) {
   const noise = makeNoise2D(seed ^ 0x9e3779b9);
   const items = [];
+  const beacons = [];
   let towers = 0;
 
   const push = (x, y, z, w, h, d, s, kind) => {
     items.push(x, y, z, w, h, d, s, kind);
   };
+  const pushBeacon = (x, y, z, r = 0) => beacons.push({ x, y, z, phase: r, r });
 
   // A few landmark spires, placed by hash so they are stable per seed.
   const spireCells = new Set();
@@ -42,6 +66,34 @@ export function generateCity(seed = 4417, radius = 13) {
     const bi = Math.floor(hash2i(k, 11, seed) * (radius * 2)) - radius;
     const bj = Math.floor(hash2i(k, 23, seed) * (radius * 2)) - radius;
     spireCells.add(bi + ',' + bj);
+  }
+
+  // Named landmarks (places of interest): hero arch near the centre + a
+  // scattered handful. Their blocks are left empty of ordinary towers.
+  const landmarks = [];
+  const lmCells = new Map();
+  const heroKind = 'arch';
+  addLandmarkData(landmarks, lmCells, heroKind, 0, 0, seed, true);
+  const lmCount = 4 + Math.floor(hash2i(3, 17, seed) * 3); // 4..6 more
+  for (let k = 0; k < lmCount; k++) {
+    const bi = Math.floor(hash2i(k, 101, seed) * (radius * 2)) - radius;
+    const bj = Math.floor(hash2i(k, 211, seed) * (radius * 2)) - radius;
+    const key = bi + ',' + bj;
+    if (lmCells.has(key) || spireCells.has(key) || (bi === 0 && bj === 0)) continue;
+    const kind = LM_KINDS[Math.floor(hash2i(k, 5, seed) * LM_KINDS.length) % LM_KINDS.length];
+    addLandmarkData(landmarks, lmCells, kind, bi, bj, seed, false);
+  }
+
+  // Public spaces: markets, plazas, parks, fairs — lit, living places.
+  const places = [];
+  const plCount = 3 + Math.floor(hash2i(29, 31, seed) * 3); // 3..5
+  for (let k = 0; k < plCount; k++) {
+    const bi = Math.floor(hash2i(k, 307, seed) * (radius * 2)) - radius;
+    const bj = Math.floor(hash2i(k, 401, seed) * (radius * 2)) - radius;
+    const key = bi + ',' + bj;
+    if (lmCells.has(key) || spireCells.has(key) || (bi === 0 && bj === 0)) continue;
+    const kind = PLACE_KINDS[Math.floor(hash2i(k, 61, seed) * PLACE_KINDS.length) % PLACE_KINDS.length];
+    addPlaceData(places, lmCells, pushBeacon, kind, bi, bj, seed);
   }
 
   for (let i = -radius; i < radius; i++) {
@@ -57,8 +109,9 @@ export function generateCity(seed = 4417, radius = 13) {
       const rand = mulberry32(hash2i(i, j, seed ^ 0x51ed270b) * 4294967296);
       const h01 = fbm2D(noise, cx / 1150, cz / 1150, 3); // district height field
 
+      if (lmCells.has(i + ',' + j)) continue; // landmark block — see landmarks[]
       if (spireCells.has(i + ',' + j)) {
-        addSpire(push, rand, cx, cz, h01);
+        addSpire(push, pushBeacon, rand, cx, cz, h01);
         towers++;
         continue;
       }
@@ -74,11 +127,16 @@ export function generateCity(seed = 4417, radius = 13) {
           // Occasional empty lot -> a gap/plaza in the block.
           if (a + 1 < nx && rand() < 0.12) continue;
           if (b + 1 < nz && rand() < 0.12) continue;
-          addTower(push, rand, xs[a], xs[a + 1], zs[b], zs[b + 1], h01);
+          addTower(push, pushBeacon, rand, xs[a], xs[a + 1], zs[b], zs[b + 1], h01);
           towers++;
         }
       }
     }
+  }
+
+  // Landmark top beacons.
+  for (const lm of landmarks) {
+    pushBeacon(lm.x, lm.h + 6, lm.z, hash2i(lm.bi + 5, lm.bj + 9, seed));
   }
 
   const n = items.length / 8;
@@ -102,7 +160,130 @@ export function generateCity(seed = 4417, radius = 13) {
     kind[k] = items[k * 8 + 7];
     maxY = Math.max(maxY, y[k] + h[k] / 2);
   }
-  return { seed, radius, count: n, towers, maxY, x, y, z, w, h, d, s, kind };
+
+  const lanes = makeLanes(seed, radius);
+  const lamps = makeLamps(seed, radius);
+  return { seed, radius, count: n, towers, maxY, x, y, z, w, h, d, s, kind, landmarks, places, lanes, beacons, lamps };
+}
+
+/** Street lamps along both sides of every avenue — the night grid, lit. */
+function makeLamps(seed, radius) {
+  const lamps = [];
+  const span = radius * CELL + CELL * 0.5;
+  const R = (a, b) => hash2i(a, b, seed ^ 0x51e9a3c7);
+  // avenues sit at street indices divisible by 4 (see streetWidth)
+  const start = -Math.floor(radius / 4) * 4;
+  for (let a = start; a <= radius; a += 4) {
+    const p = a * CELL;
+    for (let z = -span; z <= span; z += 58) {
+      const j1 = (R(a * 3 + 1, Math.round(z)) - 0.5) * 6;
+      const j2 = (R(a * 3 + 2, Math.round(z)) - 0.5) * 6;
+      lamps.push({ x: p + 11 + j1, y: 7.5, z: z + j2 });
+      lamps.push({ x: p - 11 + j2, y: 7.5, z: z + j1 });
+    }
+    if (R(a, 77) < 0.6) {
+      for (let x = -span; x <= span; x += 58) {
+        const j1 = (R(Math.round(x), a * 3 + 3) - 0.5) * 6;
+        lamps.push({ x: x + j1, y: 7.5, z: p + 11 + j1 * 0.5 });
+        lamps.push({ x: x - j1 * 0.5, y: 7.5, z: p - 11 });
+      }
+    }
+  }
+  return lamps;
+}
+
+/** One named landmark record (geometry lives in scene.js). */
+function addLandmarkData(landmarks, lmCells, kind, bi, bj, seed, hero) {
+  const cx = bi * CELL + CELL / 2;
+  const cz = bj * CELL + CELL / 2;
+  const kIdx = Math.max(0, LM_KINDS.indexOf(kind));
+  const rnd = (salt) => hash2i(bi + salt, bj + salt * 3, seed ^ (kIdx * 7919));
+  const r0 = rnd(13);
+  const r1 = rnd(29);
+  const pool = LM_NAMES[kind];
+  let name = pool[Math.floor(rnd(47) * pool.length) % pool.length];
+  // keep names unique within a city
+  for (let n = 0; n < pool.length && landmarks.some((l) => l.name === name); n++) {
+    name = pool[(pool.indexOf(name) + 1) % pool.length];
+  }
+  const m = hero ? 1.5 : 1.25; // monumental by default
+  let r = 20;
+  let h = 200;
+  if (kind === 'arch') { r = (38 + r0 * 26) * m; h = (240 + r1 * 190) * m; }
+  else if (kind === 'spire') { r = (15 + r0 * 11) * 1.15; h = (380 + r1 * 280) * 1.2; }
+  else if (kind === 'dome') { r = (44 + r0 * 30) * m; h = (110 + r1 * 110) * 1.15; }
+  else if (kind === 'mast') { r = 9 + r0 * 5; h = (400 + r1 * 240) * 1.15; }
+  else if (kind === 'crown') { r = (34 + r0 * 22) * m; h = (280 + r1 * 230) * 1.2; }
+  else { r = (11 + r0 * 9) * 1.1; h = (430 + r1 * 300) * 1.15; }
+  landmarks.push({
+    kind, name, x: cx, z: cz, r, h,
+    rot: rnd(71) * Math.PI * 2,
+    hero: !!hero, bi, bj,
+    colorSeed: rnd(83),
+  });
+  lmCells.set(bi + ',' + bj, true);
+}
+
+/** One public-space record + a ring of string lights around it. */
+function addPlaceData(places, lmCells, pushBeacon, kind, bi, bj, seed) {
+  const cx = bi * CELL + CELL / 2;
+  const cz = bj * CELL + CELL / 2;
+  const kIdx = Math.max(0, PLACE_KINDS.indexOf(kind));
+  const rnd = (salt) => hash2i(bi + salt * 5, bj + salt * 7, seed ^ (kIdx * 104729));
+  const pool = PLACE_NAMES[kind];
+  let name = pool[Math.floor(rnd(19) * pool.length) % pool.length];
+  for (let n = 0; n < pool.length && places.some((l) => l.name === name); n++) {
+    name = pool[(pool.indexOf(name) + 1) % pool.length];
+  }
+  const r = 52 + rnd(23) * 26;
+  places.push({
+    kind, name, x: cx, z: cz, r,
+    rot: rnd(31) * Math.PI * 2,
+    bi, bj,
+    colorSeed: rnd(37),
+    seed: rnd(41),
+  });
+  lmCells.set(bi + ',' + bj, true);
+
+  // string lights around the perimeter + a centre glow
+  const n = 10 + Math.floor(rnd(43) * 8);
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    pushBeacon(cx + Math.cos(a) * r * 0.92, 9 + rnd(47 + i) * 7, cz + Math.sin(a) * r * 0.92, (i * 0.618) % 1);
+  }
+  pushBeacon(cx, 14 + rnd(53) * 10, cz, rnd(59));
+}
+
+/** Air and ground traffic lanes: straight runs the vehicles loop along. */
+function makeLanes(seed, radius) {
+  const lanes = [];
+  const span = radius * CELL + CELL * 0.6;
+  const R = (a, b) => hash2i(a, b, seed ^ 0x2c1b3e5d);
+
+  // Air corridors: two axes at four altitude bands.
+  const bands = [85, 165, 255, 355];
+  for (let k = 0; k < bands.length; k++) {
+    const y = bands[k] + R(k, 1) * 40;
+    const off1 = (R(k, 2) - 0.5) * span * 0.85;
+    const off2 = (R(k, 3) - 0.5) * span * 0.85;
+    lanes.push({ x1: -span, z1: off1, x2: span, z2: off1 * 0.35, y, speed: 130 + R(k, 4) * 150 });
+    lanes.push({ x1: span, z1: off2 * 0.35, x2: -span, z2: off2, y: y + 12, speed: 130 + R(k, 5) * 150 });
+    lanes.push({ x1: off1 * 0.4, z1: -span, x2: off1 * 0.9, z2: span, y: y + 24, speed: 120 + R(k, 6) * 160 });
+    lanes.push({ x1: off2 * 0.9, z1: span, x2: off2 * 0.4, z2: -span, y: y + 6, speed: 120 + R(k, 7) * 160 });
+  }
+
+  // Ground traffic on every 4th street (avenues), both directions.
+  for (let a = -radius; a <= radius; a += 4) {
+    const p = a * CELL;
+    if (R(a, 11) < 0.25) continue;
+    lanes.push({ x1: p + 9, z1: -span, x2: p + 9, z2: span, y: 5.5, speed: 55 + R(a, 12) * 45 });
+    lanes.push({ x1: p - 9, z1: span, x2: p - 9, z2: -span, y: 5.5, speed: 55 + R(a, 13) * 45 });
+    if (R(a, 14) < 0.5) {
+      lanes.push({ x1: -span, z1: p + 9, x2: span, z2: p + 9, y: 5.5, speed: 55 + R(a, 15) * 45 });
+      lanes.push({ x1: span, z1: p - 9, x2: -span, z2: p - 9, y: 5.5, speed: 55 + R(a, 16) * 45 });
+    }
+  }
+  return lanes;
 }
 
 /** Split [a,b] into n spans with jittered interior cuts. */
@@ -117,7 +298,7 @@ function splitSpan(a, b, n, rand) {
 }
 
 /** One tower: stacked segments with setbacks, podium, roof clutter, mast. */
-function addTower(push, rand, x0, x1, z0, z1, h01) {
+function addTower(push, pushBeacon, rand, x0, x1, z0, z1, h01) {
   const w = x1 - x0;
   const d = z1 - z0;
   if (w < 12 || d < 12) return;
@@ -186,11 +367,12 @@ function addTower(push, rand, x0, x1, z0, z1, h01) {
     const ah = 12 + rand() * 40;
     push(cx, y + 2.2 + ah / 2, cz, 1.6, ah, 1.6, rand(), KIND.MAST);
     push(cx, y + 2.2 + ah + 0.7, cz, 1.1, 1.4, 1.1, rand(), KIND.BAND);
+    pushBeacon(cx, y + 2.2 + ah + 1.6, cz, rand());
   }
 }
 
 /** Landmark: tall tapering stack with emissive bands and a long mast. */
-function addSpire(push, rand, cx, cz, h01) {
+function addSpire(push, pushBeacon, rand, cx, cz, h01) {
   const H = 520 + h01 * 380 + rand() * 120;
   const r0 = 22 + rand() * 12;
   const nSeg = 6 + Math.floor(rand() * 3);
@@ -209,4 +391,5 @@ function addSpire(push, rand, cx, cz, h01) {
   const ah = 60 + rand() * 70;
   push(cx, y + 4 + ah / 2, cz, 2, ah, 2, rand(), KIND.MAST);
   push(cx, y + 4 + ah + 1, cz, 1.6, 2, 1.6, rand(), KIND.BAND);
+  pushBeacon(cx, y + 4 + ah + 2.2, cz, rand());
 }

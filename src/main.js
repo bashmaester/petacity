@@ -1,7 +1,10 @@
 // Petacity — procedural city scaffolding with swap-able looks.
 import * as THREE from '../vendor/three.module.js';
 import { LOOKS, LOOK_BY_ID } from './looks.js';
-import { makeUniforms, makeWorld, growCity, applyLook } from './scene.js';
+import {
+  makeUniforms, makeWorld, growCity, applyLook, applyTime,
+  buildLandmarks, buildBeacons, buildPlaces, makeLamps, makeVehicles,
+} from './scene.js';
 import { FlyControls } from './controls.js';
 
 // Colours are authored as plain sRGB and written straight out — keep THREE's
@@ -10,6 +13,11 @@ THREE.ColorManagement.enabled = false;
 
 function clampInt(v, lo, hi, dflt) {
   const n = parseInt(v, 10);
+  return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : dflt;
+}
+
+function clampFloat(v, lo, hi, dflt) {
+  const n = parseFloat(v);
   return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : dflt;
 }
 
@@ -40,9 +48,13 @@ const params = new URLSearchParams(location.search);
 let seed = clampInt(params.get('seed'), 1, 999999999, 4417);
 let lookId = LOOK_BY_ID[params.get('look')] ? params.get('look') : 'bladerunner';
 // Deliberately small by default so the app stays fast while we test and debug.
-// Grow it with ?r=13 (or edit CITY_RADIUS) when we want the full skyline.
+// Grow it with ?r=13 (or the City size slider) when we want the full skyline.
 let cityRadius = clampInt(params.get('r'), 1, 15, 5);
-const tune = { win: 1, glow: 1, fog: 1 };
+let timeOfDay = params.get('t') !== null
+  ? clampFloat(params.get('t'), 0, 24, LOOK_BY_ID[lookId].defTime)
+  : LOOK_BY_ID[lookId].defTime;
+let heightScale = 1;
+const tune = { win: 1, glow: 1, fog: 1, lights: 1, traffic: 1, clouds: 1, haze: 1, sun: 1, vib: 1 };
 
 function createRenderer(canvas) {
   try {
@@ -66,7 +78,7 @@ function boot() {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(62, 1, 2, 22000);
+  const camera = new THREE.PerspectiveCamera(62, 1, 2, 28000);
   camera.position.set(720, 390, 880);
   camera.lookAt(0, 110, 0);
 
@@ -75,39 +87,70 @@ function boot() {
   scene.add(world.sky);
   scene.add(world.ground);
 
+  // everything the seed grows lives in one group so Height scale can stretch it
+  const cityGroup = new THREE.Group();
+  scene.add(cityGroup);
+
   /* ------------------------------------------------------------- city */
 
   let cityMesh = null;
+  let landmarkGroup = null;
+  let placeGroup = null;
+  let beacons = null;
+  let lamps = null;
+  let vehicles = null;
+  let city = null;
 
   function rebuild() {
-    const { city, mesh } = growCity(seed, cityRadius, world.towerMat);
-    if (cityMesh) {
-      scene.remove(cityMesh);
-      cityMesh.geometry.dispose();
+    const grown = growCity(seed, cityRadius, world.towerMat);
+    city = grown.city;
+    while (cityGroup.children.length) {
+      const ch = cityGroup.children.pop();
+      ch.traverse?.((o) => o.geometry && o.geometry.dispose());
     }
-    cityMesh = mesh;
-    scene.add(cityMesh);
+    cityMesh = grown.mesh;
+    landmarkGroup = buildLandmarks(city, U);
+    placeGroup = buildPlaces(city, U);
+    beacons = buildBeacons(city, world.beaconMat);
+    lamps = makeLamps(city, world.lampMat);
+    vehicles = makeVehicles(city, world.trailMat);
+    cityGroup.add(cityMesh);
+    cityGroup.add(landmarkGroup);
+    cityGroup.add(placeGroup);
+    cityGroup.add(beacons);
+    cityGroup.add(lamps);
+    cityGroup.add(vehicles.mesh);
+    cityGroup.add(vehicles.trails);
+    applyHeight();
 
     $('#stat-towers').textContent = city.towers.toLocaleString('en-US');
     $('#stat-boxes').textContent = city.count.toLocaleString('en-US');
     $('#stat-seed').textContent = String(seed);
+    buildPois();
     syncURL();
+  }
+
+  function applyHeight() {
+    cityGroup.scale.y = heightScale;
+    if (vehicles) vehicles.update(0, tune.traffic);
   }
 
   /* ------------------------------------------------------------- look */
 
   function refreshLook() {
-    const ui = applyLook(U, LOOK_BY_ID[lookId], tune);
-    document.documentElement.style.setProperty('--accent', ui.accent);
-    $('#grain').style.opacity = ui.post.grain;
-    $('#scan').style.opacity = ui.post.scan;
-    $('#vig').style.opacity = ui.post.vignette;
+    const look = LOOK_BY_ID[lookId];
+    applyLook(U, look, tune);
+    applyTime(U, look, timeOfDay, tune);
+    document.documentElement.style.setProperty('--accent', look.accent);
+    $('#grain').style.opacity = look.post.grain;
+    $('#scan').style.opacity = look.post.scan;
+    $('#vig').style.opacity = look.post.vignette;
     document.querySelectorAll('#chips button').forEach((b) => {
       const on = b.dataset.look === lookId;
       b.classList.toggle('on', on);
       b.setAttribute('aria-pressed', on);
     });
-    $('#look-blurb').textContent = LOOK_BY_ID[lookId].blurb;
+    $('#look-blurb').textContent = look.blurb;
     syncURL();
   }
 
@@ -116,6 +159,7 @@ function boot() {
     p.set('seed', String(seed));
     p.set('look', lookId);
     p.set('r', String(cityRadius));
+    p.set('t', timeOfDay.toFixed(1));
     history.replaceState(null, '', `${location.pathname}?${p}`);
   }
 
@@ -129,13 +173,15 @@ function boot() {
     b.querySelector('i').style.background = L.accent;
     b.onclick = () => {
       lookId = L.id;
+      timeOfDay = L.defTime; // land on the hour the look was authored for
+      $('#sl-time').value = String(timeOfDay);
       refreshLook();
     };
     $('#chips').appendChild(b);
   }
 
   $('#b-new').onclick = () => {
-    seed = 1 + Math.floor(Math.random() * 999998);
+    seed = 1 + Math.floor(Math.random() * 999999998);
     $('#seed-input').value = String(seed);
     rebuild();
   };
@@ -154,15 +200,57 @@ function boot() {
     }
   };
 
-  function bindSlider(el, key) {
-    el.oninput = () => {
-      tune[key] = parseFloat(el.value);
-      refreshLook();
-    };
+  function bindSlider(el, fn) {
+    el.oninput = () => fn(parseFloat(el.value));
   }
-  bindSlider($('#sl-win'), 'win');
-  bindSlider($('#sl-glow'), 'glow');
-  bindSlider($('#sl-fog'), 'fog');
+  bindSlider($('#sl-win'), (v) => { tune.win = v; refreshLook(); });
+  bindSlider($('#sl-glow'), (v) => { tune.glow = v; refreshLook(); });
+  bindSlider($('#sl-fog'), (v) => { tune.fog = v; refreshLook(); });
+  bindSlider($('#sl-time'), (v) => { timeOfDay = v; refreshLook(); });
+  bindSlider($('#sl-radius'), (v) => { cityRadius = clampInt(v, 1, 15, cityRadius); rebuild(); });
+  bindSlider($('#sl-height'), (v) => { heightScale = v; applyHeight(); });
+  bindSlider($('#sl-traffic'), (v) => { tune.traffic = v; if (vehicles) vehicles.update(0, tune.traffic); });
+  bindSlider($('#sl-lights'), (v) => { tune.lights = v; refreshLook(); });
+  bindSlider($('#sl-clouds'), (v) => { tune.clouds = v; refreshLook(); });
+  bindSlider($('#sl-haze'), (v) => { tune.haze = v; refreshLook(); });
+  bindSlider($('#sl-sun'), (v) => { tune.sun = v; refreshLook(); });
+  bindSlider($('#sl-vib'), (v) => { tune.vib = v; refreshLook(); });
+  $('#sl-time').value = String(timeOfDay);
+  $('#sl-radius').value = String(cityRadius);
+
+  /* -------------------------------------------------- places of interest */
+
+  let fly = null;
+
+  function flyToLandmark(lm) {
+    const dist = Math.max(240, lm.r * 4.6);
+    const away = new THREE.Vector3(camera.position.x - lm.x, 0, camera.position.z - lm.z);
+    if (away.lengthSq() < 1) away.set(1, 0, 1);
+    away.normalize().multiplyScalar(dist);
+    fly = {
+      t: 0,
+      from: camera.position.clone(),
+      to: new THREE.Vector3(lm.x + away.x, lm.h * 0.72 * heightScale + 26, lm.z + away.z),
+      look: new THREE.Vector3(lm.x, lm.h * 0.5 * heightScale, lm.z),
+    };
+    flash(lm.name);
+  }
+
+  function buildPois() {
+    const box = $('#pois');
+    box.innerHTML = '';
+    const spots = [
+      ...city.landmarks,
+      ...city.places.map((p) => ({ ...p, h: 42 })),
+    ];
+    for (const lm of spots) {
+      const b = document.createElement('button');
+      b.title = `${lm.kind} · fly the camera there`;
+      b.innerHTML = `<i></i>${lm.name}`;
+      b.onclick = () => flyToLandmark(lm);
+      box.appendChild(b);
+    }
+  }
 
   function flash(msg) {
     const el = $('#hint-flash');
@@ -191,7 +279,19 @@ function boot() {
     try {
       const dt = Math.min(clock.getDelta(), 0.05);
       U.uTime.value += dt;
-      controls.update(dt);
+      if (fly) {
+        fly.t = Math.min(1, fly.t + dt / 1.7);
+        const e = fly.t < 0.5 ? 2 * fly.t * fly.t : 1 - Math.pow(-2 * fly.t + 2, 2) / 2;
+        camera.position.lerpVectors(fly.from, fly.to, e);
+        camera.lookAt(fly.look);
+        if (fly.t >= 1 || controls.keys.size || controls._drag) {
+          controls.syncFromCamera();
+          fly = null;
+        }
+      } else {
+        controls.update(dt);
+      }
+      if (vehicles) vehicles.update(dt, tune.traffic);
       world.sky.position.copy(camera.position);
       renderer.render(scene, camera);
       requestAnimationFrame(animate);

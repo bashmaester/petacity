@@ -1,7 +1,7 @@
 // Node smoke tests for the pure-JS city generator. Run: node --test tests/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generateCity, streetWidth, AVENUE, STREET, KIND } from '../src/city.js';
+import { generateCity, streetWidth, AVENUE, STREET, KIND, LM_KINDS, PLACE_KINDS, CELL } from '../src/city.js';
 import { mulberry32, hash2i, makeNoise2D, fbm2D } from '../src/prng.js';
 
 test('mulberry32 is deterministic and in range', () => {
@@ -72,4 +72,74 @@ test('landmark spires exist and are tall', () => {
   }
   assert.ok(bands > 0, 'expected emissive bands');
   assert.ok(maxTop > 400, `maxTop=${maxTop}`);
+});
+
+test('landmarks (places of interest) are named, unique and in bounds', () => {
+  const city = generateCity(4417, 6);
+  assert.ok(city.landmarks.length >= 4, `landmarks=${city.landmarks.length}`);
+  const names = city.landmarks.map((l) => l.name);
+  assert.equal(new Set(names).size, names.length, 'names unique');
+  for (const lm of city.landmarks) {
+    assert.ok(LM_KINDS.includes(lm.kind), lm.kind);
+    assert.ok(lm.name.length > 2, lm.name);
+    assert.ok(lm.r > 5 && lm.h > 80, `${lm.name} r=${lm.r} h=${lm.h}`);
+    const lim = (city.radius + 1) * CELL;
+    assert.ok(Math.abs(lm.x) < lim && Math.abs(lm.z) < lim, `${lm.name} out of bounds`);
+    assert.ok(Number.isFinite(lm.rot) && Number.isFinite(lm.colorSeed));
+  }
+  assert.ok(city.landmarks.some((l) => l.hero), 'hero landmark exists');
+});
+
+test('vehicle lanes and beacons are populated sanely', () => {
+  const city = generateCity(4417, 6);
+  assert.ok(city.lanes.length >= 8, `lanes=${city.lanes.length}`);
+  for (const L of city.lanes) {
+    assert.ok(Number.isFinite(L.x1) && Number.isFinite(L.z1) && Number.isFinite(L.x2) && Number.isFinite(L.z2));
+    assert.ok(L.y >= 0 && L.speed > 0);
+    assert.ok(L.x1 !== L.x2 || L.z1 !== L.z2, 'lane has direction');
+  }
+  assert.ok(city.beacons.length >= 5, `beacons=${city.beacons.length}`);
+  for (const b of city.beacons) {
+    assert.ok(Number.isFinite(b.x) && b.y > 5 && Number.isFinite(b.z));
+    assert.ok(b.phase >= 0 && b.phase < 1);
+  }
+});
+
+test('landmarks, lanes and beacons are deterministic per seed', () => {
+  const a = generateCity(999, 5);
+  const b = generateCity(999, 5);
+  assert.deepEqual(a.landmarks, b.landmarks);
+  assert.deepEqual(a.lanes, b.lanes);
+  assert.deepEqual(a.beacons, b.beacons);
+  const c = generateCity(1000, 5);
+  assert.notDeepEqual(a.landmarks, c.landmarks);
+});
+
+test('public spaces exist, are named and lit', () => {
+  const city = generateCity(4417, 6);
+  assert.ok(city.places.length >= 3, `places=${city.places.length}`);
+  const names = city.places.map((p) => p.name);
+  assert.equal(new Set(names).size, names.length, 'place names unique');
+  for (const pl of city.places) {
+    assert.ok(PLACE_KINDS.includes(pl.kind), pl.kind);
+    assert.ok(pl.r > 30, `${pl.name} r=${pl.r}`);
+    const lim = (city.radius + 1) * CELL;
+    assert.ok(Math.abs(pl.x) < lim && Math.abs(pl.z) < lim);
+  }
+  // every public space is ringed with string lights
+  assert.ok(city.beacons.length > city.places.length * 8, 'place light rings present');
+});
+
+test('street lamps line the avenues', () => {
+  const city = generateCity(4417, 5);
+  assert.ok(city.lamps.length > 100, `lamps=${city.lamps.length}`);
+  for (const L of city.lamps.slice(0, 64)) {
+    assert.ok(Number.isFinite(L.x) && L.y > 2 && Number.isFinite(L.z));
+    // lamps sit near some avenue centreline (multiple of 4 street indices)
+    const nearest = Math.round(L.x / CELL) * CELL;
+    const nearestZ = Math.round(L.z / CELL) * CELL;
+    const onX = Math.abs(L.x - nearest) < 20 && ((Math.round(nearest / CELL) % 4) + 4) % 4 === 0;
+    const onZ = Math.abs(L.z - nearestZ) < 20 && ((Math.round(nearestZ / CELL) % 4) + 4) % 4 === 0;
+    assert.ok(onX || onZ, `lamp (${L.x},${L.z}) not near an avenue`);
+  }
 });
