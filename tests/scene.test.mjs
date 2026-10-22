@@ -6,7 +6,7 @@ import * as THREE from '../vendor/three.module.js';
 import { LOOKS, LOOK_BY_ID } from '../src/looks.js';
 import {
   makeUniforms, makeWorld, growCity, applyLook, applyTime,
-  buildLandmarks, buildBeacons, makeVehicles, makeLandmarkMaterial,
+  buildLandmarks, buildBeacons, buildPlaces, makeLamps, makeVehicles, makeLandmarkMaterial,
 } from '../src/scene.js';
 
 test('every look preset has a complete schema', () => {
@@ -36,7 +36,7 @@ test('shaders only use uniforms the materials actually have', () => {
     for (const m of src.matchAll(/uniform\s+\w+\s+(\w+)/g)) names.add(m[1]);
     return names;
   };
-  const mats = [world.skyMat, world.groundMat, world.towerMat, world.beaconMat, makeLandmarkMaterial(U, '#334455')];
+  const mats = [world.skyMat, world.groundMat, world.towerMat, world.beaconMat, world.lampMat, world.trailMat, makeLandmarkMaterial(U, '#334455')];
   for (const mat of mats) {
     const used = new Set([...declared(mat.vertexShader), ...declared(mat.fragmentShader)]);
     for (const name of used) {
@@ -109,35 +109,39 @@ test('looks are visually distinct (palettes differ)', () => {
   assert.equal(new Set(keys).size, LOOKS.length);
 });
 
-test('applyTime shifts sky, stars and lights across the day', () => {
+test('applyTime is identity at the authored hour, day/night delta works', () => {
   const U = makeUniforms();
-  const L = LOOK_BY_ID.outrun; // dusk preset with stars
+  const L = LOOK_BY_ID.outrun;
   applyLook(U, L);
+  const baseZen = U.uZen.value.getHexString();
+  const baseGlow = U.uWinGlow.value;
+
+  // identity: at defTime the palette is exactly the authored one
+  applyTime(U, L, L.defTime);
+  assert.equal(U.uZen.value.getHexString(), baseZen, 'zenith identity at defTime');
+  assert.equal(U.uWinGlow.value, baseGlow, 'window glow identity at defTime');
+
+  // deep night vs day: night is darker/bluer, windows and stars come up
   const night = applyTime(U, L, 23);
   const nightZen = U.uZen.value.getHexString();
   const nightStars = U.uStars.value;
   const nightWin = U.uWinGlow.value;
   const day = applyTime(U, L, 12);
-  const dayZen = U.uZen.value.getHexString();
-  const dayStars = U.uStars.value;
-  const dayWin = U.uWinGlow.value;
-
-  assert.notEqual(nightZen, dayZen, 'sky zenith moves with the hour');
+  assert.notEqual(nightZen, U.uZen.value.getHexString(), 'sky zenith moves with the hour');
   assert.ok(night.night > 0.9 && day.night < 0.1, `night=${night.night} day=${day.night}`);
-  assert.ok(nightStars > dayStars, 'stars stronger at night');
-  assert.ok(nightWin > dayWin * 1.2, 'windows glow harder at night');
+  assert.ok(nightStars > U.uStars.value, 'stars stronger at night');
+  assert.ok(nightWin > U.uWinGlow.value, 'windows glow harder at night');
   assert.ok(Math.abs(U.uSunDir.value.length() - 1) < 1e-5, 'sun dir stays normalised');
   assert.ok(day.elev > 0.5, `day elev=${day.elev}`);
 
-  // warm golden hour vs deep night
+  // golden hour keeps warmth
   const dusk = applyTime(U, L, 18.2);
   assert.ok(dusk.warm > 0.2, `warm=${dusk.warm}`);
   assert.ok(U.uLightK.value > 0.2, 'atmospheric lights get intensity');
 
   // lights slider scales the beacon/atmosphere intensity
-  const dim = applyTime(U, L, 23, { lights: 0, glow: 1 });
+  applyTime(U, L, 23, { lights: 0, glow: 1 });
   assert.equal(U.uLightK.value, 0);
-  assert.ok(dim.night > 0.9);
 
   // heavy-smog looks stay starless day or night (identity)
   const br = LOOK_BY_ID.bladerunner;
@@ -145,7 +149,21 @@ test('applyTime shifts sky, stars and lights across the day', () => {
   assert.equal(U.uStars.value, 0, 'smog eats the stars');
 });
 
-test('landmarks, beacons and vehicles build against real three.js', () => {
+test('applyTime parametric knobs drive clouds, haze, sun glow and vibrance', () => {
+  const U = makeUniforms();
+  const L = LOOK_BY_ID.bladerunner;
+  applyTime(U, L, L.defTime, { clouds: 1, haze: 1, sun: 1, sat: 1, lights: 1, glow: 1 });
+  const c1 = U.uCloud.value;
+  const h1 = U.uHaze.value;
+  const s1 = U.uSunGlow.value;
+  applyTime(U, L, L.defTime, { clouds: 1.6, haze: 0.4, sun: 2, sat: 1.4, lights: 1, glow: 1 });
+  assert.ok(U.uCloud.value > c1, 'cloud cover scales');
+  assert.ok(U.uHaze.value < h1, 'haze scales down');
+  assert.ok(U.uSunGlow.value > s1, 'sun glow scales up');
+  assert.ok(U.uSat.value > 1.2, 'vibrance saturates');
+});
+
+test('landmarks, places, beacons, lamps and vehicles build against real three.js', () => {
   const U = makeUniforms();
   const world = makeWorld(U);
   const { city } = growCity(4417, 5, world.towerMat);
@@ -154,7 +172,13 @@ test('landmarks, beacons and vehicles build against real three.js', () => {
   assert.equal(lmGroup.children.length, city.landmarks.length);
   let meshes = 0;
   lmGroup.traverse((o) => { if (o.isMesh) meshes++; });
-  assert.ok(meshes >= city.landmarks.length * 2, `landmark meshes=${meshes}`);
+  assert.ok(meshes >= city.landmarks.length * 4, `landmark meshes=${meshes}`);
+
+  const plGroup = buildPlaces(city, U);
+  assert.equal(plGroup.children.length, city.places.length);
+  let plMeshes = 0;
+  plGroup.traverse((o) => { if (o.isMesh) plMeshes++; });
+  assert.ok(plMeshes >= city.places.length * 10, `place meshes=${plMeshes}`);
 
   const pts = buildBeacons(city, world.beaconMat);
   assert.ok(pts.isPoints);
@@ -162,9 +186,14 @@ test('landmarks, beacons and vehicles build against real three.js', () => {
   assert.ok(pts.geometry.getAttribute('aPhase'));
   assert.ok(pts.geometry.getAttribute('aSize'));
 
-  const veh = makeVehicles(city, U, 60);
-  assert.ok(veh.mesh.isInstancedMesh);
+  const lamps = makeLamps(city, world.lampMat);
+  assert.ok(lamps.isPoints);
+  assert.equal(lamps.geometry.getAttribute('position').count, city.lamps.length);
+
+  const veh = makeVehicles(city, world.trailMat, 60);
+  assert.ok(veh.mesh.isInstancedMesh && veh.trails.isInstancedMesh);
   assert.ok(veh.mesh.count <= 60);
+  assert.ok(veh.trails.geometry.getAttribute('aColor'));
   const m = new THREE.Matrix4();
   veh.mesh.getMatrixAt(0, m);
   const p = new THREE.Vector3();

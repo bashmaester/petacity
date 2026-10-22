@@ -3,7 +3,7 @@ import * as THREE from '../vendor/three.module.js';
 import { LOOKS, LOOK_BY_ID } from './looks.js';
 import {
   makeUniforms, makeWorld, growCity, applyLook, applyTime,
-  buildLandmarks, buildBeacons, makeVehicles,
+  buildLandmarks, buildBeacons, buildPlaces, makeLamps, makeVehicles,
 } from './scene.js';
 import { FlyControls } from './controls.js';
 
@@ -54,7 +54,7 @@ let timeOfDay = params.get('t') !== null
   ? clampFloat(params.get('t'), 0, 24, LOOK_BY_ID[lookId].defTime)
   : LOOK_BY_ID[lookId].defTime;
 let heightScale = 1;
-const tune = { win: 1, glow: 1, fog: 1, lights: 1, traffic: 1 };
+const tune = { win: 1, glow: 1, fog: 1, lights: 1, traffic: 1, clouds: 1, haze: 1, sun: 1, vib: 1 };
 
 function createRenderer(canvas) {
   try {
@@ -78,7 +78,7 @@ function boot() {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(62, 1, 2, 22000);
+  const camera = new THREE.PerspectiveCamera(62, 1, 2, 28000);
   camera.position.set(720, 390, 880);
   camera.lookAt(0, 110, 0);
 
@@ -95,7 +95,9 @@ function boot() {
 
   let cityMesh = null;
   let landmarkGroup = null;
+  let placeGroup = null;
   let beacons = null;
+  let lamps = null;
   let vehicles = null;
   let city = null;
 
@@ -108,12 +110,17 @@ function boot() {
     }
     cityMesh = grown.mesh;
     landmarkGroup = buildLandmarks(city, U);
+    placeGroup = buildPlaces(city, U);
     beacons = buildBeacons(city, world.beaconMat);
-    vehicles = makeVehicles(city, U);
+    lamps = makeLamps(city, world.lampMat);
+    vehicles = makeVehicles(city, world.trailMat);
     cityGroup.add(cityMesh);
     cityGroup.add(landmarkGroup);
+    cityGroup.add(placeGroup);
     cityGroup.add(beacons);
+    cityGroup.add(lamps);
     cityGroup.add(vehicles.mesh);
+    cityGroup.add(vehicles.trails);
     applyHeight();
 
     $('#stat-towers').textContent = city.towers.toLocaleString('en-US');
@@ -204,6 +211,10 @@ function boot() {
   bindSlider($('#sl-height'), (v) => { heightScale = v; applyHeight(); });
   bindSlider($('#sl-traffic'), (v) => { tune.traffic = v; if (vehicles) vehicles.update(0, tune.traffic); });
   bindSlider($('#sl-lights'), (v) => { tune.lights = v; refreshLook(); });
+  bindSlider($('#sl-clouds'), (v) => { tune.clouds = v; refreshLook(); });
+  bindSlider($('#sl-haze'), (v) => { tune.haze = v; refreshLook(); });
+  bindSlider($('#sl-sun'), (v) => { tune.sun = v; refreshLook(); });
+  bindSlider($('#sl-vib'), (v) => { tune.vib = v; refreshLook(); });
   $('#sl-time').value = String(timeOfDay);
   $('#sl-radius').value = String(cityRadius);
 
@@ -228,7 +239,11 @@ function boot() {
   function buildPois() {
     const box = $('#pois');
     box.innerHTML = '';
-    for (const lm of city.landmarks) {
+    const spots = [
+      ...city.landmarks,
+      ...city.places.map((p) => ({ ...p, h: 42 })),
+    ];
+    for (const lm of spots) {
       const b = document.createElement('button');
       b.title = `${lm.kind} · fly the camera there`;
       b.innerHTML = `<i></i>${lm.name}`;

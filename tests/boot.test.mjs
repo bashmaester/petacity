@@ -19,6 +19,8 @@ test('main.js boots end-to-end (jsdom + fake WebGL)', { skip: JSDOM ? false : 'j
     <input id="sl-win" type="range"><input id="sl-glow" type="range"><input id="sl-fog" type="range">
     <input id="sl-time" type="range"><input id="sl-radius" type="range"><input id="sl-height" type="range">
     <input id="sl-traffic" type="range"><input id="sl-lights" type="range">
+    <input id="sl-clouds" type="range"><input id="sl-haze" type="range">
+    <input id="sl-sun" type="range"><input id="sl-vib" type="range">
     <div id="pois"></div>
     <input id="seed-input" type="number">
     <button id="b-new"></button><button id="b-link"></button>

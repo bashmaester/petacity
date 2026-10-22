@@ -56,11 +56,18 @@ a specific city + style + hour (the Copy link button does this for you).
 
 - **Streets & towers** — a seeded grid of blocks, lots and stacked tower
   segments with setbacks, podiums and roof clutter.
-- **Places of interest** — named landmark silhouettes (the Meridian Gate arch,
-  spires, domes, masts, crowns, needles) with a fly-to list in the panel.
-- **Vehicles** — light-streak traffic looping along air corridors and avenues.
-- **Atmospheric lights** — blinking aviation beacons on tower tops, emissive
-  window glow that wakes up at night, sun haze and street glow.
+- **Monumental landmarks** — named POIs (Meridian Gate arch, spires, domes,
+  masts, crowns, needles) with halos, cantilevers and strange companions,
+  plus a fly-to list in the panel.
+- **Public spaces** — markets, plazas, parks and fairs with stalls, canopies,
+  light trees and tent rings, ringed by string lights.
+- **Vehicles** — fast pods, streaks and heavy haulers with additive
+  light-trails looping along air corridors and avenues.
+- **Atmospheric lights** — street lamps on every avenue, blinking aviation
+  beacons, night window glow, sun haze and street glow.
+- **Parametric atmospherics** — cloud deck (lit tops, silver lining), sun
+  disc + glow, horizon haze and vibrance are all sliders; the horizon
+  dissolves into the sky so the world has no square edges.
 
 ## Current looks
 

@@ -32,6 +32,16 @@ const LM_NAMES = {
   needle: ['Needle Nine', 'Orbital Needle', 'Slim Jim', 'The Lancet', 'Pin Tower', 'Vector Needle'],
 };
 
+/** Public-space kinds — living, lit, low-rise places (geometry lives in scene.js). */
+export const PLACE_KINDS = ['market', 'plaza', 'park', 'fair'];
+
+const PLACE_NAMES = {
+  market: ['Night Market', 'Lantern Bazaar', 'Spice Row', 'The Exchange', 'Covered Market', 'Ember Stalls'],
+  plaza: ['Signal Plaza', 'Founders Square', 'Civic Plaza', 'The Forum', 'Assembly Ground', 'Echo Square'],
+  park: ['Hanging Gardens', 'The Terraces', 'Light Grove', 'Quiet Grounds', 'Sky Park', 'The Ramble'],
+  fair: ['Midway Fair', 'Carnival Strip', 'The Promenade', 'Rideside', 'Neon Midway', 'Festival Row'],
+};
+
 /**
  * Grow the city.
  * @param {number} seed
@@ -72,6 +82,18 @@ export function generateCity(seed = 4417, radius = 13) {
     if (lmCells.has(key) || spireCells.has(key) || (bi === 0 && bj === 0)) continue;
     const kind = LM_KINDS[Math.floor(hash2i(k, 5, seed) * LM_KINDS.length) % LM_KINDS.length];
     addLandmarkData(landmarks, lmCells, kind, bi, bj, seed, false);
+  }
+
+  // Public spaces: markets, plazas, parks, fairs — lit, living places.
+  const places = [];
+  const plCount = 3 + Math.floor(hash2i(29, 31, seed) * 3); // 3..5
+  for (let k = 0; k < plCount; k++) {
+    const bi = Math.floor(hash2i(k, 307, seed) * (radius * 2)) - radius;
+    const bj = Math.floor(hash2i(k, 401, seed) * (radius * 2)) - radius;
+    const key = bi + ',' + bj;
+    if (lmCells.has(key) || spireCells.has(key) || (bi === 0 && bj === 0)) continue;
+    const kind = PLACE_KINDS[Math.floor(hash2i(k, 61, seed) * PLACE_KINDS.length) % PLACE_KINDS.length];
+    addPlaceData(places, lmCells, pushBeacon, kind, bi, bj, seed);
   }
 
   for (let i = -radius; i < radius; i++) {
@@ -140,7 +162,34 @@ export function generateCity(seed = 4417, radius = 13) {
   }
 
   const lanes = makeLanes(seed, radius);
-  return { seed, radius, count: n, towers, maxY, x, y, z, w, h, d, s, kind, landmarks, lanes, beacons };
+  const lamps = makeLamps(seed, radius);
+  return { seed, radius, count: n, towers, maxY, x, y, z, w, h, d, s, kind, landmarks, places, lanes, beacons, lamps };
+}
+
+/** Street lamps along both sides of every avenue — the night grid, lit. */
+function makeLamps(seed, radius) {
+  const lamps = [];
+  const span = radius * CELL + CELL * 0.5;
+  const R = (a, b) => hash2i(a, b, seed ^ 0x51e9a3c7);
+  // avenues sit at street indices divisible by 4 (see streetWidth)
+  const start = -Math.floor(radius / 4) * 4;
+  for (let a = start; a <= radius; a += 4) {
+    const p = a * CELL;
+    for (let z = -span; z <= span; z += 58) {
+      const j1 = (R(a * 3 + 1, Math.round(z)) - 0.5) * 6;
+      const j2 = (R(a * 3 + 2, Math.round(z)) - 0.5) * 6;
+      lamps.push({ x: p + 11 + j1, y: 7.5, z: z + j2 });
+      lamps.push({ x: p - 11 + j2, y: 7.5, z: z + j1 });
+    }
+    if (R(a, 77) < 0.6) {
+      for (let x = -span; x <= span; x += 58) {
+        const j1 = (R(Math.round(x), a * 3 + 3) - 0.5) * 6;
+        lamps.push({ x: x + j1, y: 7.5, z: p + 11 + j1 * 0.5 });
+        lamps.push({ x: x - j1 * 0.5, y: 7.5, z: p - 11 });
+      }
+    }
+  }
+  return lamps;
 }
 
 /** One named landmark record (geometry lives in scene.js). */
@@ -157,15 +206,15 @@ function addLandmarkData(landmarks, lmCells, kind, bi, bj, seed, hero) {
   for (let n = 0; n < pool.length && landmarks.some((l) => l.name === name); n++) {
     name = pool[(pool.indexOf(name) + 1) % pool.length];
   }
-  const m = hero ? 1.35 : 1;
+  const m = hero ? 1.5 : 1.25; // monumental by default
   let r = 20;
   let h = 200;
   if (kind === 'arch') { r = (38 + r0 * 26) * m; h = (240 + r1 * 190) * m; }
-  else if (kind === 'spire') { r = 15 + r0 * 11; h = 380 + r1 * 280; }
-  else if (kind === 'dome') { r = (44 + r0 * 30) * m; h = 110 + r1 * 110; }
-  else if (kind === 'mast') { r = 9 + r0 * 5; h = 400 + r1 * 240; }
-  else if (kind === 'crown') { r = (34 + r0 * 22) * m; h = 280 + r1 * 230; }
-  else { r = 11 + r0 * 9; h = 430 + r1 * 300; }
+  else if (kind === 'spire') { r = (15 + r0 * 11) * 1.15; h = (380 + r1 * 280) * 1.2; }
+  else if (kind === 'dome') { r = (44 + r0 * 30) * m; h = (110 + r1 * 110) * 1.15; }
+  else if (kind === 'mast') { r = 9 + r0 * 5; h = (400 + r1 * 240) * 1.15; }
+  else if (kind === 'crown') { r = (34 + r0 * 22) * m; h = (280 + r1 * 230) * 1.2; }
+  else { r = (11 + r0 * 9) * 1.1; h = (430 + r1 * 300) * 1.15; }
   landmarks.push({
     kind, name, x: cx, z: cz, r, h,
     rot: rnd(71) * Math.PI * 2,
@@ -173,6 +222,36 @@ function addLandmarkData(landmarks, lmCells, kind, bi, bj, seed, hero) {
     colorSeed: rnd(83),
   });
   lmCells.set(bi + ',' + bj, true);
+}
+
+/** One public-space record + a ring of string lights around it. */
+function addPlaceData(places, lmCells, pushBeacon, kind, bi, bj, seed) {
+  const cx = bi * CELL + CELL / 2;
+  const cz = bj * CELL + CELL / 2;
+  const kIdx = Math.max(0, PLACE_KINDS.indexOf(kind));
+  const rnd = (salt) => hash2i(bi + salt * 5, bj + salt * 7, seed ^ (kIdx * 104729));
+  const pool = PLACE_NAMES[kind];
+  let name = pool[Math.floor(rnd(19) * pool.length) % pool.length];
+  for (let n = 0; n < pool.length && places.some((l) => l.name === name); n++) {
+    name = pool[(pool.indexOf(name) + 1) % pool.length];
+  }
+  const r = 52 + rnd(23) * 26;
+  places.push({
+    kind, name, x: cx, z: cz, r,
+    rot: rnd(31) * Math.PI * 2,
+    bi, bj,
+    colorSeed: rnd(37),
+    seed: rnd(41),
+  });
+  lmCells.set(bi + ',' + bj, true);
+
+  // string lights around the perimeter + a centre glow
+  const n = 10 + Math.floor(rnd(43) * 8);
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    pushBeacon(cx + Math.cos(a) * r * 0.92, 9 + rnd(47 + i) * 7, cz + Math.sin(a) * r * 0.92, (i * 0.618) % 1);
+  }
+  pushBeacon(cx, 14 + rnd(53) * 10, cz, rnd(59));
 }
 
 /** Air and ground traffic lanes: straight runs the vehicles loop along. */
