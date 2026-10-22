@@ -9,6 +9,11 @@ swapping uniforms.
 Inspired by [Gigacity](https://sael.net/gigacity/), cut down to just the city
 itself: no traffic, no cockpit, no radio — just the scaffolding and the looks.
 
+## Live demo
+
+Published from CI on GitHub Pages at **https://bashmaester.github.io/petacity/** —
+every push runs the tests and redeploys, so you can try it outside a local setup.
+
 ## Run it
 
 Any static file server works (ES modules need `http://`, not `file://`):
@@ -87,3 +92,7 @@ Node tests cover the generator (determinism, bounds), the scene layer against
 real three.js (uniform/shader contract, instancing attributes, look application),
 the HTML/JS wiring contract, and a full headless boot of `main.js` (jsdom +
 fake WebGL — skips if jsdom isn't installed).
+
+CI (`.github/workflows/pages.yml`) runs this suite on every push and pull
+request; on pushes to `main` or the working branch it also publishes `index.html`,
+`src/` and `vendor/` to GitHub Pages via `actions/deploy-pages`.
