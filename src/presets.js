@@ -18,10 +18,44 @@ export const WORLD_PRESETS = [
     label: 'Orbital Planetoid',
     state: {
       seed: 4417, lookId: 'tron', cityRadius: 5, suburbReach: 1.35,
+      waterMode: 0, terrainMode: 4, terrainScale: 0.0, treeMode: 2,
       worldCurve: 1.0, heightScale: 1.12, timeOfDay: 20.6, weatherMode: 0, dustLevel: 0.75,
       tune: { win: 1.1, glow: 1.3, fog: 0.55, lights: 1.35, traffic: 1.15, clouds: 1.15, cloudType: 4, cloudStyle: 0, haze: 0.7, sun: 1.15, vib: 1.18, moon: 1.3, moonsz: 1.35, moonph: 1.0 },
-      post: { bloom: 1.18, lens: 0.62, contrast: 1.14, temp: -0.18, film: 0.08 },
+      post: { bloom: 1.18, lens: 0.62, contrast: 1.14, temp: -0.18, film: 0.08, artStyle: 0, artStrength: 1.0 },
       cam: { x: 0, y: 980, z: 3150, yaw: 0, pitch: -0.46 },
+    },
+  },
+  {
+    id: 'coastal-valley',
+    label: 'Coastal Mountains & Farms',
+    state: {
+      seed: 6204, lookId: 'anime', cityRadius: 5, suburbReach: 1.4,
+      waterMode: 1, terrainMode: 0, terrainScale: 1.25, treeMode: 1,
+      worldCurve: 0.0, heightScale: 1.0, timeOfDay: 16.9, weatherMode: 0, dustLevel: 0.5,
+      tune: { win: 0.95, glow: 1.05, fog: 0.75, lights: 1.05, traffic: 1.0, clouds: 1.15, cloudType: 0, cloudStyle: 0, haze: 0.9, sun: 1.35, vib: 1.22, moon: 0.85, moonsz: 1.1, moonph: 0.62 },
+      post: { bloom: 0.88, lens: 0.35, contrast: 1.06, temp: 0.18, film: 0.08, artStyle: 0, artStrength: 1.0 },
+    },
+  },
+  {
+    id: 'desert-mesa-oasis',
+    label: 'Desert Mesa Cyber-Oasis',
+    state: {
+      seed: 5150, lookId: 'outrun', cityRadius: 5, suburbReach: 1.35,
+      waterMode: 3, terrainMode: 1, terrainScale: 1.3, treeMode: 3,
+      worldCurve: 0.0, heightScale: 1.02, timeOfDay: 18.7, weatherMode: 5, dustLevel: 0.85,
+      tune: { win: 1.15, glow: 1.3, fog: 0.9, lights: 1.25, traffic: 1.15, clouds: 0.95, cloudType: 3, cloudStyle: 0, haze: 1.15, sun: 1.45, vib: 1.28, moon: 1.2, moonsz: 1.45, moonph: 1.0 },
+      post: { bloom: 1.15, lens: 0.62, contrast: 1.12, temp: 0.24, film: 0.14, artStyle: 0, artStrength: 1.0 },
+    },
+  },
+  {
+    id: 'impressionist-bay',
+    label: 'Impressionist Nocturne Bay',
+    state: {
+      seed: 4417, lookId: 'bladerunner', cityRadius: 5, suburbReach: 1.25,
+      waterMode: 2, terrainMode: 2, terrainScale: 1.1, treeMode: 3,
+      worldCurve: 0.0, heightScale: 1.05, timeOfDay: 20.6, weatherMode: 0, dustLevel: 0.55,
+      tune: { win: 1.2, glow: 1.3, fog: 0.95, lights: 1.25, traffic: 1.1, clouds: 1.3, cloudType: 4, cloudStyle: 0, haze: 1.0, sun: 1.1, vib: 1.22, moon: 1.25, moonsz: 1.35, moonph: 1.0 },
+      post: { bloom: 1.05, lens: 0.45, contrast: 1.08, temp: 0.12, film: 0.06, artStyle: 5, artStrength: 1.0 },
     },
   },
   {
@@ -120,6 +154,10 @@ export function normalizeExactState(raw = {}) {
     lookId: typeof raw.lookId === 'string' ? raw.lookId : 'bladerunner',
     cityRadius: Math.max(1, Math.min(15, Math.round(Number(raw.cityRadius) || 5))),
     suburbReach: roundN(raw.suburbReach ?? 1, 2),
+    waterMode: Math.max(0, Math.min(4, Math.round(Number(raw.waterMode ?? 1)))),
+    terrainMode: Math.max(0, Math.min(4, Math.round(Number(raw.terrainMode ?? 0)))),
+    terrainScale: Math.max(0, Math.min(2, roundN(Number(raw.terrainScale ?? 1), 2))),
+    treeMode: Math.max(0, Math.min(3, Math.round(Number(raw.treeMode ?? 0)))),
     worldCurve: roundN(raw.worldCurve ?? 0, 3),
     heightScale: roundN(raw.heightScale ?? 1, 2),
     timeOfDay: roundN(raw.timeOfDay ?? 18.2, 2),
@@ -127,6 +165,7 @@ export function normalizeExactState(raw = {}) {
     dustLevel: roundN(raw.dustLevel ?? 0.6, 2),
     glide: !!(raw.glide ?? raw.glideOn),
     collide: raw.collide !== undefined ? !!raw.collide : (raw.collideOn !== undefined ? !!raw.collideOn : true),
+    avoidance: raw.avoidance !== undefined ? !!raw.avoidance : true,
   };
   if (raw.custom && typeof raw.custom === 'object') {
     out.custom = {
@@ -151,7 +190,7 @@ export function normalizeExactState(raw = {}) {
       if (raw.tune[k] !== undefined) out.tune[k] = roundN(Number(raw.tune[k]), 3);
     }
   }
-  const defPost = { bloom: 0.85, lens: 0.45, contrast: 1.06, temp: 0, film: 0.16 };
+  const defPost = { bloom: 0.85, lens: 0.45, contrast: 1.06, temp: 0, film: 0.16, artStyle: 0, artStrength: 1.0 };
   out.post = { ...defPost };
   if (raw.post && typeof raw.post === 'object') {
     for (const k of Object.keys(defPost)) {

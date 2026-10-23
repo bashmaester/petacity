@@ -7,13 +7,15 @@ import { LOOKS, LOOK_BY_ID, syncCustomLook } from '../src/looks.js';
 import * as SHADERS from '../src/shaders.js';
 import { WEATHER_VERT, SKY_FRAG, GROUND_FRAG, CLOUD_VERT, CLOUD_FRAG } from '../src/shaders.js';
 import * as POST from '../src/post.js';
-import { makePostProcessor, POST_VERT, BRIGHT_FRAG, BLUR_FRAG, COMP_FRAG } from '../src/post.js';
+import { makePostProcessor, ART_STYLE_NAMES, POST_VERT, BRIGHT_FRAG, BLUR_FRAG, COMP_FRAG } from '../src/post.js';
 import {
-  makeUniforms, makeWorld, growCity, applyLook, applyTime, bendWorldPoint,
+  makeUniforms, makeWorld, growCity, syncCityEnvironmentUniforms,
+  applyLook, applyTime, bendWorldPoint,
   buildLandmarks, buildBeacons, buildPlaces, makeLamps, makeLandmarkMaterial,
   makeVehicles, makeSearchlights, makeLightPools,
   buildWater, buildBoulevards, buildBillboards, buildTrees, buildSculptures,
-  makeWeather, WEATHER_NAMES, CLOUD_TYPE_NAMES, describeMoonPhase,
+  makeWeather, WEATHER_NAMES, CLOUD_TYPE_NAMES,
+  WATER_MODE_NAMES, TERRAIN_MODE_NAMES, TREE_MODE_NAMES, describeMoonPhase,
   buildSigns, buildHolos,
 } from '../src/scene.js';
 import {
@@ -1091,6 +1093,154 @@ test('Phase-9 special structures follow active color themes, celestial orbits & 
     else if (mode < -0.5) straightCount++;
   }
   assert.ok(turnCount >= 180 && straightCount >= 120, `swarm mixes 90-deg corner turns (${turnCount}) & horizontal street runs (${straightCount})`);
+});
+
+test('Phase-10 scene: ocean/lake/river water, procedural botanical & cyber park trees + catenary links, smooth anticipatory camera steering, and 6 art render styles', () => {
+  const U = makeUniforms();
+  const world = makeWorld(U);
+
+  // 1) Coastal ocean + river delta + lakes build finite non-empty Three.js meshes & sync uniforms
+  for (const wm of [0, 1, 2, 3, 4]) {
+    const { city } = growCity(4417, 5, world.towerMat, 1.15, {
+      waterMode: wm,
+      terrainMode: wm === 4 ? 1 : 0,
+      terrainScale: 1.2,
+      U,
+    });
+    assert.equal(U.uWaterMode.value, wm);
+    const wg = buildWater(city, world.waterMat);
+    if (wm === 4) {
+      assert.equal(wg.children.length, 0, 'dry basin creates 0 water meshes');
+    } else {
+      assert.ok(wg.children.length >= 1, `waterMode=${wm} builds >=1 water mesh`);
+      for (const m of wg.children) {
+        const pos = m.geometry.getAttribute('position');
+        assert.ok(pos && pos.count >= 6, `water mesh has valid geometry (verts=${pos?.count})`);
+        assert.equal(Number.isFinite(pos.getX(0) + pos.getY(0) + pos.getZ(0)), true);
+      }
+    }
+  }
+
+  // 2) Parks + Multi-branching Botanical & Cyber-Dendritic Trees + Custom Lights + Catenary Connections
+  assert.equal(TREE_MODE_NAMES.length, 4, '4 tree modes exported');
+  const { city, collider } = growCity(4417, 5, world.towerMat, 1.1, { waterMode: 1, terrainMode: 2, U });
+  const places = buildPlaces(city, U, LOOK_BY_ID.bladerunner);
+  assert.ok(places.children.length >= 1, 'park & public spaces build cleanly');
+
+  const trees = buildTrees(city, U);
+  assert.ok(trees.organic.children.length >= 2, 'botanical tree group contains multi-branching trunks + foliage + lanterns');
+  assert.ok(trees.cyber.children.length >= 2, 'cyber tree group contains dendritic struts + holo rings + light nodes');
+  assert.ok(trees.linkCount >= 18, `inter-tree catenary light network built (${trees.linkCount} links)`);
+
+  // Verify tree mode switching: Auto (Tron -> cyber, Clay -> organic), explicit Botanical (1), Cyber (2), Hybrid (3)
+  trees.setNature(LOOK_BY_ID.tron, 0);
+  assert.equal(trees.cyber.visible, true);
+  assert.equal(trees.organic.visible, false);
+
+  trees.setNature(LOOK_BY_ID.tron, 1);
+  assert.equal(trees.organic.visible, true, 'treeMode=1 forces Real Botanical even on Tron');
+  assert.equal(trees.cyber.visible, false);
+
+  trees.setNature(LOOK_BY_ID.anime, 2);
+  assert.equal(trees.organic.visible, false);
+  assert.equal(trees.cyber.visible, true, 'treeMode=2 forces Artificial Cyber-Trees');
+
+  trees.setNature(LOOK_BY_ID.bladerunner, 3);
+  assert.equal(trees.organic.visible, true, 'treeMode=3 enables Hybrid Bio-Cyber Grove');
+  assert.equal(trees.cyber.visible, true);
+
+  // 3) Smooth inertial camera controller + shallow-angle early anticipatory obstacle avoidance
+  const domStub = {
+    addEventListener() {},
+    removeEventListener() {},
+    setPointerCapture() {},
+    releasePointerCapture() {},
+  };
+  const cam = new THREE.PerspectiveCamera(60, 1.6, 2, 34000);
+  const ctl = new FlyControls(cam, domStub);
+  ctl.collider = collider;
+  ctl.collision = true;
+  ctl.avoidance = true;
+
+  // Pick the southernmost tall tower (>130m) on a clean open approach so 220m ahead is unobstructed
+  const { city: clearCity, collider: clearCol } = growCity(4417, 5, world.towerMat, 0.0, { waterMode: 4, terrainMode: 4, U });
+  ctl.collider = clearCol;
+  let tx = 0;
+  let tz = -1e9;
+  for (let i = 0; i < clearCity.towers; i++) {
+    if (clearCol.maxHeightNear(clearCity.x[i], clearCity.z[i], 14) > 130 && clearCol.hitsPoint(clearCity.x[i], 48, clearCity.z[i], 0, 1)) {
+      if (clearCity.z[i] > tz) {
+        tz = clearCity.z[i];
+        tx = clearCity.x[i];
+      }
+    }
+  }
+  const spawnZ = tz + 225;
+  ctl.setPose({ x: tx, y: 48, z: spawnZ, yaw: 0, pitch: 0 });
+  ctl.keys.add('w');
+
+  // Verify smooth velocity ramp-up on frame 1 (inertial damping rather than abrupt full-speed snap)
+  ctl.update(0.016);
+  const firstStepDist = Math.hypot(cam.position.x - tx, cam.position.z - spawnZ);
+  assert.ok(firstStepDist > 0.02 && firstStepDist < ctl.speed * 0.016 * 0.5, 'velocity ramps smoothly via inertial damping');
+
+  let earlySteerDist = -1;
+  let maxStepYaw = 0;
+  for (let step = 0; step < 90; step++) {
+    const prevY = ctl.yaw;
+    ctl.update(0.03);
+    const dYaw = Math.abs(ctl.yaw - prevY);
+    if (dYaw > maxStepYaw) maxStepYaw = dYaw;
+    const distAheadOfTower = cam.position.z - tz;
+    if (earlySteerDist < 0 && Math.abs(ctl.yaw) > 0.02) {
+      earlySteerDist = distAheadOfTower;
+    }
+    assert.equal(
+      clearCol.hitsPoint(cam.position.x, cam.position.y, cam.position.z, 0, 1),
+      false,
+      'anticipatory controller keeps camera completely outside solid towers'
+    );
+  }
+  assert.ok(earlySteerDist > 110, `expected course adjustment well in advance (>110m out), started at ${earlySteerDist.toFixed(1)}m`);
+  assert.ok(maxStepYaw < 0.08, `course adjustment stays smooth & shallow per frame (maxStepYaw=${maxStepYaw.toFixed(4)} rad)`);
+
+  // Verify smooth coasting deceleration after key release
+  ctl.keys.clear();
+  const zAtRelease = cam.position.z;
+  ctl.update(0.02);
+  assert.ok(Math.hypot(cam.position.z - zAtRelease) > 0.1, 'camera coasts smoothly to rest instead of hard-stopping');
+
+  // 4) Post-processing DepthTexture + 6 Artistic / X-Ray Render Styles + exact-state roundtrip
+  assert.equal(ART_STYLE_NAMES.length, 6, 'Cinema + X-Ray + Ink Sketch + Charcoal + Painterly + Impressionist');
+  const fakeRenderer = { setRenderTarget() {}, render() {} };
+  const post = makePostProcessor(fakeRenderer);
+  assert.ok(post.sceneRT.depthTexture instanceof THREE.DepthTexture, 'sceneRT carries hardware DepthTexture for X-Ray & depth silhouettes');
+  assert.equal(post.compMat.uniforms.tDepth.value, post.sceneRT.depthTexture);
+
+  for (let styleIdx = 0; styleIdx < ART_STYLE_NAMES.length; styleIdx++) {
+    post.configure({ artStyle: styleIdx, artStrength: 0.92 });
+    assert.equal(post.compMat.uniforms.uArtStyle.value, styleIdx);
+    assert.equal(post.compMat.uniforms.uArtStrength.value, 0.92);
+  }
+
+  const tok = encodeExactState({
+    seed: 6204,
+    lookId: 'anime',
+    waterMode: 3,
+    terrainMode: 4,
+    terrainScale: 1.45,
+    treeMode: 3,
+    avoidance: false,
+    post: { bloom: 0.9, lens: 0.4, contrast: 1.1, temp: 0.1, film: 0.12, artStyle: 4, artStrength: 1.15 },
+  });
+  const dec = decodeExactState(tok);
+  assert.equal(dec.waterMode, 3);
+  assert.equal(dec.terrainMode, 4);
+  assert.equal(dec.terrainScale, 1.45);
+  assert.equal(dec.treeMode, 3);
+  assert.equal(dec.avoidance, false);
+  assert.equal(dec.post.artStyle, 4);
+  assert.equal(dec.post.artStrength, 1.15);
 });
 
 

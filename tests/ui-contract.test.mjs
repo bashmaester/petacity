@@ -82,7 +82,7 @@ test('UI toggle sits in top corner of panel, #keys avoids panel overlap, and gly
   assert.match(keysRule[1], /left:\s*auto/, '#keys clears left offset');
 
   for (const id of [
-    'b-ui', 'b-glide', 'b-collide', 'b-export',
+    'b-ui', 'b-glide', 'b-avoid', 'b-collide', 'b-export',
     'b-new', 'b-link', 'b-seed-pal',
     'b-preset-save', 'b-preset-del', 'b-poi-go', 'b-bm-go', 'b-bm-add', 'b-bm-del',
     'b-snap', 'b-vid', 'b-path-render', 'b-rec', 'b-kf-add', 'b-play', 'b-loop', 'b-path-exp', 'b-path-clear',
@@ -129,6 +129,19 @@ test('Phase-9 cloud types, extended cloud cover, complete moon phase readout & l
   assert.match(html, /<select[^>]*id="sel-cloudtype"/, 'Cloud formation type is a <select> dropdown');
   assert.match(html, /id="sl-clouds"[^>]*max="2\.4"/, 'Cloud cover slider extends up to 2.4 overcast');
   assert.match(html, /id="sl-moonph"[^>]*max="2"/, 'Moon phase slider spans full 0..2 synodic cycle');
+});
+
+test('Phase-10 landscape, park tree modes, anticipatory steering & artistic/X-ray render style controls exist', () => {
+  for (const id of [
+    'b-avoid', 'sel-water', 'sel-terrain', 'sl-relief', 'sel-trees', 'sel-art', 'sl-artstr',
+  ]) {
+    assert.ok(html.includes(`id="${id}"`), `#${id} present in index.html`);
+  }
+  assert.match(html, /<select[^>]*id="sel-water"/, 'Water mode selector is a <select> dropdown');
+  assert.match(html, /<select[^>]*id="sel-terrain"/, 'Terrain mode selector is a <select> dropdown');
+  assert.match(html, /<select[^>]*id="sel-trees"/, 'Park tree mode selector is a <select> dropdown');
+  assert.match(html, /<select[^>]*id="sel-art"/, 'Artistic & X-Ray render style selector is a <select> dropdown');
+  assert.ok(main.includes("e.key === 'v'"), 'V key shortcut wired for anticipatory obstacle avoidance');
 });
 
 

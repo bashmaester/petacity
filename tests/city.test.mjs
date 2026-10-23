@@ -1,7 +1,11 @@
 // Node smoke tests for the pure-JS city generator. Run: node --test tests/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generateCity, makeCityCollider, streetWidth, AVENUE, STREET, KIND, LM_KINDS, PLACE_KINDS, DISTRICT_KINDS, CELL } from '../src/city.js';
+import {
+  generateCity, makeCityCollider, streetWidth, AVENUE, STREET, KIND,
+  LM_KINDS, PLACE_KINDS, DISTRICT_KINDS, CELL,
+  WATER_MODE_NAMES, TERRAIN_MODE_NAMES, evalTerrainHeight, evalCoastSignedDist,
+} from '../src/city.js';
 import { mulberry32, hash2i, makeNoise2D, fbm2D } from '../src/prng.js';
 
 test('mulberry32 is deterministic and in range', () => {
@@ -411,6 +415,102 @@ test('Phase-9 landmarks include pyramids, cantilevered sky-wings & ziggurats, an
     assert.ok(Math.abs(T.y2 - T.y1) >= 12, 'corner turn smoothly bridges perpendicular street elevations');
     assert.ok(Array.isArray(T.outs) && T.outs.length >= 1, 'corner turn links into outgoing perpendicular street');
   }
+});
+
+test('Phase-10 macro-environment: water/shoreline modes, distant mountains/deserts, curvilinear suburbs + POIs, and park tree networks', () => {
+  assert.equal(WATER_MODE_NAMES.length, 5, '5 water modes exported');
+  assert.equal(TERRAIN_MODE_NAMES.length, 5, '5 terrain modes exported');
+  assert.ok(PLACE_KINDS.includes('park'), 'PLACE_KINDS includes park');
+
+  // 1) Coastal Ocean & Bay + Distant Mountains + Curvilinear Suburbs + Farms
+  const coastal = generateCity({
+    seed: 4417,
+    radius: 5,
+    suburbReach: 1.2,
+    waterMode: 1,
+    terrainMode: 0,
+    terrainScale: 1.2,
+  });
+  const coreSpan = coastal.radius * CELL;
+  assert.ok(coastal.water.some((w) => w.kind === 'ocean'), 'waterMode=1 builds analytical ocean shoreline sector');
+  assert.ok(coastal.suburbPOIs.some((p) => p.kind === 'shore' || p.kind === 'lighthouse'), 'coastal shoreline generates pier/lighthouse POI');
+
+  // Verify core basin stays flat (0m) while inland mountain horizon rises strongly (>120m)
+  const coreElev = evalTerrainHeight(
+    0, 0, coreSpan, coastal.suburbSpan,
+    coastal.terrainMode, coastal.terrainScale, coastal.coastAngle, coastal.waterMode,
+    coastal.terrainSeedX, coastal.terrainSeedZ
+  );
+  assert.equal(coreElev, 0, 'urban core sits on level 0m basin');
+
+  const inlandAng = coastal.coastAngle + Math.PI;
+  let maxMountainY = 0;
+  for (let d = 5500; d <= 10500; d += 500) {
+    const h = evalTerrainHeight(
+      Math.cos(inlandAng) * d, Math.sin(inlandAng) * d,
+      coreSpan, coastal.suburbSpan,
+      coastal.terrainMode, coastal.terrainScale, coastal.coastAngle, coastal.waterMode,
+      coastal.terrainSeedX, coastal.terrainSeedZ
+    );
+    if (h > maxMountainY) maxMountainY = h;
+  }
+  assert.ok(maxMountainY > 120, `expected distant mountain relief >120m, got ${maxMountainY.toFixed(1)}m`);
+
+  const col = makeCityCollider(coastal);
+  const probeX = Math.cos(inlandAng) * 7000;
+  const probeZ = Math.sin(inlandAng) * 7000;
+  const expectedH = Math.max(0, evalTerrainHeight(
+    probeX, probeZ, coreSpan, coastal.suburbSpan,
+    coastal.terrainMode, coastal.terrainScale, coastal.coastAngle, coastal.waterMode,
+    coastal.terrainSeedX, coastal.terrainSeedZ
+  ));
+  assert.ok(Math.abs(col.groundHeightAt(probeX, probeZ) - expectedH) < 1e-6, 'collider groundHeightAt matches terrain field');
+
+  // 2) Suburban houses follow curved streets (non-orthogonal continuous rotations, low-story) + shops, power stations, farms
+  const poiKinds = new Set(coastal.suburbPOIs.map((p) => p.kind));
+  assert.ok(poiKinds.has('shop'), 'suburbs include neighborhood shops');
+  assert.ok(poiKinds.has('power'), 'suburbs include power stations');
+  assert.ok(poiKinds.has('farm'), 'rural fringe includes farmsteads');
+
+  const suburbStart = coreSpan + 400;
+  let suburbTotal = 0;
+  let nonGridRotated = 0;
+  let lowStoryCount = 0;
+  for (let i = coastal.towers; i < coastal.count; i++) {
+    const dist = Math.hypot(coastal.x[i], coastal.z[i]);
+    if (dist < suburbStart) continue;
+    suburbTotal++;
+    const mod90 = Math.abs(((coastal.rot[i] % (Math.PI / 2)) + Math.PI / 2) % (Math.PI / 2));
+    if (mod90 > 0.08 && mod90 < (Math.PI / 2 - 0.08)) nonGridRotated++;
+    if (coastal.h[i] <= 14.5) lowStoryCount++;
+    const coastDist = evalCoastSignedDist(
+      coastal.x[i], coastal.z[i],
+      coreSpan, coastal.coastAngle, coastal.waterMode,
+      coastal.terrainSeedX, coastal.terrainSeedZ
+    );
+    assert.ok(coastDist > -145, `suburban/pier structure at (${coastal.x[i].toFixed(0)}, ${coastal.z[i].toFixed(0)}) should not sit deep offshore (sd=${coastDist.toFixed(1)})`);
+  }
+  assert.ok(suburbTotal > 300, `expected >300 suburban/rural structures, got ${suburbTotal}`);
+  assert.ok(nonGridRotated > suburbTotal * 0.55, `expected majority of suburban structures to follow curved non-grid streets (${nonGridRotated}/${suburbTotal})`);
+  assert.ok(lowStoryCount > suburbTotal * 0.60, `expected majority of suburban structures to be simple low-story buildings (${lowStoryCount}/${suburbTotal})`);
+
+  // 3) Harbor & Winding River (0), Archipelago (2), Great Crater Lake (3), Dry Desert Mesas (4 + terrain 1)
+  const harbor = generateCity({ seed: 4417, radius: 5, waterMode: 0, terrainMode: 2 });
+  assert.ok(harbor.water.some((w) => w.kind === 'river'), 'waterMode=0 generates meandering river ribbon');
+
+  const arch = generateCity({ seed: 4417, radius: 5, waterMode: 2, terrainMode: 0 });
+  assert.ok(arch.water.some((w) => w.kind === 'ocean'), 'waterMode=2 generates archipelago sea');
+
+  const lake = generateCity({ seed: 4417, radius: 5, waterMode: 3, terrainMode: 3 });
+  assert.ok(lake.water.some((w) => w.kind === 'lake'), 'waterMode=3 generates Great Crater Lake');
+
+  const desert = generateCity({ seed: 4417, radius: 5, waterMode: 4, terrainMode: 1, terrainScale: 1.25 });
+  assert.equal(desert.water.length, 0, 'waterMode=4 produces dry arid basin');
+
+  // 4) Parks & procedural tree canopy network
+  assert.ok(coastal.places.some((p) => p.kind === 'park'), 'city guarantees at least one botanical/cyber park');
+  assert.ok(coastal.trees.length >= 90, `expected lush park & avenue tree count >=90, got ${coastal.trees.length}`);
+  assert.ok(Array.isArray(coastal.treeLinks) && coastal.treeLinks.length >= 18, `expected >=18 inter-tree canopy links, got ${coastal.treeLinks?.length}`);
 });
 
 

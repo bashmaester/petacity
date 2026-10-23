@@ -8,14 +8,16 @@ import {
 } from './presets.js';
 import { CELL } from './city.js';
 import {
-  makeUniforms, makeWorld, growCity, applyLook, applyTime, bendWorldPoint,
+  makeUniforms, makeWorld, growCity, syncCityEnvironmentUniforms,
+  applyLook, applyTime, bendWorldPoint,
   buildLandmarks, buildBeacons, buildPlaces, makeLamps,
   makeVehicles, makeSearchlights, makeLightPools,
   buildWater, buildBoulevards, buildBillboards, buildTrees, buildSculptures,
-  makeWeather, WEATHER_NAMES, CLOUD_TYPE_NAMES, describeMoonPhase,
+  makeWeather, WEATHER_NAMES, CLOUD_TYPE_NAMES,
+  WATER_MODE_NAMES, TERRAIN_MODE_NAMES, TREE_MODE_NAMES, describeMoonPhase,
   buildSigns, buildHolos,
 } from './scene.js';
-import { makePostProcessor } from './post.js';
+import { makePostProcessor, ART_STYLE_NAMES } from './post.js';
 import { FlyControls } from './controls.js';
 import { CameraPathRecorder, makeSceneExporter } from './recorder.js';
 
@@ -131,6 +133,18 @@ let cityRadius = initialExact ? initialExact.cityRadius : clampInt(params.get('r
 let suburbReach = initialExact
   ? initialExact.suburbReach
   : (params.get('sub') !== null ? clampFloat(params.get('sub'), 0, 1.6, 1) : 1);
+let waterMode = initialExact
+  ? initialExact.waterMode
+  : clampInt(params.get('wm'), 0, 4, 1);
+let terrainMode = initialExact
+  ? initialExact.terrainMode
+  : clampInt(params.get('tm'), 0, 4, 0);
+let terrainScale = initialExact
+  ? initialExact.terrainScale
+  : (params.get('ts') !== null ? clampFloat(params.get('ts'), 0, 2, 1) : 1);
+let treeMode = initialExact
+  ? initialExact.treeMode
+  : clampInt(params.get('tr'), 0, 3, 0);
 let worldCurve = initialExact
   ? initialExact.worldCurve
   : (params.get('curve') !== null ? clampFloat(params.get('curve'), 0, 1, 0) : 0);
@@ -154,13 +168,15 @@ let weatherMode = initialExact ? initialExact.weatherMode : clampInt(params.get(
 let dustLevel = initialExact ? initialExact.dustLevel : 0.6;
 const initGrade = LOOK_BY_ID[lookId].grade || { bloom: 0.85, lens: 0.45, contrast: 1.06, temp: 0, film: 0.16 };
 const postState = initialExact
-  ? { ...initialExact.post }
+  ? { artStyle: 0, artStrength: 1.0, ...initialExact.post }
   : {
       bloom: initGrade.bloom,
       lens: initGrade.lens,
       contrast: initGrade.contrast,
       temp: initGrade.temp,
       film: initGrade.film,
+      artStyle: clampInt(params.get('art'), 0, 5, 0),
+      artStrength: params.get('as') !== null ? clampFloat(params.get('as'), 0, 1.4, 1) : 1.0,
     };
 
 function createRenderer(canvas) {
@@ -271,6 +287,7 @@ function boot() {
   let poiList = [];
   let glideOn = initialExact ? !!initialExact.glide : false;
   let collideOn = initialExact ? initialExact.collide !== false : true;
+  let avoidOn = initialExact ? initialExact.avoidance !== false : true;
   let timeCycleOn = false;
   let activePresetId = '';
 
@@ -291,15 +308,20 @@ function boot() {
   }
 
   function rebuild() {
-    const grown = growCity(seed, cityRadius, world.towerMat, suburbReach);
+    const grown = growCity(seed, cityRadius, world.towerMat, suburbReach, {
+      waterMode,
+      terrainMode,
+      terrainScale,
+      U,
+    });
     city = grown.city;
     cityCollider = grown.collider;
-    U.uCitySpan.value = city.radius * CELL;
-    U.uSuburbSpan.value = Math.max(city.radius * CELL + 400, city.suburbSpan || 5200);
+    syncCityEnvironmentUniforms(U, city);
     U.uGroundRadius.value = 13500;
     syncWorldGeometry();
     controls.collider = cityCollider;
     controls.collision = collideOn;
+    controls.avoidance = avoidOn;
     controls.heightScale = heightScale;
     while (cityGroup.children.length) {
       const ch = cityGroup.children.pop();
@@ -326,7 +348,7 @@ function boot() {
     holoGroup = buildHolos(city, world.holoMat, world.beamMat);
     trees = buildTrees(city, U);
     sculptures = buildSculptures(city, world.beaconMat, world.lampMat);
-    trees.setNature(look);
+    trees.setNature(look, treeMode);
     weather.setTint(look);
     if (boulevardGroup && boulevardGroup.userData.lineMat) {
       boulevardGroup.userData.lineMat.color.set(look.ground.line);
@@ -377,6 +399,8 @@ function boot() {
   /* ------------------------------------------------------------- look */
 
   function syncPostSliders() {
+    $('#sel-art').value = String(postState.artStyle ?? 0);
+    $('#sl-artstr').value = String(postState.artStrength ?? 1.0);
     $('#sl-bloom').value = String(postState.bloom);
     $('#sl-lens').value = String(postState.lens);
     $('#sl-contrast').value = String(postState.contrast);
@@ -414,6 +438,10 @@ function boot() {
     $('#sl-curve').value = String(worldCurve);
     $('#sl-radius').value = String(cityRadius);
     $('#sl-suburbs').value = String(suburbReach);
+    $('#sel-water').value = String(waterMode);
+    $('#sel-terrain').value = String(terrainMode);
+    $('#sl-relief').value = String(terrainScale);
+    $('#sel-trees').value = String(treeMode);
     $('#sl-height').value = String(heightScale);
     $('#sl-traffic').value = String(trafficToSlider(tune.traffic));
     $('#sl-win').value = String(tune.win);
@@ -451,6 +479,8 @@ function boot() {
       vignette: look.post.vignette,
       film: filmActive,
       tint: look.accent,
+      artStyle: postState.artStyle ?? 0,
+      artStrength: postState.artStrength ?? 1.0,
     });
   }
 
@@ -483,7 +513,7 @@ function boot() {
     applyTime(U, look, timeOfDay, { ...tune, clouds: effClouds, cloudType: effType, cloudStyle: effStyle, sat: tune.vib });
     if (landmarkGroup && landmarkGroup.setLook) landmarkGroup.setLook(look);
     if (placeGroup && placeGroup.setLook) placeGroup.setLook(look);
-    if (trees) trees.setNature(look);
+    if (trees) trees.setNature(look, treeMode);
     if (vehicles) vehicles.setPalette(look);
     if (weather) weather.setTint(look);
     if (boulevardGroup && boulevardGroup.userData.lineMat) {
@@ -510,10 +540,20 @@ function boot() {
     p.set('r', String(cityRadius));
     p.set('t', timeOfDay.toFixed(1));
     if (Math.abs(suburbReach - 1) > 0.01) p.set('sub', suburbReach.toFixed(2));
+    if (waterMode !== 1) p.set('wm', String(waterMode));
+    if (terrainMode !== 0) p.set('tm', String(terrainMode));
+    if (Math.abs(terrainScale - 1) > 0.02) p.set('ts', terrainScale.toFixed(2));
+    if (treeMode > 0) p.set('tr', String(treeMode));
     if (worldCurve > 0.005) p.set('curve', worldCurve.toFixed(2));
     if (weatherMode > 0) p.set('w', String(weatherMode));
     if ((tune.cloudType ?? 0) > 0) p.set('ct', String(tune.cloudType));
     if (tune.cloudStyle > 0) p.set('cs', String(tune.cloudStyle));
+    if ((postState.artStyle ?? 0) > 0) {
+      p.set('art', String(postState.artStyle));
+      if (Math.abs((postState.artStrength ?? 1) - 1) > 0.02) {
+        p.set('as', (postState.artStrength ?? 1).toFixed(2));
+      }
+    }
     if (lookId === 'custom' && LOOK_BY_ID.custom.customConfig) {
       const c = LOOK_BY_ID.custom.customConfig;
       const strip = (h) => String(h).replace('#', '');
@@ -533,6 +573,10 @@ function boot() {
       lookId,
       cityRadius,
       suburbReach,
+      waterMode,
+      terrainMode,
+      terrainScale,
+      treeMode,
       worldCurve,
       heightScale,
       timeOfDay,
@@ -540,6 +584,7 @@ function boot() {
       dustLevel,
       glide: glideOn,
       collide: collideOn,
+      avoidance: avoidOn,
       tune: { ...tune },
       post: { ...postState },
       custom: LOOK_BY_ID.custom.customConfig ? { ...LOOK_BY_ID.custom.customConfig } : { ...DEFAULT_CUSTOM },
@@ -551,12 +596,23 @@ function boot() {
 
   function applyStateObject(raw, { applyCamera = true, applyBookmarks = false } = {}) {
     const st = normalizeExactState(raw);
-    const needRebuild = st.seed !== seed || st.cityRadius !== cityRadius || Math.abs(st.suburbReach - suburbReach) > 1e-3;
+    const needRebuild = (
+      st.seed !== seed ||
+      st.cityRadius !== cityRadius ||
+      Math.abs(st.suburbReach - suburbReach) > 1e-3 ||
+      st.waterMode !== waterMode ||
+      st.terrainMode !== terrainMode ||
+      Math.abs(st.terrainScale - terrainScale) > 1e-2
+    );
     seed = st.seed;
     lookId = st.lookId;
     if (lookId !== 'custom') prevPresetLookId = lookId;
     cityRadius = st.cityRadius;
     suburbReach = st.suburbReach;
+    waterMode = st.waterMode;
+    terrainMode = st.terrainMode;
+    terrainScale = st.terrainScale;
+    treeMode = st.treeMode;
     worldCurve = st.worldCurve;
     heightScale = st.heightScale;
     timeOfDay = st.timeOfDay;
@@ -579,6 +635,7 @@ function boot() {
     }
     refreshLook(false);
 
+    if (st.avoidance !== avoidOn) setAvoidanceState(st.avoidance);
     if (st.collide !== collideOn) setCollisionState(st.collide);
     if (st.glide !== glideOn) setGlideState(st.glide);
 
@@ -881,6 +938,7 @@ function boot() {
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) return;
     if (e.key === 'h' || e.key === 'H') toggleUI();
     else if (e.key === 'g' || e.key === 'G') toggleGlide();
+    else if (e.key === 'v' || e.key === 'V') toggleAvoidance();
     else if (e.key === 'c' || e.key === 'C') toggleCollision();
     else if (e.key === 't' || e.key === 'T') toggleTimeCycle();
     else if (e.key === 'r' || e.key === 'R') togglePathRecord();
@@ -914,6 +972,33 @@ function boot() {
   });
   bindSlider($('#sl-radius'), (v) => { cityRadius = clampInt(v, 1, 15, cityRadius); rebuild(); });
   bindSlider($('#sl-suburbs'), (v) => { suburbReach = clampFloat(v, 0, 1.6, suburbReach); rebuild(); });
+  $('#sel-water').value = String(waterMode);
+  $('#sel-water').onchange = (ev) => {
+    waterMode = clampInt(ev.target.value, 0, 4, 1);
+    rebuild();
+    flash(`Water · ${WATER_MODE_NAMES[waterMode] || 'Shoreline'}`);
+  };
+  $('#sel-terrain').value = String(terrainMode);
+  $('#sel-terrain').onchange = (ev) => {
+    terrainMode = clampInt(ev.target.value, 0, 4, 0);
+    rebuild();
+    flash(`Terrain · ${TERRAIN_MODE_NAMES[terrainMode] || 'Relief'}`);
+  };
+  bindSlider($('#sl-relief'), (v) => {
+    terrainScale = clampFloat(v, 0, 2, 1);
+    U.uTerrainScale.value = terrainScale;
+  });
+  $('#sl-relief').onchange = () => {
+    terrainScale = clampFloat($('#sl-relief').value, 0, 2, 1);
+    rebuild();
+  };
+  $('#sel-trees').value = String(treeMode);
+  $('#sel-trees').onchange = (ev) => {
+    treeMode = clampInt(ev.target.value, 0, 3, 0);
+    if (trees) trees.setNature(LOOK_BY_ID[lookId], treeMode);
+    syncURL();
+    flash(`Parks · ${TREE_MODE_NAMES[treeMode] || 'Auto'}`);
+  };
   bindSlider($('#sl-height'), (v) => { heightScale = v; applyHeight(); });
   bindSlider($('#sl-traffic'), (v) => {
     tune.traffic = sliderToTraffic(v);
@@ -951,7 +1036,18 @@ function boot() {
   bindSlider($('#sl-moonsz'), (v) => { tune.moonsz = v; refreshLook(); });
   bindSlider($('#sl-moonph'), (v) => { tune.moonph = v; refreshLook(); });
 
-  // Post-processing & old-film sliders
+  // Artistic & diagnostic render styles + Post-processing & old-film sliders
+  $('#sel-art').value = String(postState.artStyle ?? 0);
+  $('#sel-art').onchange = (ev) => {
+    postState.artStyle = clampInt(ev.target.value, 0, 5, 0);
+    syncPostUniforms(LOOK_BY_ID[lookId]);
+    syncURL();
+    flash(`Render Style · ${ART_STYLE_NAMES[postState.artStyle] || 'Cinema'}`);
+  };
+  bindSlider($('#sl-artstr'), (v) => {
+    postState.artStrength = v;
+    syncPostUniforms(LOOK_BY_ID[lookId]);
+  });
   bindSlider($('#sl-bloom'), (v) => { postState.bloom = v; syncPostUniforms(LOOK_BY_ID[lookId]); });
   bindSlider($('#sl-lens'), (v) => { postState.lens = v; syncPostUniforms(LOOK_BY_ID[lookId]); });
   bindSlider($('#sl-contrast'), (v) => { postState.contrast = v; syncPostUniforms(LOOK_BY_ID[lookId]); });
@@ -1194,6 +1290,12 @@ function boot() {
     for (const h of city.holos.slice(0, 4)) {
       pushNode(h.x + h.w * 1.4, h.y * heightScale, h.z - h.w * 1.4, 'Sky Hologram');
     }
+    if (city.suburbPOIs && city.suburbPOIs.length) {
+      for (const sp of city.suburbPOIs.slice(0, 3)) {
+        const gY = cityCollider && cityCollider.groundHeightAt ? cityCollider.groundHeightAt(sp.x, sp.z) : 0;
+        pushNode(sp.x, gY + (sp.h || 28) * heightScale + 48, sp.z, sp.name);
+      }
+    }
     return nodes;
   }
 
@@ -1225,6 +1327,18 @@ function boot() {
     }
   }
 
+  function setAvoidanceState(on, announce = false) {
+    avoidOn = !!on;
+    controls.avoidance = avoidOn;
+    const b = $('#b-avoid');
+    b.classList.toggle('on', avoidOn);
+    b.setAttribute('aria-pressed', String(avoidOn));
+    b.title = `Anticipatory shallow-angle obstacle & terrain avoidance: ${avoidOn ? 'on' : 'off'} (V)`;
+    if (announce) {
+      flash(avoidOn ? '\u2934 Anticipatory steering on' : 'Anticipatory steering off');
+    }
+  }
+
   function setCollisionState(on, announce = false) {
     collideOn = !!on;
     controls.collision = collideOn;
@@ -1238,18 +1352,24 @@ function boot() {
   }
 
   function toggleGlide() { setGlideState(!glideOn, true); }
+  function toggleAvoidance() { setAvoidanceState(!avoidOn, true); }
   function toggleCollision() { setCollisionState(!collideOn, true); }
   $('#b-glide').onclick = toggleGlide;
+  $('#b-avoid').onclick = toggleAvoidance;
   $('#b-collide').onclick = toggleCollision;
 
   function flyToLandmark(lm) {
     if (!lm) return;
-    const dist = lm.kind === 'media' ? Math.max(220, lm.r * 1.15) : Math.max(240, lm.r * 4.6);
+    const dist = lm.kind === 'media' ? Math.max(220, lm.r * 1.15) : Math.max(210, (lm.r || 42) * 4.4);
     const away = new THREE.Vector3(camera.position.x - lm.x, 0, camera.position.z - lm.z);
     if (away.lengthSq() < 1) away.set(1, 0, 1);
     away.normalize().multiplyScalar(dist);
-    const to = toCurvedVec(lm.x + away.x, lm.h * 0.68 * heightScale + 24, lm.z + away.z);
-    const look = toCurvedVec(lm.x, lm.h * 0.45 * heightScale, lm.z);
+    const terrAtTarget = cityCollider && cityCollider.groundHeightAt ? cityCollider.groundHeightAt(lm.x, lm.z) : 0;
+    const terrAtCam = cityCollider && cityCollider.groundHeightAt ? cityCollider.groundHeightAt(lm.x + away.x, lm.z + away.z) : 0;
+    const camY = Math.max(terrAtCam + 32, terrAtTarget + (lm.h || 36) * 0.68 * heightScale + 26);
+    const lookY = terrAtTarget + (lm.h || 36) * 0.42 * heightScale;
+    const to = toCurvedVec(lm.x + away.x, camY, lm.z + away.z);
+    const look = toCurvedVec(lm.x, lookY, lm.z);
     fly = {
       t: 0,
       from: camera.position.clone(),
@@ -1297,8 +1417,14 @@ function boot() {
     theatre: '\u2726',
     market: '\u229E',
     plaza: '\u25C7',
+    park: '\u2740',
     station: '\u21C4',
     suburb: '\u2302',
+    shop: '\u2302',
+    power: '\u26A1\uFE0E',
+    farm: '\u25A6',
+    shore: '\u2248',
+    lighthouse: '\u26EF',
   };
 
   function buildPois() {
@@ -1306,16 +1432,20 @@ function boot() {
     sel.innerHTML = '';
     const subSpot = {
       kind: 'suburb',
-      name: 'Horizon Suburbs',
-      x: (city.radius * CELL + (city.suburbSpan || 4200)) * 0.42,
-      z: (city.radius * CELL + (city.suburbSpan || 4200)) * 0.34,
+      name: 'Winding Suburbs',
+      x: (city.radius * CELL + (city.suburbSpan || 4200)) * 0.34,
+      z: (city.radius * CELL + (city.suburbSpan || 4200)) * 0.28,
       r: 45,
       h: 28,
     };
     poiList = [
       ...(city.mediaZone ? [city.mediaZone] : []),
       ...city.landmarks,
-      ...city.places.map((p) => ({ ...p, h: p.kind === 'arena' || p.kind === 'stadium' || p.kind === 'theatre' ? 58 : 42 })),
+      ...city.places.map((p) => ({
+        ...p,
+        h: p.kind === 'arena' || p.kind === 'stadium' || p.kind === 'theatre' ? 58 : (p.kind === 'park' ? 38 : 42),
+      })),
+      ...(city.suburbPOIs || []),
       ...(suburbReach > 0.05 ? [subSpot] : []),
     ];
     poiList.forEach((lm, idx) => {
@@ -1495,6 +1625,7 @@ function boot() {
   syncAllSliders();
   rebuild();
   refreshLook(!initialExact);
+  setAvoidanceState(avoidOn, false);
   setCollisionState(collideOn, false);
   if (glideOn) setGlideState(true, false);
   if (initialExact && initialExact.camera) {

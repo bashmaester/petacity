@@ -1,7 +1,10 @@
 // Scene construction and look application — no DOM here, so this whole
 // layer runs (and is tested) in Node against real three.js.
 import * as THREE from '../vendor/three.module.js';
-import { generateCity, makeCityCollider, CELL, AVENUE, STREET } from './city.js';
+import {
+  generateCity, makeCityCollider, CELL, AVENUE, STREET,
+  WATER_MODE_NAMES, TERRAIN_MODE_NAMES,
+} from './city.js';
 import { hash2i } from './prng.js';
 import {
   SKY_VERT, SKY_FRAG, CLOUD_VERT, CLOUD_FRAG,
@@ -9,10 +12,13 @@ import {
   LANDMARK_VERT, LANDMARK_FRAG, SOLID_CURVED_VERT, SOLID_CURVED_FRAG,
   BEACON_VERT, BEACON_FRAG, TRAIL_VERT, TRAIL_FRAG, SWARM_VERT, SWARM_FRAG,
   BEAM_VERT, BEAM_FRAG, POOL_VERT, POOL_FRAG,
-  WATER_VERT, WATER_FRAG, BILL_VERT, BILL_FRAG, WEATHER_VERT, WEATHER_FRAG,
+  WATER_VERT, WATER_FRAG, TREE_LINK_VERT, TREE_LINK_FRAG,
+  BILL_VERT, BILL_FRAG, WEATHER_VERT, WEATHER_FRAG,
   DUST_VERT, DUST_FRAG,
   HOLO_VERT, HOLO_FRAG,
 } from './shaders.js';
+
+export { WATER_MODE_NAMES, TERRAIN_MODE_NAMES };
 
 export const col = (hex) => new THREE.Color(hex);
 
@@ -93,6 +99,11 @@ export function makeUniforms() {
     uCitySpan: { value: CELL * 5 },
     uSuburbSpan: { value: 5200 },
     uGroundRadius: { value: 13500 },
+    uWaterMode: { value: 0 },
+    uTerrainMode: { value: 0 },
+    uTerrainScale: { value: 1 },
+    uCoastAngle: { value: 0.7 },
+    uTerrainSeed: { value: new THREE.Vector2(0, 0) },
     uWorldCurve: { value: 0 },
     uPlanetR: { value: 2100 },
     uHeightScale: { value: 1 },
@@ -274,7 +285,9 @@ export function makeWorld(U) {
     fragmentShader: GROUND_FRAG,
     uniforms: pick(U, [
       'uGStreet', 'uGBlock', 'uGLine', 'uGLineGlow', 'uCell', 'uAve', 'uSt',
-      'uCitySpan', 'uSuburbSpan', 'uGroundRadius', 'uWorldCurve', 'uPlanetR',
+      'uCitySpan', 'uSuburbSpan', 'uGroundRadius',
+      'uWaterMode', 'uTerrainMode', 'uTerrainScale', 'uCoastAngle', 'uTerrainSeed',
+      'uWorldCurve', 'uPlanetR',
       'uSunDir', 'uFogCol', 'uSunFogCol', 'uFogDensity', 'uFogHeight', 'uHazeSun', 'uSat',
       'uWetness', 'uPoolCol', 'uBillA', 'uLightK',
     ]),
@@ -282,7 +295,7 @@ export function makeWorld(U) {
     depthWrite: true,
     side: THREE.DoubleSide,
   });
-  const ground = new THREE.Mesh(makeGroundDiscGeometry(13500, 68, 96, 0, false), groundMat);
+  const ground = new THREE.Mesh(makeGroundDiscGeometry(13500, 112, 144, 0, false), groundMat);
   ground.frustumCulled = false;
   ground.renderOrder = -1;
 
@@ -375,8 +388,13 @@ export function makeWorld(U) {
     fragmentShader: WATER_FRAG,
     uniforms: pick(U, [
       'uWaterDeep', 'uWaterShallow', 'uSunDir', 'uSkySunCol', 'uFogCol', 'uSunFogCol',
+      'uCitySpan', 'uSuburbSpan', 'uGroundRadius',
+      'uWaterMode', 'uTerrainMode', 'uTerrainScale', 'uCoastAngle', 'uTerrainSeed',
+      'uPoolCol', 'uLightK',
       'uHazeSun', 'uTime', 'uSat', 'uWorldCurve', 'uPlanetR',
     ]),
+    transparent: true,
+    depthWrite: true,
     side: THREE.DoubleSide,
   });
 
@@ -461,9 +479,34 @@ export function buildCityMesh(city, towerMat) {
   return mesh;
 }
 
+/** Sync macro-environment uniforms (`uWaterMode`, `uTerrainMode`, `uCoastAngle`, etc.) from a generated city. */
+export function syncCityEnvironmentUniforms(U, city) {
+  if (!U || !city) return;
+  if (U.uCitySpan) U.uCitySpan.value = (city.radius || 5) * CELL;
+  if (U.uSuburbSpan) U.uSuburbSpan.value = city.suburbSpan || 5200;
+  if (U.uWaterMode) U.uWaterMode.value = city.waterMode ?? 0;
+  if (U.uTerrainMode) U.uTerrainMode.value = city.terrainMode ?? 0;
+  if (U.uTerrainScale) U.uTerrainScale.value = city.terrainScale ?? 1;
+  if (U.uCoastAngle) U.uCoastAngle.value = city.coastAngle ?? 0.7;
+  if (U.uTerrainSeed) U.uTerrainSeed.value.set(city.terrainSeedX ?? 0, city.terrainSeedZ ?? 0);
+}
+
 /** Grow a city and return { city, mesh, collider } — caller swaps the mesh in the scene. */
-export function growCity(seed, radius, towerMat, suburbReach = 1.0) {
-  const city = generateCity(seed, radius, suburbReach);
+export function growCity(
+  seed, radius, towerMat, suburbReach = 1.0,
+  envOpts = null
+) {
+  const city = envOpts && typeof envOpts === 'object'
+    ? generateCity({
+      seed,
+      radius,
+      suburbReach,
+      waterMode: envOpts.waterMode ?? 0,
+      terrainMode: envOpts.terrainMode ?? 0,
+      terrainScale: envOpts.terrainScale ?? 1.0,
+    })
+    : generateCity(seed, radius, suburbReach);
+  if (envOpts && envOpts.U) syncCityEnvironmentUniforms(envOpts.U, city);
   return { city, mesh: buildCityMesh(city, towerMat), collider: makeCityCollider(city) };
 }
 
@@ -1055,26 +1098,46 @@ export function buildPlaces(city, U, initialLook = null) {
       ring2.rotation.set(0.45, 0.6, 0.2);
       m.add(ring2);
     } else if (kind === 'park') {
-      for (let i = 0; i < 14; i++) {
-        const a = rnd(i * 3) * Math.PI * 2;
-        const rr = r * (0.15 + rnd(i * 3 + 1) * 0.72);
-        const th = 9 + rnd(i * 3 + 2) * 14;
-        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 1.1, th, 6), secondaryMat);
-        trunk.position.set(Math.cos(a) * rr, th / 2, Math.sin(a) * rr);
-        m.add(trunk);
-        const crown = new THREE.Mesh(new THREE.SphereGeometry(2.8 + rnd(i) * 2.2, 10, 8), i % 3 === 0 ? trimMat : galleryMat);
-        crown.position.set(Math.cos(a) * rr, th + 1.6, Math.sin(a) * rr);
-        m.add(crown);
+      // Sculpted botanical/cyber sanctuary: stepped lawn berms, elevated canopy
+      // boardwalk ring, glowing reflecting pond, lantern pergolas & conservatory dome
+      // (multi-branching procedural trees & sky-connections are populated by buildTrees!)
+      const pond = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.23, r * 0.25, 0.7, 22), galleryMat);
+      pond.position.set(r * 0.18, 1.95, -r * 0.10);
+      m.add(pond);
+      const pondRim = new THREE.Mesh(new THREE.TorusGeometry(r * 0.24, 0.85, 6, 26), trimMat);
+      pondRim.rotation.x = Math.PI / 2;
+      pondRim.position.set(r * 0.18, 2.25, -r * 0.10);
+      m.add(pondRim);
+
+      // Elevated circular canopy skywalk promenade + supporting piers
+      const walkRing = new THREE.Mesh(new THREE.TorusGeometry(r * 0.56, 1.65, 6, 36), secondaryMat);
+      walkRing.rotation.x = Math.PI / 2;
+      walkRing.position.y = 7.4;
+      m.add(walkRing);
+      const walkTrim = new THREE.Mesh(new THREE.TorusGeometry(r * 0.56, 0.38, 6, 36), trimMat);
+      walkTrim.rotation.x = Math.PI / 2;
+      walkTrim.position.y = 8.45;
+      m.add(walkTrim);
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        const pier = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.75, 7.2, 6), secondaryMat);
+        pier.position.set(Math.cos(a) * r * 0.56, 3.7, Math.sin(a) * r * 0.56);
+        m.add(pier);
       }
-      // Botanical geodesic conservatory dome at heart of park
-      const dome = new THREE.Mesh(new THREE.SphereGeometry(r * 0.24, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), galleryMat);
-      dome.position.y = 2.0;
+
+      // Botanical geodesic conservatory dome + radial garden paths
+      const dome = new THREE.Mesh(new THREE.SphereGeometry(r * 0.20, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), galleryMat);
+      dome.position.set(-r * 0.22, 1.9, -r * 0.18);
       m.add(dome);
+      const domeHalo = new THREE.Mesh(new THREE.TorusGeometry(r * 0.205, 0.48, 6, 24), trimMat);
+      domeHalo.rotation.x = Math.PI / 2;
+      domeHalo.position.set(-r * 0.22, 2.15, -r * 0.18);
+      m.add(domeHalo);
       for (let i = 0; i < 5; i++) {
-        const slab = new THREE.Mesh(new THREE.BoxGeometry(r * 0.52, 0.9, 4.5), primaryMat);
-        const a = i * 1.35 + seed * 6;
-        slab.position.set(Math.cos(a) * r * 0.35, 1.9, Math.sin(a) * r * 0.35);
-        slab.rotation.y = a * 1.7;
+        const slab = new THREE.Mesh(new THREE.BoxGeometry(r * 0.56, 0.75, 4.2), primaryMat);
+        const a = i * 1.256 + seed * 6;
+        slab.position.set(Math.cos(a) * r * 0.36, 1.9, Math.sin(a) * r * 0.36);
+        slab.rotation.y = -a;
         m.add(slab);
       }
     } else if (kind === 'fair') {
@@ -2440,11 +2503,127 @@ export function makeLightPools(city, poolMat) {
 
 /* ------------------------------------------------- water, trees, signs */
 
-/** Bodies of water — irregular polygon lakes with radial rings for spherical bending. */
+/**
+ * Bodies of water — inner harbor lagoons, meandering S-curve rivers, Great
+ * Crater Lakes, and vast Coastal Ocean / Archipelago Seas.
+ */
 export function buildWater(city, waterMat) {
   const group = new THREE.Group();
   const rings = 6;
   for (const w of city.water) {
+    if (w.analytical && w.kind === 'ocean') {
+      // Subdivided polar sea sector at y = 0.25m (GROUND_VERT carves smooth beaches, coves & islands)
+      const radRings = 44;
+      const angSegs = 76;
+      const maxR = w.r || 13500;
+      const cAng = w.coastAngle ?? 0.7;
+      const maxAng = w.maxAng ?? Math.PI * 0.56;
+      const ca = Math.cos(cAng);
+      const sa = Math.sin(cAng);
+      const uMin = w.uStart ?? 240;
+      const pos = [];
+      const ptAt = (rT, aT) => {
+        const rr = 120 + Math.pow(rT, 1.35) * (maxR - 120);
+        const ang = cAng - maxAng + aT * (maxAng * 2);
+        let x = Math.cos(ang) * rr;
+        let z = Math.sin(ang) * rr;
+        // Clamp inner chord to u >= uMin so the sea sheet never pokes under inland basins
+        const u = x * ca + z * sa;
+        const v = -x * sa + z * ca;
+        if (u < uMin) {
+          x = ca * uMin - sa * v;
+          z = sa * uMin + ca * v;
+        }
+        return [x, 0.25, z];
+      };
+      for (let ri = 0; ri < radRings; ri++) {
+        const r0 = ri / radRings;
+        const r1 = (ri + 1) / radRings;
+        for (let ai = 0; ai < angSegs; ai++) {
+          const a0 = ai / angSegs;
+          const a1 = (ai + 1) / angSegs;
+          const p00 = ptAt(r0, a0);
+          const p10 = ptAt(r0, a1);
+          const p01 = ptAt(r1, a0);
+          const p11 = ptAt(r1, a1);
+          pos.push(
+            p00[0], p00[1], p00[2], p10[0], p10[1], p10[2], p01[0], p01[1], p01[2],
+            p10[0], p10[1], p10[2], p11[0], p11[1], p11[2], p01[0], p01[1], p01[2]
+          );
+        }
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+      geo.computeVertexNormals();
+      const mesh = new THREE.Mesh(geo, waterMat);
+      mesh.frustumCulled = false;
+      group.add(mesh);
+      continue;
+    }
+
+    if (w.analytical && w.kind === 'lake') {
+      // Subdivided elliptical Great Crater Lake sheet at y = 0.25m
+      const radRings = 24;
+      const angSegs = 48;
+      const rad = (w.r || 1800) * 1.18;
+      const pos = [];
+      for (let ri = 0; ri < radRings; ri++) {
+        const r0 = (ri / radRings) * rad;
+        const r1 = ((ri + 1) / radRings) * rad;
+        for (let ai = 0; ai < angSegs; ai++) {
+          const a0 = (ai / angSegs) * Math.PI * 2;
+          const a1 = ((ai + 1) / angSegs) * Math.PI * 2;
+          const ax0 = w.x + Math.cos(a0) * r0, az0 = w.z + Math.sin(a0) * r0 * 1.25;
+          const bx0 = w.x + Math.cos(a1) * r0, bz0 = w.z + Math.sin(a1) * r0 * 1.25;
+          const ax1 = w.x + Math.cos(a0) * r1, az1 = w.z + Math.sin(a0) * r1 * 1.25;
+          const bx1 = w.x + Math.cos(a1) * r1, bz1 = w.z + Math.sin(a1) * r1 * 1.25;
+          if (ri === 0) {
+            pos.push(ax1, 0.25, az1, bx1, 0.25, bz1, w.x, 0.25, w.z);
+          } else {
+            pos.push(
+              ax1, 0.25, az1, bx1, 0.25, bz1, ax0, 0.25, az0,
+              bx1, 0.25, bz1, bx0, 0.25, bz0, ax0, 0.25, az0
+            );
+          }
+        }
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+      geo.computeVertexNormals();
+      const mesh = new THREE.Mesh(geo, waterMat);
+      mesh.frustumCulled = false;
+      group.add(mesh);
+      continue;
+    }
+
+    if (w.kind === 'river' && w.pts.length >= 4 && w.pts.length % 2 === 0) {
+      // Winding river ribbon: quad-strip between leftBank[0..half-1] and rightBank[half-1..0]
+      const halfN = w.pts.length / 2;
+      const pos = [];
+      const wy = 1.6;
+      for (let i = 0; i < halfN - 1; i++) {
+        const [lx0, lz0] = w.pts[i];
+        const [lx1, lz1] = w.pts[i + 1];
+        const [rx0, rz0] = w.pts[w.pts.length - 1 - i];
+        const [rx1, rz1] = w.pts[w.pts.length - 2 - i];
+        const mx0 = (lx0 + rx0) * 0.5, mz0 = (lz0 + rz0) * 0.5;
+        const mx1 = (lx1 + rx1) * 0.5, mz1 = (lz1 + rz1) * 0.5;
+        pos.push(
+          lx0, wy, lz0, mx0, wy, mz0, lx1, wy, lz1,
+          mx0, wy, mz0, mx1, wy, mz1, lx1, wy, lz1,
+          mx0, wy, mz0, rx0, wy, rz0, mx1, wy, mz1,
+          rx0, wy, rz0, rx1, wy, rz1, mx1, wy, mz1
+        );
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+      geo.computeVertexNormals();
+      const mesh = new THREE.Mesh(geo, waterMat);
+      mesh.frustumCulled = false;
+      group.add(mesh);
+      continue;
+    }
+
     const pos = [];
     for (let i = 0; i < w.pts.length; i++) {
       const [x1, z1] = w.pts[i];
@@ -2627,82 +2806,471 @@ export function buildHolos(city, holoMat, beamMat) {
   return group;
 }
 
+export const TREE_MODE_NAMES = [
+  'Auto (Follow Theme)',
+  'Real Botanical',
+  'Artificial Cyber-Trees',
+  'Hybrid Bio-Cyber Grove',
+];
+
+function mergeUnitTreeGeometries(geos) {
+  let totalVerts = 0;
+  const nonIdx = geos.map((g) => {
+    const ni = g.index ? g.toNonIndexed() : g;
+    totalVerts += ni.getAttribute('position').count;
+    return ni;
+  });
+  const pos = new Float32Array(totalVerts * 3);
+  const nrm = new Float32Array(totalVerts * 3);
+  let off = 0;
+  for (const g of nonIdx) {
+    const p = g.getAttribute('position').array;
+    const n = g.getAttribute('normal') ? g.getAttribute('normal').array : null;
+    pos.set(p, off);
+    if (n) nrm.set(n, off);
+    off += p.length;
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  out.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+  return out;
+}
+
+function makeBranchSegmentGeo(x0, y0, z0, x1, y1, z1, rBot, rTop, segs = 6) {
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const dz = z1 - z0;
+  const len = Math.hypot(dx, dy, dz) || 0.01;
+  const g = new THREE.CylinderGeometry(rTop, rBot, len, segs, 1);
+  const up = new THREE.Vector3(0, 1, 0);
+  const dir = new THREE.Vector3(dx / len, dy / len, dz / len);
+  const q = new THREE.Quaternion().setFromUnitVectors(up, dir);
+  const m = new THREE.Matrix4().compose(
+    new THREE.Vector3((x0 + x1) * 0.5, (y0 + y1) * 0.5, (z0 + z1) * 0.5),
+    q,
+    new THREE.Vector3(1, 1, 1)
+  );
+  g.applyMatrix4(m);
+  return g;
+}
+
 /**
- * Trees — organic trees in some looks, sybernetic bioelectric illuminators
- * in others. Both variants are built; setNature(look) switches and re-tints.
+ * Procedural Real & Artificial Branching Trees + Custom Node/Lantern Lights +
+ * 3D Catenary Canopy Connections (`city.treeLinks`).
+ * Supports `setNature(look, treeMode)` where `treeMode` is:
+ *   0 = Auto (follows `look.nature === 'cyber'`)
+ *   1 = Real Botanical branching trees + festoon park lanterns
+ *   2 = Artificial Cyber-Dendritic supertrees + pulsing neural filaments
+ *   3 = Hybrid Bio-Cyber Grove (real avenue/suburb trees + cyber park hubs & links)
  */
 export function buildTrees(city, U = null) {
   const group = new THREE.Group();
   const organic = new THREE.Group();
   const cyber = new THREE.Group();
-  const n = Math.max(1, city.trees.length);
+  const treeList = city.trees || [];
+  const links = city.treeLinks || [];
+  const n = Math.max(1, treeList.length);
 
-  const trunkMatO = makeCurvedBasicMaterial(U, '#7a5a3a');
-  const canopyMatO = makeCurvedBasicMaterial(U, '#4a9c5d');
-  const trunkMatC = makeCurvedBasicMaterial(U, '#141210');
-  const canopyMatC = makeCurvedBasicMaterial(U, '#e8d9b0');
-  const glowMatC = makeCurvedBasicMaterial(U, '#e8d9b0');
+  const trunkMatO = makeLandmarkMaterial(U || makeUniforms(), '#6b4d32', 1);
+  const canopyMatO = makeLandmarkMaterial(U || makeUniforms(), '#3f8f52', 0);
+  const walkMatO = makeLandmarkMaterial(U || makeUniforms(), '#8a6845', 2);
+  const trunkMatC = makeLandmarkMaterial(U || makeUniforms(), '#191d28', 1);
+  const canopyMatC = makeCurvedBasicMaterial(U, '#68e8ff');
+  const glowMatC = makeCurvedBasicMaterial(U, '#a8f6ff');
 
-  const trunkGeo = new THREE.CylinderGeometry(0.55, 1, 1, 6);
-  const canopyGeo = new THREE.SphereGeometry(0.5, 8, 6);
-  const trunkO = new THREE.InstancedMesh(trunkGeo, trunkMatO, n);
-  const canopyO = new THREE.InstancedMesh(canopyGeo, canopyMatO, n);
-  const trunkC = new THREE.InstancedMesh(trunkGeo, trunkMatC, n);
-  const canopyC = new THREE.InstancedMesh(canopyGeo, canopyMatC, n);
-  const glowC = new THREE.InstancedMesh(canopyGeo, glowMatC, n);
+  // --- 1. Procedural Organic Multi-Branch Wood Armature + Clustered Foliage ---
+  const woodPartsO = [];
+  const leafPartsO = [];
+  // Flared root buttresses + subtly leaning lower & upper trunk
+  for (let r = 0; r < 3; r++) {
+    const a = (r / 3) * Math.PI * 2 + 0.3;
+    woodPartsO.push(makeBranchSegmentGeo(Math.cos(a) * 0.085, 0, Math.sin(a) * 0.085, 0, 0.16, 0, 0.055, 0.032, 5));
+  }
+  woodPartsO.push(makeBranchSegmentGeo(0, 0, 0, 0.015, 0.34, -0.01, 0.085, 0.062, 7));
+  woodPartsO.push(makeBranchSegmentGeo(0.015, 0.34, -0.01, 0.0, 0.56, 0.01, 0.062, 0.042, 6));
+
+  // 4 primary angled boughs + 8 forked secondary limbs + 9 leaf sub-crowns at branch tips
+  for (let b = 0; b < 4; b++) {
+    const a = (b / 4) * Math.PI * 2 + 0.42;
+    const forkY = 0.44 + (b % 2) * 0.09;
+    const bx = Math.cos(a) * 0.25;
+    const by = 0.74 + (b % 2) * 0.06;
+    const bz = Math.sin(a) * 0.25;
+    woodPartsO.push(makeBranchSegmentGeo(0, forkY, 0, bx, by, bz, 0.040, 0.022, 5));
+    for (const sgn of [-1, 1]) {
+      const a2 = a + sgn * 0.48;
+      const r2 = 0.40 + (sgn > 0 ? 0.04 : 0.0);
+      const tx = Math.cos(a2) * r2;
+      const ty = by + 0.18 + (sgn > 0 ? 0.04 : 0.0);
+      const tz = Math.sin(a2) * r2;
+      woodPartsO.push(makeBranchSegmentGeo(bx, by, bz, tx, ty, tz, 0.021, 0.009, 5));
+      const puff = new THREE.IcosahedronGeometry(0.21 + (b % 2) * 0.03, 1);
+      puff.scale(1.18, 0.78, 1.12);
+      puff.translate(tx * 0.96, ty + 0.03, tz * 0.96);
+      leafPartsO.push(puff);
+    }
+  }
+  const apexPuff = new THREE.IcosahedronGeometry(0.28, 1);
+  apexPuff.scale(1.22, 0.86, 1.22);
+  apexPuff.translate(0, 1.04, 0);
+  leafPartsO.push(apexPuff);
+
+  const trunkGeoO = mergeUnitTreeGeometries(woodPartsO);
+  const canopyGeoO = mergeUnitTreeGeometries(leafPartsO);
+
+  // --- 2. Procedural Artificial / Cyber Dendritic Supertree Armature + Dish Canopy ---
+  const woodPartsC = [];
+  const dishPartsC = [];
+  const haloPartsC = [];
+  // Flared metallic base cone + central structural core + 2 lattice collar rings
+  woodPartsC.push(makeBranchSegmentGeo(0, 0, 0, 0, 0.22, 0, 0.13, 0.068, 8));
+  woodPartsC.push(makeBranchSegmentGeo(0, 0.22, 0, 0, 0.68, 0, 0.068, 0.042, 8));
+  for (const cy of [0.34, 0.58]) {
+    const collar = new THREE.TorusGeometry(cy < 0.45 ? 0.095 : 0.078, 0.012, 5, 14);
+    collar.rotateX(Math.PI / 2);
+    collar.translate(0, cy, 0);
+    woodPartsC.push(collar);
+  }
+  // 5 sweeping parabolic architectural boughs + secondary forks + hexagonal canopy collector disks
+  for (let b = 0; b < 5; b++) {
+    const a = (b / 5) * Math.PI * 2 + 0.2;
+    const mx = Math.cos(a) * 0.22;
+    const mz = Math.sin(a) * 0.22;
+    const tx = Math.cos(a) * 0.46;
+    const tz = Math.sin(a) * 0.46;
+    const ty = 0.96 + (b % 2) * 0.08;
+    woodPartsC.push(makeBranchSegmentGeo(0, 0.52, 0, mx, 0.76, mz, 0.032, 0.020, 6));
+    woodPartsC.push(makeBranchSegmentGeo(mx, 0.76, mz, tx, ty, tz, 0.020, 0.011, 5));
+    // Inner upward neural tine
+    const ix = Math.cos(a + 0.31) * 0.24;
+    const iz = Math.sin(a + 0.31) * 0.24;
+    woodPartsC.push(makeBranchSegmentGeo(mx, 0.76, mz, ix, 1.10, iz, 0.015, 0.007, 5));
+
+    const dish = new THREE.CylinderGeometry(0.19, 0.12, 0.026, 6);
+    dish.translate(tx, ty + 0.015, tz);
+    dishPartsC.push(dish);
+  }
+  const topDish = new THREE.CylinderGeometry(0.30, 0.18, 0.032, 6);
+  topDish.translate(0, 1.14, 0);
+  dishPartsC.push(topDish);
+
+  const crownHalo = new THREE.TorusGeometry(0.44, 0.015, 6, 24);
+  crownHalo.rotateX(Math.PI / 2);
+  crownHalo.translate(0, 1.02, 0);
+  haloPartsC.push(crownHalo);
+  const innerOrb = new THREE.OctahedronGeometry(0.085, 0);
+  innerOrb.translate(0, 0.88, 0);
+  haloPartsC.push(innerOrb);
+
+  const trunkGeoC = mergeUnitTreeGeometries(woodPartsC);
+  const canopyGeoC = mergeUnitTreeGeometries(dishPartsC);
+  const glowGeoC = mergeUnitTreeGeometries(haloPartsC);
+
+  const trunkO = new THREE.InstancedMesh(trunkGeoO, trunkMatO, n);
+  const canopyO = new THREE.InstancedMesh(canopyGeoO, canopyMatO, n);
+  const trunkC = new THREE.InstancedMesh(trunkGeoC, trunkMatC, n);
+  const canopyC = new THREE.InstancedMesh(canopyGeoC, canopyMatC, n);
+  const glowC = new THREE.InstancedMesh(glowGeoC, glowMatC, n);
+  trunkO.count = treeList.length;
+  canopyO.count = treeList.length;
+  trunkC.count = treeList.length;
+  canopyC.count = treeList.length;
+  glowC.count = treeList.length;
+
+  // --- 3. Custom Tree Lights: Hanging Park Lanterns (Organic) & Branch Node Lights (Cyber) ---
+  const lanternPosO = [];
+  const lanternPhaseO = [];
+  const lanternSizeO = [];
+  const nodePosC = [];
+  const nodePhaseC = [];
+  const nodeSizeC = [];
 
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const p = new THREE.Vector3();
   const s = new THREE.Vector3();
-  for (let i = 0; i < city.trees.length; i++) {
-    const tr = city.trees[i];
-    const sway = (tr.seed - 0.5) * 0.12;
-    q.setFromEuler(new THREE.Euler(sway, tr.seed * 6.28, sway * 0.7));
-    // trunk
-    p.set(tr.x, tr.h * 0.5, tr.z);
-    s.set(1.1, tr.h, 1.1);
+  const e = new THREE.Euler();
+
+  for (let i = 0; i < treeList.length; i++) {
+    const tr = treeList[i];
+    const baseY = tr.y || 0;
+    const isHero = tr.role === 'park-hero';
+    const isParkish = isHero || tr.role === 'park' || tr.role === 'grove' || tr.role === 'boulevard';
+    const spread = tr.h * (isHero ? 1.16 : 0.96);
+    const yaw = tr.seed * Math.PI * 2;
+    const sway = (tr.seed - 0.5) * 0.08;
+    e.set(sway, yaw, sway * 0.7);
+    q.setFromEuler(e);
+
+    p.set(tr.x, baseY, tr.z);
+    s.set(spread, tr.h, spread);
     m.compose(p, q, s);
     trunkO.setMatrixAt(i, m);
-    trunkC.setMatrixAt(i, m);
-    // organic canopy — layered blob
-    p.set(tr.x, tr.h * 1.12, tr.z);
-    s.set(tr.h * 1.05, tr.h * 1.15, tr.h * 1.05);
-    m.compose(p, q, s);
     canopyO.setMatrixAt(i, m);
-    // cyber canopy — slim glowing filament column + halo orb
-    p.set(tr.x, tr.h * 1.25, tr.z);
-    s.set(tr.h * 0.22, tr.h * 1.5, tr.h * 0.22);
-    m.compose(p, q, s);
+    trunkC.setMatrixAt(i, m);
     canopyC.setMatrixAt(i, m);
-    p.set(tr.x, tr.h * 1.95, tr.z);
-    s.set(tr.h * 0.34, tr.h * 0.34, tr.h * 0.34);
-    m.compose(p, q, s);
     glowC.setMatrixAt(i, m);
+
+    // Organic suspended bough lanterns in parks, groves & boulevards
+    if (isParkish) {
+      const lCount = isHero ? 4 : 2;
+      for (let l = 0; l < lCount; l++) {
+        const la = yaw + 0.42 + l * (Math.PI * 2 / lCount);
+        const lr = spread * 0.27;
+        lanternPosO.push(
+          tr.x + Math.cos(la) * lr,
+          baseY + tr.h * (0.58 + (l % 2) * 0.06),
+          tr.z + Math.sin(la) * lr
+        );
+        lanternPhaseO.push((tr.seed + l * 0.27) % 1);
+        lanternSizeO.push(isHero ? 3.2 : 2.3);
+      }
+    }
+
+    // Cyber bioluminescent branch-tip & collar node lights
+    const cCount = isHero ? 5 : (isParkish ? 3 : 1);
+    for (let c = 0; c < cCount; c++) {
+      const ca = yaw + 0.2 + c * ((Math.PI * 2) / 5);
+      const cr = c === 0 && !isParkish ? 0 : spread * 0.45;
+      const cy = c === 0 && !isParkish ? baseY + tr.h * 1.12 : baseY + tr.h * (0.96 + (c % 2) * 0.08);
+      nodePosC.push(tr.x + Math.cos(ca) * cr, cy, tr.z + Math.sin(ca) * cr);
+      nodePhaseC.push((tr.seed * 1.7 + c * 0.19) % 1);
+      nodeSizeC.push(isHero ? 3.6 : 2.5);
+    }
   }
-  for (const mesh of [trunkO, canopyO, trunkC, canopyC, glowC]) {
+
+  for (const mesh of [trunkO, canopyO]) {
     mesh.instanceMatrix.needsUpdate = true;
     mesh.frustumCulled = false;
     organic.add(mesh);
   }
-  // regroup: cyber pieces belong to cyber
-  organic.remove(trunkC, canopyC, glowC);
-  cyber.add(trunkC, canopyC, glowC);
+  for (const mesh of [trunkC, canopyC, glowC]) {
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.frustumCulled = false;
+    cyber.add(mesh);
+  }
+
+  const uTimeRef = (U && U.uTime) || { value: 0 };
+  const uLightRef = (U && U.uLightK) || { value: 1 };
+  const uCurveRef = (U && U.uWorldCurve) || { value: 0 };
+  const uPlanetRef = (U && U.uPlanetR) || { value: 2100 };
+
+  const lanternMatO = new THREE.ShaderMaterial({
+    vertexShader: BEACON_VERT,
+    fragmentShader: BEACON_FRAG,
+    uniforms: {
+      uTime: uTimeRef,
+      uLightK: uLightRef,
+      uBeaconCol: { value: col('#ffd68a') },
+      uSteady: { value: 0.72 },
+      uWorldCurve: uCurveRef,
+      uPlanetR: uPlanetRef,
+    },
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+  const nodeMatC = new THREE.ShaderMaterial({
+    vertexShader: BEACON_VERT,
+    fragmentShader: BEACON_FRAG,
+    uniforms: {
+      uTime: uTimeRef,
+      uLightK: uLightRef,
+      uBeaconCol: { value: col('#68e8ff') },
+      uSteady: { value: 0.25 },
+      uWorldCurve: uCurveRef,
+      uPlanetR: uPlanetRef,
+    },
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+
+  const makeLightPts = (posArr, phaseArr, sizeArr, mat) => {
+    if (!posArr.length) return null;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(posArr), 3));
+    g.setAttribute('aPhase', new THREE.BufferAttribute(new Float32Array(phaseArr), 1));
+    g.setAttribute('aSize', new THREE.BufferAttribute(new Float32Array(sizeArr), 1));
+    const pts = new THREE.Points(g, mat);
+    pts.frustumCulled = false;
+    return pts;
+  };
+  const lanternPts = makeLightPts(lanternPosO, lanternPhaseO, lanternSizeO, lanternMatO);
+  if (lanternPts) organic.add(lanternPts);
+  const nodePts = makeLightPts(nodePosC, nodePhaseC, nodeSizeC, nodeMatC);
+  if (nodePts) cyber.add(nodePts);
+
+  // --- 4. 3D Catenary Inter-Tree Connections (Festoon Lantern Cables + Skywalks + Neural Filaments) ---
+  const linkMatO = new THREE.ShaderMaterial({
+    vertexShader: TREE_LINK_VERT,
+    fragmentShader: TREE_LINK_FRAG,
+    uniforms: {
+      uLinkColA: { value: col('#8a6d4b') },
+      uLinkColB: { value: col('#ffe09a') },
+      uTreeCyber: { value: 0 },
+      uTime: uTimeRef,
+      uLightK: uLightRef,
+      uWorldCurve: uCurveRef,
+      uPlanetR: uPlanetRef,
+    },
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+  });
+  const linkMatC = new THREE.ShaderMaterial({
+    vertexShader: TREE_LINK_VERT,
+    fragmentShader: TREE_LINK_FRAG,
+    uniforms: {
+      uLinkColA: { value: col('#3be8ff') },
+      uLinkColB: { value: col('#ff5ec4') },
+      uTreeCyber: { value: 1 },
+      uTime: uTimeRef,
+      uLightK: uLightRef,
+      uWorldCurve: uCurveRef,
+      uPlanetR: uPlanetRef,
+    },
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+  });
+
+  if (links.length > 0) {
+    const segs = 10;
+    const posArr = [];
+    const uvArr = [];
+    const seedArr = [];
+    const walkBoxes = [];
+
+    for (let li = 0; li < links.length; li++) {
+      const L = links[li];
+      const dx = L.x2 - L.x1;
+      const dz = L.z2 - L.z1;
+      const lenXZ = Math.hypot(dx, dz) || 1;
+      const nx = -dz / lenXZ;
+      const nz = dx / lenXZ;
+      const halfW = L.hero ? 0.55 : 0.34;
+
+      for (let sIdx = 0; sIdx < segs; sIdx++) {
+        const t0 = sIdx / segs;
+        const t1 = (sIdx + 1) / segs;
+        const x0 = L.x1 + dx * t0, z0 = L.z1 + dz * t0;
+        const x1 = L.x1 + dx * t1, z1 = L.z1 + dz * t1;
+        const y0 = L.y1 + (L.y2 - L.y1) * t0 - 4 * L.sag * t0 * (1 - t0);
+        const y1 = L.y1 + (L.y2 - L.y1) * t1 - 4 * L.sag * t1 * (1 - t1);
+
+        // Crossed vertical + horizontal ribbon quads so catenary filaments read from every angle!
+        posArr.push(
+          x0, y0 - halfW, z0, x1, y1 - halfW, z1, x0, y0 + halfW, z0,
+          x1, y1 - halfW, z1, x1, y1 + halfW, z1, x0, y0 + halfW, z0,
+          x0 - nx * halfW, y0, z0 - nz * halfW, x1 - nx * halfW, y1, z1 - nz * halfW, x0 + nx * halfW, y0, z0 + nz * halfW,
+          x1 - nx * halfW, y1, z1 - nz * halfW, x1 + nx * halfW, y1, z1 + nz * halfW, x0 + nx * halfW, y0, z0 + nz * halfW
+        );
+        for (let qIdx = 0; qIdx < 2; qIdx++) {
+          uvArr.push(
+            t0, 0, t1, 0, t0, 1,
+            t1, 0, t1, 1, t0, 1
+          );
+          for (let v = 0; v < 6; v++) seedArr.push(L.seed);
+        }
+      }
+
+      // Solid suspended canopy skywalk deck between hero park trees!
+      if (L.hero && L.dist < 48) {
+        walkBoxes.push(makeBranchSegmentGeo(
+          L.x1, L.y1 - 0.8, L.z1,
+          L.x2, L.y2 - 0.8, L.z2,
+          0.65, 0.65, 4
+        ));
+      }
+    }
+
+    const linkGeo = new THREE.BufferGeometry();
+    linkGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(posArr), 3));
+    linkGeo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvArr), 2));
+    linkGeo.setAttribute('aSeed', new THREE.BufferAttribute(new Float32Array(seedArr), 1));
+
+    const linkMeshO = new THREE.Mesh(linkGeo, linkMatO);
+    linkMeshO.frustumCulled = false;
+    organic.add(linkMeshO);
+
+    const linkMeshC = new THREE.Mesh(linkGeo, linkMatC);
+    linkMeshC.frustumCulled = false;
+    cyber.add(linkMeshC);
+
+    if (walkBoxes.length) {
+      const walkGeo = mergeUnitTreeGeometries(walkBoxes);
+      const walkMesh = new THREE.Mesh(walkGeo, walkMatO);
+      walkMesh.frustumCulled = false;
+      organic.add(walkMesh);
+    }
+  }
+
   cyber.visible = false; // organic until setNature says otherwise
   group.add(organic, cyber);
 
-  function setNature(look) {
-    const isCyber = look.nature === 'cyber';
-    organic.visible = !isCyber;
-    cyber.visible = isCyber;
-    const t = look.trees || { trunk: '#7a5a3a', canopy: '#4a9c5d', glow: '#ffd98a' };
-    trunkMatO.color.set(isCyber ? t.trunk : t.trunk);
-    canopyMatO.color.set(t.canopy);
-    trunkMatC.color.set(t.trunk);
-    canopyMatC.color.set(t.glow);
-    glowMatC.color.set(t.glow);
+  let curLook = null;
+  let curMode = 0; // 0 auto, 1 real, 2 artificial, 3 hybrid
+
+  function applyVisibilityAndColors() {
+    const look = curLook || {};
+    const themeCyber = look.nature === 'cyber';
+    if (curMode === 1) {
+      organic.visible = true;
+      cyber.visible = false;
+    } else if (curMode === 2) {
+      organic.visible = false;
+      cyber.visible = true;
+    } else if (curMode === 3) {
+      organic.visible = true;
+      cyber.visible = true;
+    } else {
+      organic.visible = !themeCyber;
+      cyber.visible = themeCyber;
+    }
+
+    const t = look.trees || { trunk: '#6b4d32', canopy: '#3f8f52', glow: '#ffd98a' };
+    const accentHex = look.accent || '#68e8ff';
+    const sig = look.signals || {};
+    const warmLamp = sig.lamp || '#ffd98a';
+
+    // Keep Real Botanical trees lush & believable even when forced on a cyber look!
+    const orgTrunk = themeCyber && curMode !== 0 ? '#5c432d' : t.trunk;
+    const orgCanopy = themeCyber && curMode !== 0 ? '#3b8450' : t.canopy;
+    trunkMatO.uniforms.uCol.value.set(orgTrunk);
+    canopyMatO.uniforms.uCol.value.set(orgCanopy);
+    walkMatO.uniforms.uCol.value.set(orgTrunk).lerp(col(accentHex), 0.25);
+
+    const cybTrunk = !themeCyber && curMode !== 0 ? '#1b202c' : t.trunk;
+    const cybGlow = themeCyber ? t.glow : accentHex;
+    trunkMatC.uniforms.uCol.value.set(cybTrunk);
+    canopyMatC.color.set(cybGlow);
+    glowMatC.color.set(cybGlow).lerp(col('#ffffff'), 0.32);
+
+    lanternMatO.uniforms.uBeaconCol.value.set(warmLamp);
+    nodeMatC.uniforms.uBeaconCol.value.set(cybGlow);
+    linkMatO.uniforms.uLinkColA.value.set(orgTrunk);
+    linkMatO.uniforms.uLinkColB.value.set(warmLamp);
+    linkMatC.uniforms.uLinkColA.value.set(cybGlow);
+    linkMatC.uniforms.uLinkColB.value.set(sig.billA || accentHex);
   }
-  return { group, organic, cyber, setNature };
+
+  function setNature(look, modeOverride) {
+    if (look) curLook = look;
+    if (modeOverride !== undefined && modeOverride !== null) {
+      curMode = Math.max(0, Math.min(3, Number(modeOverride) || 0));
+    }
+    applyVisibilityAndColors();
+  }
+
+  function setTreeMode(mode) {
+    curMode = Math.max(0, Math.min(3, Number(mode) || 0));
+    applyVisibilityAndColors();
+  }
+
+  return { group, organic, cyber, linkCount: links.length, setNature, setTreeMode };
 }
 
 /**

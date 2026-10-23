@@ -23,9 +23,9 @@ npm install
 npm test
 ```
 
-The suite (`61` tests across 4 files) validates:
-- `tests/city.test.mjs` — deterministic PRNG/noise, district layout, landmarks (`arch`, `spire`, `dome`, `mast`, `crown`, `needle`, `pyramid`, `cantilever`, `ziggurat`), public venues (`arena`, `theatre`, `stadium`, `market`, `plaza`, `park`, `fair`), horizon suburbs, billboard/hologram distribution, and grade-separated horizontal street-grid traffic lanes with corner turns, elevation ramps, and rooftop/building clearance.
-- `tests/scene.test.mjs` — shader-to-uniform contracts, instanced attribute contracts, ESSL 3.00 (`#version 300 es`) reserved-keyword safety, `applyLook` / `applyTime` 24-hour celestial orbits (`uSolarDir`, `uMoonDir`, `uStarRot`) and full 8-phase lunar cycle (`uMoonPhase` `0..2`), 6 volumetric cloud types & cloud-cover range, theme-reactive special structures (`setLook`), `0..20,000` smooth multi-strata vehicles, spherical `bendWorld` curvature, exact-state tokens, and clean render/path capture.
+The suite (`64` tests across 4 files) validates:
+- `tests/city.test.mjs` — deterministic PRNG/noise, district layout, landmarks (`arch`, `spire`, `dome`, `mast`, `crown`, `needle`, `pyramid`, `cantilever`, `ziggurat`), public venues (`arena`, `theatre`, `stadium`, `market`, `plaza`, `park`, `fair`), 5 macro-water/shoreline modes (`WATER_MODE_NAMES`), 5 distant 3D terrain modes (`TERRAIN_MODE_NAMES`), non-grid curvilinear suburban houses + neighborhood shops, power stations & rural Voronoi farmsteads (`suburbPOIs`), park tree groves + inter-tree connections (`treeLinks`), billboard/hologram distribution, and grade-separated horizontal street-grid traffic lanes with corner turns, elevation ramps, and rooftop/building clearance.
+- `tests/scene.test.mjs` — shader-to-uniform contracts, instanced attribute contracts, ESSL 3.00 (`#version 300 es`) reserved-keyword safety across all `38` GLSL shaders, `applyLook` / `applyTime` 24-hour celestial orbits (`uSolarDir`, `uMoonDir`, `uStarRot`) and full 8-phase lunar cycle (`uMoonPhase` `0..2`), 6 volumetric cloud types & cloud-cover range, theme-reactive special structures (`setLook`), analytical ocean/lake/river water triangulation, multi-branching Real Botanical & Artificial Cyber-Dendritic park trees + custom lights + catenary links (`TREE_MODE_NAMES`), `FlyControls` smooth inertial damping + shallow-angle long-range anticipatory obstacle avoidance, 6 artistic/diagnostic post-processing render styles (`ART_STYLE_NAMES` + `DepthTexture`), `0..20,000` smooth multi-strata vehicles, spherical `bendWorld` curvature, exact-state tokens, and clean render/path capture.
 - `tests/ui-contract.test.mjs` — static/DOM contract ensuring every `$('#id')` selector in `src/main.js` resolves in `index.html`, zero external network URLs exist, and all glyph/icon buttons carry `aria-label` and `title`.
 - `tests/boot.test.mjs` — end-to-end boot smoke test (`index.html` + `src/main.js` under `jsdom` with mocked WebGL 2).
 
@@ -40,19 +40,19 @@ The suite (`61` tests across 4 files) validates:
 | :--- | :--- |
 | `index.html` | Compact glyph-first HUD, CSS theme variables, canvas `#stage`, overlay grain/scanlines/vignette, and boot error surface (`#loading`). |
 | `src/main.js` | Application bootstrap, URL query & exact-state hydration, HUD slider/dropdown/hotkey bindings, live 24h celestial clock loop (`T`), camera fly-tos, and `requestAnimationFrame` loop. |
-| `src/city.js` | Deterministic city generator (`generateCity`) and spatial hash collider (`makeCityCollider`): Voronoi districts, waterways, diagonal boulevards, tower archetypes (including stepped arcology pyramids & cantilevered sky-wing towers), 9 landmark kinds, 7 public venue kinds, media ward, outskirts, procedural horizon suburbs, and the 6-deck horizontal street-grid lane graph (`makeLanes`). |
-| `src/scene.js` | Three.js scene graph & uniform orchestration (`makeUniforms`, `makeWorld`, `applyLook`, `applyTime`), theme-reactive `buildLandmarks` & `buildPlaces` (`setLook`), Tier-1 CPU hero vehicles + Tier-2 GPU swarm (`makeVehicles`), volumetric cloud puff field (`buildCloudLayers`), water, boulevards, trees, billboards, holograms, searchlights, and weather (`makeWeather`). |
-| `src/shaders.js` | All 32 scene GLSL vertex/fragment shaders, shared 3D value-noise/FBM library, `GLSL_CURVE` (`bendWorld` planar-to-planetoid vertex projection), StormyClouds 2D/3D procedural plate styles, volumetric `SKY_FRAG` & `CLOUD_FRAG`, `TOWER_FRAG`, and 4-role `LANDMARK_FRAG`. |
+| `src/city.js` | Deterministic city & macro-environment generator (`generateCity`) and 3D terrain-aware spatial collider (`makeCityCollider`): Voronoi districts, 5 water/shoreline modes (`makeWaters`), 5 distant 3D terrain modes (`evalTerrainHeight`), tower archetypes, 9 landmark kinds, 7 public venue kinds (guaranteed `park` groves + `treeLinks`), curvilinear non-grid suburbs (`addHorizonSuburbs`) with street-aligned houses, shops, power stations & Voronoi farmsteads, and the 6-deck horizontal street-grid lane graph (`makeLanes`). |
+| `src/scene.js` | Three.js scene graph & uniform orchestration (`makeUniforms`, `makeWorld`, `syncCityEnvironmentUniforms`, `applyLook`, `applyTime`), theme-reactive `buildLandmarks` & `buildPlaces` (`setLook`), multi-branching Real Botanical & Artificial Cyber-Dendritic `buildTrees` + custom lights + catenary `treeLinks`, analytical ocean/lake/river `buildWater`, Tier-1 CPU hero vehicles + Tier-2 GPU swarm (`makeVehicles`), volumetric cloud puff field, billboards, holograms, searchlights, and weather (`makeWeather`). |
+| `src/shaders.js` | All 34 scene GLSL vertex/fragment shaders, shared 3D value-noise/FBM library, `GLSL_CURVE` (`bendWorld`), `GLSL_TERRAIN` (shared JS/GLSL 3D terrain & coastline SDF), de-gridded Voronoi farmland/suburb/mountain/desert/beach `GROUND_FRAG`, surf-foam `WATER_FRAG`, catenary `TREE_LINK_VERT`/`FRAG`, volumetric `SKY_FRAG` & `CLOUD_FRAG`, `TOWER_FRAG`, and 4-role `LANDMARK_FRAG`. |
 | `src/looks.js` | 8 pluggable visual looks (`bladerunner`, `anime`, `abstract`, `tron`, `outrun`, `clay`, `metropolis`, plus runtime `custom`) and `syncCustomLook` palette synthesizer. |
-| `src/post.js` | Half-resolution bloom, chromatic lens dispersion/halation, color-temperature & contrast grading, and StormyClouds-inspired old-film print grain, twinkling dust specks, and scratches (`makePostProcessor`). |
-| `src/controls.js` | Free-flight WASD + pointer-drag camera (`FlyControls`), autonomous scenic `Glide` cruise (`G`), building/ground collision (`C`), and radial planetoid local-up frame when `worldCurve > 0`. |
+| `src/post.js` | Multi-pass HDR HalfFloat + hardware `DepthTexture` post-processor (`makePostProcessor`): bloom, chromatic lens dispersion/halation, color grading, StormyClouds old-film grain/specks, and 6 runtime-switchable render styles (`ART_STYLE_NAMES`: `Cinema`, `X-Ray Structural`, `Architectural Ink Sketch`, `Charcoal & Chalk`, `Painterly Impasto`, `Impressionist Nocturne`). |
+| `src/controls.js` | Smooth inertial Fly & Glide camera (`FlyControls`) with critically-damped look/velocity, aerodynamic turn banking, long-range (`115–380m`) 8-whisker shallow-angle anticipatory obstacle & terrain avoidance (`V`), autonomous scenic `Glide` cruise (`G`), building/terrain collision (`C`), and radial planetoid local-up frame. |
 | `src/presets.js` | Curated `WORLD_PRESETS`, `DEFAULT_BOOKMARKS`, and lossless `normalizeExactState` / `encodeExactState` / `decodeExactState` (`?s=` Base64URL token + JSON import/export). |
 | `src/recorder.js` | `CameraPathRecorder` (Catmull-Rom + squad quaternion keyframe/flight recorder, `R`/`K`/`P`) and `makeSceneExporter` (HUD-free `Viewport`/`1080p`/`2x`/`4K` PNG stills & `60fps` WebM/MP4 video). |
 | `src/prng.js` | Seeded `mulberry32`, integer 2D hash `hash2i`, and 2D value noise / `fbm2D`. |
 
 ---
 
-## 3. Core Systems Design (Including Latest Phase-9 Upgrades)
+## 3. Core Systems Design (Including Phase-9 & Phase-10 Upgrades)
 
 ### A. Horizontal Street-Aligned Traffic, Grade Separation & Corner Turns
 - **6 Horizontal Street Strata (`DECKS` in `src/city.js` `makeLanes`)**:
@@ -88,6 +88,42 @@ The suite (`61` tests across 4 files) validates:
   - `5` **Low Sea-of-Clouds Blanket** — low inversion fog/cloud sea threading around skyscraper spires.
 - **Full Cloud-Cover Spectrum (`#sl-clouds` `0.0 .. 2.4`)**:
   - Scales smoothly from `0.0` crystal-clear sky through scattered/broken decks up to `2.4` solid overcast (softening direct solar disc glare and working even on clear-authored looks like `Tron` or `Abstract` when raised above `1.05`). Compatible with all 7 `StormyClouds` rendering plates (`#sel-cloudstyle`).
+
+### E. Macro-Environment: Shorelines, Large Water Bodies & 3D Distant Terrain
+- **Shared Analytical JS/GLSL Terrain & Coastline (`evalCoastSignedDist` & `evalTerrainHeight` in `src/city.js` + `GLSL_TERRAIN` in `src/shaders.js`)**:
+  - Exactly identical wave-FBM, ridged-multifractal, and coastline signed-distance equations run in JS (for seating suburbs, piers, farmsteads, trees, and 3D camera collision `groundHeightAt`) and in `GROUND_VERT` / `GROUND_FRAG` / `WATER_FRAG` on the `13.5km` (`112 × 144`) polar disc.
+  - **5 Water & Shoreline Modes (`#sel-water` -> `uWaterMode = 0..4`)**:
+    `0` *Harbor & Winding River* (meandering S-curve river ribbon triangulated bank-to-bank + harbor fans), `1` *Coastal Ocean & Bay* (vast analytical ocean sector at `y = 0.25m` intersecting curved sandy beaches, animated surf-foam waves, wooden piers & offshore lighthouse), `2` *Archipelago & Peninsula* (wrap-around sea with 4 3D mountainous offshore islands), `3` *Great Crater Lake* (expansive organic inland lake nestled against foothills), and `4` *Dry Arid Basin*.
+  - **5 Distant Terrain Modes (`#sel-terrain` -> `uTerrainMode = 0..4` + `#sl-relief` `0..2`)**:
+    `0` *Distant Mountains* (ridged-multifractal alpine peaks with snowlines & foothill passes), `1` *Desert Dunes & Mesas* (wind-rippled barchan dunes + stepped red-rock mesas), `2` *Rolling Farmland Hills*, `3` *Volcanic Caldera Rim*, and `4` *Flat Horizon Plain*. Urban core stays strictly at `y = 0` so downtown streets and traffic decks remain level.
+
+### F. De-Gridded Curvilinear Suburbs, Neighborhood POIs & Voronoi Farmland
+- **Zero Square Grid Outside the Urban Core (`GROUND_FRAG` + `addHorizonSuburbs`)**:
+  - Beyond `uCitySpan`, orthogonal avenue grids smoothly dissolve into FBM-warped winding arterial roads, cul-de-sac ring lanes, and **irregular 2D Voronoi agricultural fields** with rotated crop-furrow textures, hedgerow borders, golden/emerald/terracotta crop variants, and irrigated greenhouse strips.
+- **Street-Following Low-Story Houses & Rural Infrastructure**:
+  - Suburban 1–2 story houses (`addSuburbanHouse`) sit setback from curved road tangents with continuous street-aligned rotations (`rot`), gabled roofs, side garages, and warm domestic window lighting in `TOWER_FRAG`.
+  - Interspersed along suburban collectors and rural Voronoi cells (`city.suburbPOIs`, selectable in `#sel-poi`): illuminated corner **Neighborhood Shops** (`addSuburbanShop`), **Regional Power Stations** (`addPowerStation` with twin hyperboloid cooling towers, switchyards & transmission pylons), and **Patchwork Farmsteads** (`addFarmstead` with red barns, grain silos, greenhouses & shelterbelt windbreaks).
+
+### G. Smooth Inertial Camera & Shallow-Angle Anticipatory Obstacle Avoidance
+- **`FlyControls` (`src/controls.js`, toggle `#b-avoid` / hotkey `V`)**:
+  - Critically-damped pointer look (`lookAlpha`) and exponential velocity smoothing (`_vel.lerp(desiredVel, ...)`) deliver silky acceleration, aerodynamic turn banking, and smooth coast-to-rest deceleration.
+  - **Long-Range Multi-Whisker Course Anticipation (`115–380m` ahead)**: Casts a multi-step forward corridor probe (`comfortPad = 26m`) plus 8 symmetric lateral grazing whiskers (`±14°, ±29°, ±48°, ±71°`). As soon as a skyscraper, landmark, or mountain ridge enters the far horizon (`200m+` out), the controller progressively curves yaw (with side-hysteresis `_avoidSide` so it never flip-flops) or pitches into a gentle climb over foothills/low roofs—gliding past obstacles at a shallow grazing angle well before approaching head-on.
+
+### H. Botanical & Cyber-Dendritic Parks with Custom Lights & Connections
+- **Dedicated Park Architecture (`buildPlaces` `kind === 'park'` + `buildTrees` in `src/scene.js`, `#sel-trees` `0..3`)**:
+  - Every city guarantees lush botanical/cyber parks featuring reflecting ponds, elevated illuminated skywalk rings on piers, glass conservatory domes, and dense multi-species procedural tree groves.
+  - **4 Park Tree Modes**: `0` *Auto (Follow Theme)*, `1` *Real Botanical* (multi-order tapered trunks, primary/secondary boughs, layered organic crown clusters & warm hanging lantern `Points`), `2` *Artificial Cyber-Trees* (faceted alloy trunks, geometric dendritic struts, holographic ring canopies & glowing neon tip nodes), and `3` *Hybrid Bio-Cyber Grove*.
+  - **Inter-Tree Catenary Network (`city.treeLinks` + `TREE_LINK_VERT`/`FRAG`)**: Neighboring park and boulevard trees are linked by sagging 3D catenary light-cables with animated traveling bioluminescent/data pulses and elevated timber/neon canopy skywalk bridges.
+
+### I. X-Ray, Sketch/Drawing & Painterly/Impressionist Post-Processing Styles
+- **Hardware Depth + 6 Render Styles (`#sel-art` `0..5` + `#sl-artstr` `0..1.4` in `src/post.js`)**:
+  - `sceneRT` attaches a `THREE.DepthTexture` (`tDepth`) alongside HDR scene & bloom buffers so `COMP_FRAG` combines 3D linear-depth discontinuities with Sobel luminance gradients and Kuwahara/flow kernels:
+    - `0` **Cinema (Default)** — Filmic ACES tonemap, bloom, anamorphic flare, grade & subtle grain.
+    - `1` **X-Ray Structural** — Translucent cyan/cobalt depth-shell radiograph, razor-crisp depth + facade wireframe, plasma emissive tracers & engineering reticle.
+    - `2` **Architectural Ink Sketch** — Fountain-pen contour boil, 4-angle progressive cross-hatching & delicate theme-tinted watercolor wash on warm cotton paper.
+    - `3` **Charcoal & Chalk** — Velvety dry-charcoal shadow strokes & luminous white Conté chalk highlights on laid Ingres paper.
+    - `4` **Painterly Impasto** — 4-quadrant edge-preserving Kuwahara oil/gouache brush planes with linen canvas weave & ridge catchlights.
+    - `5` **Impressionist Nocturne** — Gradient-tangent oriented anisotropic brush dabs with broken-color warm/cool chroma vibration & bristle grooves.
 
 ---
 

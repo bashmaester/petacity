@@ -794,13 +794,170 @@ void main() {
 
 /* --------------------------------------------------------------- ground */
 
+export const GLSL_TERRAIN = /* glsl */ `
+uniform float uCitySpan;
+uniform float uSuburbSpan;
+uniform float uWaterMode;
+uniform float uTerrainMode;
+uniform float uTerrainScale;
+uniform float uCoastAngle;
+uniform vec2 uTerrainSeed;
+
+float envWaveFbm(vec2 p, vec2 ts) {
+  vec2 q = p * 0.00052 + ts * 0.17;
+  float sum = 0.0;
+  float amp = 0.52;
+  for (int i = 0; i < 4; i++) {
+    float v = sin(q.x) * cos(q.y) + 0.55 * sin(q.x * 1.37 - q.y * 1.19 + 1.1);
+    sum += amp * (v / 1.55);
+    q = mat2(0.8, 0.6, -0.6, 0.8) * q * 2.03 + vec2(1.73, -1.31);
+    amp *= 0.5;
+  }
+  return sum;
+}
+
+float envRidgeFbm(vec2 p, vec2 ts) {
+  vec2 q = p * 0.00046 + vec2(ts.x * 0.23 + 2.4, -ts.y * 0.19 - 1.8);
+  float sum = 0.0;
+  float amp = 0.54;
+  float weight = 1.0;
+  for (int i = 0; i < 4; i++) {
+    float raw = (sin(q.x) * cos(q.y) + 0.6 * cos(q.x * 1.29 + q.y * 1.41 - 0.7)) / 1.6;
+    float r = 1.0 - abs(raw);
+    r = r * r * weight;
+    weight = clamp(r * 1.35, 0.0, 1.0);
+    sum += r * amp;
+    q = mat2(0.8, 0.6, -0.6, 0.8) * q * 2.11 + vec2(2.31, 0.97);
+    amp *= 0.5;
+  }
+  return clamp(sum * 1.08, 0.0, 1.0);
+}
+
+float evalCoastSignedDist(vec2 p) {
+  if (uWaterMode < 0.5 || uWaterMode > 3.5) return 9999.0;
+  float ca = cos(uCoastAngle);
+  float sa = sin(uCoastAngle);
+  float u = p.x * ca + p.y * sa;
+  float v = -p.x * sa + p.y * ca;
+  float warp = sin(v * 0.00058 + uTerrainSeed.x) * 410.0
+    + cos(v * 0.00131 - uTerrainSeed.y) * 195.0
+    + sin(v * 0.00285 + uTerrainSeed.x * 1.7) * 82.0;
+  float bayIndent = -255.0 * exp(-(v * v) / (690.0 * 690.0));
+
+  if (uWaterMode < 1.5) {
+    float shoreU = max(460.0, uCitySpan * 0.94) + warp + bayIndent;
+    return shoreU - u;
+  }
+  if (uWaterMode < 2.5) {
+    float baseSpan = max(500.0, uCitySpan * 1.02);
+    float best = (baseSpan + warp * 0.84 + bayIndent * 0.65) - (u + 0.000115 * v * v);
+    for (int k = 0; k < 4; k++) {
+      float fk = float(k);
+      float sgn = (k == 0 || k == 2) ? 1.0 : -1.0;
+      float iu = baseSpan + 1150.0 + fk * 760.0 + sin(uTerrainSeed.x + fk * 2.1) * 260.0;
+      float iv = sgn * (680.0 + fk * 540.0) + cos(uTerrainSeed.y + fk * 1.7) * 320.0;
+      float ir = 340.0 + ((k == 1) ? 210.0 : fk * 55.0);
+      vec2 d = vec2(u - iu, v - iv);
+      float ang = atan(d.y, d.x);
+      float iWarp = sin(ang * 3.0 + fk * 1.9 + uTerrainSeed.x) * 68.0 + cos(ang * 5.0 - uTerrainSeed.y) * 34.0;
+      float islDist = (ir + iWarp) - length(d);
+      best = max(best, islDist);
+    }
+    return best;
+  }
+  float lakeU = max(1550.0, uCitySpan * 2.25);
+  float lakeR = max(1050.0, uCitySpan * 1.32);
+  vec2 dL = vec2(u - lakeU, v * 0.82);
+  float angL = atan(dL.y, dL.x);
+  float lWarp = sin(angL * 3.0 + uTerrainSeed.x) * 185.0 + cos(v * 0.0019 + uTerrainSeed.y) * 125.0;
+  return (length(dL) + lWarp) - lakeR;
+}
+
+float evalTerrainHeight(vec2 p) {
+  float coastDist = evalCoastSignedDist(p);
+  if (coastDist < 0.0) {
+    return -18.0 * smoothstep(0.0, 240.0, -coastDist);
+  }
+  float r = length(p);
+  float shoreEase = smoothstep(0.0, 290.0, coastDist);
+
+  float ca = cos(uCoastAngle);
+  float sa = sin(uCoastAngle);
+  float u = p.x * ca + p.y * sa;
+  if (uWaterMode > 1.5 && uWaterMode < 2.5 && u > max(500.0, uCitySpan * 1.02) + 520.0) {
+    float islPeak = smoothstep(0.0, 360.0, coastDist);
+    float islRidge = envRidgeFbm(p * 1.8, uTerrainSeed);
+    return islPeak * (34.0 + 135.0 * islRidge) * max(0.45, uTerrainScale);
+  }
+
+  if (uTerrainMode > 3.5 || uTerrainScale <= 0.001) return 0.0;
+
+  float wVal = envWaveFbm(p, uTerrainSeed);
+  float basinR = max(920.0, uCitySpan * 1.28) + wVal * 320.0;
+  if (r <= basinR) return 0.0;
+
+  float ang = atan(p.y, p.x);
+  float passWave = abs(sin((ang - uCoastAngle * 0.5) * 2.0 + wVal * 0.55));
+  float valleyCarve = 0.34 + 0.66 * smoothstep(0.14, 0.58, passWave);
+  float horizonTaper = 1.0 - 0.35 * smoothstep(10200.0, 13400.0, r);
+  float sc = uTerrainScale * shoreEase * horizonTaper;
+
+  if (uTerrainMode < 0.5) {
+    float footRamp = smoothstep(basinR, basinR + 2100.0, r);
+    float mtnRamp = smoothstep(max(basinR + 900.0, uSuburbSpan * 0.58), max(basinR + 3800.0, uSuburbSpan * 1.08), r);
+    float ridge = envRidgeFbm(p, uTerrainSeed);
+    float detail = envWaveFbm(p * 2.35, uTerrainSeed + vec2(3.1, -2.4)) * 0.5 + 0.5;
+    float foothills = footRamp * (28.0 + 95.0 * detail) * valleyCarve;
+    float peaks = mtnRamp * (240.0 + 860.0 * pow(ridge, 1.35)) * (0.42 + 0.58 * valleyCarve);
+    return (foothills + peaks) * sc;
+  }
+  if (uTerrainMode < 1.5) {
+    float duneRamp = smoothstep(basinR, basinR + 1450.0, r);
+    float mesaRamp = smoothstep(max(basinR + 1100.0, uSuburbSpan * 0.55), max(basinR + 3400.0, uSuburbSpan * 1.02), r);
+    float windU = (p.x * 0.82 - p.y * 0.57) * 0.0046 + wVal * 2.4;
+    float sDune = sin(windU);
+    float duneCrest = pow(0.5 + 0.5 * sin(windU - 0.42 * sDune), 1.65);
+    float dunes = duneRamp * (18.0 + 68.0 * duneCrest * (0.55 + 0.45 * (wVal * 0.5 + 0.5)));
+    float mesaField = envWaveFbm(p * 0.72 + vec2(910.0, -640.0), uTerrainSeed) * 0.5 + 0.5;
+    float tier1 = smoothstep(0.56, 0.64, mesaField);
+    float tier2 = smoothstep(0.71, 0.77, mesaField);
+    float mesas = mesaRamp * (tier1 * 235.0 + tier2 * 185.0) * valleyCarve;
+    return (dunes + mesas) * sc;
+  }
+  if (uTerrainMode < 2.5) {
+    float hillRamp = smoothstep(basinR, basinR + 1500.0, r);
+    float outerRise = smoothstep(basinR + 2200.0, basinR + 5600.0, r);
+    float h1 = envWaveFbm(p * 0.85, uTerrainSeed) * 0.5 + 0.5;
+    float h2 = envWaveFbm(p * 2.1, uTerrainSeed + vec2(-1.9, 2.7)) * 0.5 + 0.5;
+    return hillRamp * (14.0 + 78.0 * h1 + outerRise * 105.0 * h1 * h2) * valleyCarve * sc;
+  }
+  float rimCenter = max(basinR + 2900.0, uSuburbSpan * 0.92);
+  float dRim = (r + wVal * 520.0 - rimCenter) / 1650.0;
+  float craterRing = exp(-dRim * dRim);
+  float gully = envRidgeFbm(p * 1.45, uTerrainSeed);
+  float badlands = smoothstep(basinR, basinR + 1600.0, r) * 58.0 * gully;
+  return (badlands + craterRing * (310.0 + 560.0 * gully) * (0.45 + 0.55 * valleyCarve)) * sc;
+}
+`;
+
 export const GROUND_VERT = /* glsl */ `
 varying vec3 vFlat;
 varying vec3 vWorld;
+varying vec3 vTerrN;
+varying float vElev;
 ${GLSL_CURVE}
+${GLSL_TERRAIN}
 void main() {
   vec4 wp = modelMatrix * vec4(position, 1.0);
+  float hC = evalTerrainHeight(wp.xz);
+  float eps = 18.0;
+  float hX = evalTerrainHeight(wp.xz + vec2(eps, 0.0)) - evalTerrainHeight(wp.xz - vec2(eps, 0.0));
+  float hZ = evalTerrainHeight(wp.xz + vec2(0.0, eps)) - evalTerrainHeight(wp.xz - vec2(0.0, eps));
+  vec3 rawN = normalize(vec3(-hX, 2.0 * eps, -hZ));
+  wp.y += hC;
+  vElev = hC;
   vFlat = wp.xyz;
+  vTerrN = bendNormal(wp.xz, rawN);
   wp.xyz = bendWorld(wp.xyz);
   vWorld = wp.xyz;
   gl_Position = projectionMatrix * viewMatrix * wp;
@@ -815,8 +972,6 @@ uniform float uGLineGlow;
 uniform float uCell;
 uniform float uAve;
 uniform float uSt;
-uniform float uCitySpan;
-uniform float uSuburbSpan;
 uniform float uGroundRadius;
 uniform vec3 uSunDir;
 uniform vec3 uFogCol;
@@ -831,20 +986,58 @@ uniform vec3 uBillA;
 uniform float uLightK;
 varying vec3 vFlat;
 varying vec3 vWorld;
+varying vec3 vTerrN;
+varying float vElev;
 ${GLSL_NOISE}
 ${GLSL_UTIL}
 ${GLSL_CURVE}
+${GLSL_TERRAIN}
+
+// Shared irregular 2D Voronoi partition (returns vec3(edgeDistMetres, cellHash, cropVar))
+vec3 evalVoronoiPatch(vec2 p, float cellSpan, vec2 seedShift) {
+  vec2 g = floor(p / cellSpan);
+  vec2 f = p / cellSpan - g;
+  float d1 = 99.0;
+  float d2 = 99.0;
+  float bestH = 0.5;
+  for (int oz = -1; oz <= 1; oz++) {
+    for (int ox = -1; ox <= 1; ox++) {
+      vec2 o = vec2(float(ox), float(oz));
+      vec2 c = g + o;
+      float hA = fract(sin(c.x * 1.73 + c.y * 2.91 + seedShift.x * 0.37) * 43.758);
+      float hB = fract(cos(c.x * 2.47 - c.y * 1.83 + seedShift.y * 0.41) * 37.913);
+      vec2 j = o + vec2(0.14 + 0.72 * hA, 0.14 + 0.72 * hB) - f;
+      float d = length(j);
+      if (d < d1) {
+        d2 = d1;
+        d1 = d;
+        bestH = hA;
+      } else if (d < d2) {
+        d2 = d;
+      }
+    }
+  }
+  return vec3((d2 - d1) * cellSpan * 0.5, bestH, fract(bestH * 7.31));
+}
+
 void main() {
   vec2 p = vFlat.xz;
 
   // Organic radial alpha disappearance at the outer rim of the ground disc
   float edgeWarp = (vnoise(p * 0.00045 + 4.2) - 0.5) * uGroundRadius * 0.14;
   float edgeR = length(p) + edgeWarp;
-  float fadeInner = mix(uGroundRadius * 0.44, uPlanetR * 2.55, uWorldCurve);
-  float fadeOuter = mix(uGroundRadius * 0.95, uPlanetR * 3.08, uWorldCurve);
+  float fadeInner = mix(uGroundRadius * 0.46, uPlanetR * 2.55, uWorldCurve);
+  float fadeOuter = mix(uGroundRadius * 0.96, uPlanetR * 3.08, uWorldCurve);
   float edgeAlpha = 1.0 - smoothstep(fadeInner, fadeOuter, edgeR);
   if (edgeAlpha < 0.004) discard;
 
+  float coastDist = evalCoastSignedDist(p);
+  vec3 flatUp = bendNormal(p, vec3(0.0, 1.0, 0.0));
+  vec3 surfN = normalize(vTerrN);
+  float terrSlope = clamp(1.0 - dot(surfN, flatUp), 0.0, 1.0);
+  float slopeSteep = smoothstep(0.015, 0.18, terrSlope);
+
+  // 1. Urban Core Grid: strictly confined inside the warped downtown boundary (no square grid in suburbs!)
   float ix = floor(p.x / uCell + 0.5);
   float iz = floor(p.y / uCell + 0.5);
   float isAveX = (abs(mod(ix, 4.0)) < 0.5) ? 1.0 : 0.0;
@@ -854,25 +1047,29 @@ void main() {
   float dx = abs(p.x - ix * uCell);
   float dz = abs(p.y - iz * uCell);
 
-  // Core grid transitions into curved suburban street & parcel fabric out to uSuburbSpan
-  float rWarp = (vnoise(p * 0.0018) - 0.5) * uCell * 3.2;
+  float rWarp = (vnoise(p * 0.0018) - 0.5) * uCell * 2.6;
   float rDist = length(p) + rWarp;
-  float gridFade = 1.0 - smoothstep(uCitySpan * 0.9, uCitySpan * 2.05, rDist);
-  float aveFade = 1.0 - smoothstep(uCitySpan * 1.15, uCitySpan * 3.1, rDist);
-  float subFade = (1.0 - gridFade * 0.85) * (1.0 - smoothstep(uSuburbSpan * 0.55, uSuburbSpan * 1.18, rDist));
+  float gridFade = 1.0 - smoothstep(uCitySpan * 0.86, uCitySpan * 1.15, rDist);
+  float aveFade = 1.0 - smoothstep(uCitySpan * 0.94, uCitySpan * 1.32, rDist);
 
-  // Distinct streetscape zones: carriageway, raised sidewalk promenade & inner block lot
   float walkW = 4.2;
   float roadX = step(dx, swx * 0.5 - walkW) * mix(gridFade, aveFade, isAveX);
   float roadZ = step(dz, swz * 0.5 - walkW) * mix(gridFade, aveFade, isAveZ);
-  float road = max(roadX, roadZ);
+  float coreRoad = max(roadX, roadZ);
 
-  // Winding suburban neighbourhood collector streets, cul-de-sacs & residential lots
-  vec2 subWarp = vec2(fbm(p * 0.0011 + 2.3), fbm(p * 0.0011 - 7.1)) * 125.0;
-  vec2 sp = p + subWarp;
-  vec2 subCell = abs(fract(sp / 138.0) - 0.5) * 138.0;
-  float subRoad = (1.0 - smoothstep(4.8, 7.2, min(subCell.x, subCell.y))) * subFade;
-  road = max(road, subRoad * 0.88);
+  // 2. Non-Grid Curvilinear Suburban Streets & Organic Garden Parcels
+  float subBelt = (1.0 - gridFade)
+    * (1.0 - smoothstep(uSuburbSpan * 0.62, uSuburbSpan * 1.12, rDist))
+    * (1.0 - slopeSteep)
+    * smoothstep(12.0, 65.0, coastDist);
+  float subPatch = smoothstep(0.36, 0.58, fbm(p * 0.00105 + vec2(-4.2, 8.7)));
+  float subZone = subBelt * (0.35 + 0.65 * subPatch);
+
+  vec2 subWarp = vec2(fbm(p * 0.0014 + 2.3), fbm(p * 0.0014 - 7.1)) * 95.0;
+  vec3 subVor = evalVoronoiPatch(p + subWarp, 175.0, uTerrainSeed + vec2(3.1, 5.7));
+  vec3 lotVor = evalVoronoiPatch(p + subWarp * 0.6, 46.0, uTerrainSeed - vec2(2.4, 1.9));
+  float subRoad = (1.0 - smoothstep(4.2, 6.8, subVor.x)) * subZone;
+  float road = max(coreRoad, subRoad * 0.9);
 
   float walkBandX = step(swx * 0.5 - walkW, dx) * step(dx, swx * 0.5 + 1.2) * (1.0 - roadZ) * mix(gridFade, aveFade, isAveX);
   float walkBandZ = step(swz * 0.5 - walkW, dz) * step(dz, swz * 0.5 + 1.2) * (1.0 - roadX) * mix(gridFade, aveFade, isAveZ);
@@ -883,29 +1080,116 @@ void main() {
   float joint = 1.0 - smoothstep(0.0, 0.06, min(paver.x, paver.y));
   walkCol *= 1.0 - joint * 0.14;
 
-  // Suburban hedged garden parcels & house roof/patio micro-plots out to the horizon
-  vec2 lotUv = fract(sp / 34.5);
-  vec2 lotId = floor(sp / 34.5);
-  float lotHash = hash12(lotId + 5.7);
-  float lotBorder = (1.0 - smoothstep(0.0, 0.055, min(min(lotUv.x, 1.0 - lotUv.x), min(lotUv.y, 1.0 - lotUv.y)))) * subFade * (1.0 - subRoad);
-  vec3 yardTint = mix(uGBlock * 0.88, uGBlock * 1.18, lotHash);
-  vec3 baseBlock = mix(uGBlock, yardTint, subFade * 0.75);
+  // Suburban curved garden lawns & hedgerows
+  float lotHedge = (1.0 - smoothstep(0.8, 2.2, lotVor.x)) * subZone * (1.0 - subRoad);
+  vec3 lushHint = mix(uGBlock, vec3(0.11, 0.20, 0.11) + uGBlock * 0.55, 0.48);
+  vec3 yardTint = mix(uGBlock * 0.90, lushHint * 1.15, lotVor.y);
+  vec3 col = mix(uGBlock, yardTint, subZone * 0.85);
 
-  vec3 col = mix(baseBlock, uGStreet, road);
+  // 3. Irregular 2D Voronoi Patchwork Farmland & Center-Pivot Fields!
+  float isArid = (uTerrainMode > 0.5 && uTerrainMode < 1.5) ? 1.0 : ((uTerrainMode > 2.5 && uTerrainMode < 3.5) ? 0.75 : 0.0);
+  float farmZone = (1.0 - gridFade)
+    * (1.0 - subZone * 0.82)
+    * (1.0 - slopeSteep)
+    * smoothstep(24.0, 95.0, coastDist)
+    * (1.0 - isArid * 0.72)
+    * (1.0 - smoothstep(uSuburbSpan * 0.95, uSuburbSpan * 1.75, rDist));
+
+  if (farmZone > 0.01) {
+    vec2 farmWarp = vec2(envWaveFbm(p * 1.4, uTerrainSeed), envWaveFbm(p * 1.4 + 400.0, uTerrainSeed)) * 42.0;
+    vec3 fVor = evalVoronoiPatch(p + farmWarp, 320.0, uTerrainSeed);
+    float fAng = fVor.y * 3.14159;
+    vec2 fDir = vec2(cos(fAng), sin(fAng));
+    float furrow = 0.5 + 0.5 * sin(dot(p, fDir) * 0.55);
+
+    // Palette-harmonized multi-crop tones: emerald pasture, golden grain, dark ploughed loam, olive orchard
+    vec3 baseL = uGBlock * 0.75 + uFogCol * 0.16;
+    vec3 cropPasture = mix(baseL, vec3(0.14, 0.28, 0.12) + baseL * 0.45, 0.68);
+    vec3 cropGrain   = mix(baseL, vec3(0.34, 0.28, 0.13) + baseL * 0.42, 0.65);
+    vec3 cropLoam    = mix(baseL, vec3(0.16, 0.12, 0.09) + baseL * 0.40, 0.68);
+    vec3 cropOrchard = mix(baseL, vec3(0.10, 0.22, 0.13) + baseL * 0.42, 0.68);
+
+    vec3 fieldCol = cropPasture;
+    if (fVor.z > 0.28 && fVor.z <= 0.56) fieldCol = cropGrain;
+    else if (fVor.z > 0.56 && fVor.z <= 0.80) fieldCol = cropLoam;
+    else if (fVor.z > 0.80) fieldCol = cropOrchard;
+
+    // Furrow stripe modulation + occasional circular center-pivot irrigation plot
+    fieldCol *= 0.88 + 0.22 * furrow;
+    if (fVor.z > 0.68 && fVor.x > 34.0) {
+      float ringF = smoothstep(34.0, 42.0, fVor.x);
+      fieldCol = mix(fieldCol, cropPasture * (0.94 + 0.12 * sin(fVor.x * 0.35)), ringF * 0.65);
+    }
+    // Irregular Voronoi hedgerows & dirt farm tracks between fields
+    float hedge = 1.0 - smoothstep(2.5, 6.5, fVor.x);
+    fieldCol = mix(fieldCol, cropOrchard * 0.52, hedge * 0.82);
+    col = mix(col, fieldCol, farmZone);
+  }
+
+  // Apply core & curvilinear suburban roads, sidewalks & hedges
+  col = mix(col, uGStreet, road);
   col = mix(col, walkCol, sidewalk * 0.92);
-  col = mix(col, uGStreet * 1.25, lotBorder * 0.35);
-  col *= 0.90 + 0.20 * vnoise(p * 0.018);
+  col = mix(col, uGStreet * 0.65, lotHedge * 0.55);
+  col *= 0.91 + 0.18 * vnoise(p * 0.018);
 
-  // Distant suburban porch / cul-de-sac streetlamp micro-glints fading toward the horizon
-  float subPorch = step(0.76, lotHash) * (1.0 - smoothstep(0.0, 0.18, length(lotUv - vec2(0.5, 0.28)))) * subFade * (1.0 - subRoad);
-  col += uPoolCol * subPorch * max(uLightK, 0.12) * 0.55;
+  // Subtle warm porch / farmyard window glints in suburbs
+  float subPorch = step(0.80, lotVor.y) * smoothstep(9.0, 16.0, lotVor.x) * subZone * (1.0 - subRoad);
+  col += uPoolCol * subPorch * max(uLightK, 0.12) * 0.32;
 
-  // Centre lines, multi-lane dashes on avenues, kerbs & intersection zebra crosswalks
+  // 4. 3D Distant Terrain Biomes: Mountains, Desert Dunes & Mesas, Rolling Hills, Volcanic Badlands
+  float outerLand = 1.0 - gridFade;
+  vec3 sd = normalize(uSunDir);
+  float sunDiff = max(dot(surfN, sd), 0.0);
+  float skyAmb = 0.42 + 0.58 * clamp(surfN.y, 0.0, 1.0);
+  float reliefShade = mix(1.0, 0.44 * skyAmb + 0.92 * sunDiff, clamp(outerLand * (slopeSteep * 0.85 + smoothstep(8.0, 90.0, vElev) * 0.75), 0.0, 1.0));
+
+  if (uTerrainMode > 0.5 && uTerrainMode < 1.5 && outerLand > 0.02) {
+    // Desert Sand Dunes & Stratified Red-Rock Mesas
+    float desertMask = outerLand * (1.0 - subZone * 0.72) * smoothstep(8.0, 55.0, coastDist);
+    float ripple = 0.5 + 0.5 * sin((p.x * 0.82 - p.y * 0.57) * 0.24 + vnoise(p * 0.02) * 3.0);
+    vec3 sandWarm = mix(uGBlock * 0.9 + uFogCol * 0.35, vec3(0.56, 0.40, 0.25) + uSunFogCol * 0.22, 0.68);
+    sandWarm *= 0.93 + 0.12 * ripple;
+    // Stratified horizontal sandstone cliff bands on steep mesa walls
+    float strata = 0.5 + 0.5 * sin(vElev * 0.21 + vnoise(p * 0.006) * 2.5);
+    vec3 mesaRock = mix(vec3(0.42, 0.21, 0.14), vec3(0.64, 0.38, 0.23), strata) + uFogCol * 0.18;
+    vec3 desertCol = mix(sandWarm, mesaRock, smoothstep(0.03, 0.16, terrSlope));
+    col = mix(col, desertCol, desertMask * 0.92);
+  } else if (vElev > 3.0 || slopeSteep > 0.04) {
+    float terMask = clamp(smoothstep(3.0, 48.0, vElev) + slopeSteep * 0.85, 0.0, 1.0) * outerLand;
+    float strata = 0.5 + 0.5 * sin(vElev * 0.11 + vnoise(p * 0.005) * 3.2);
+    vec3 foothillVeg = mix(uGBlock * 0.85 + uFogCol * 0.2, vec3(0.12, 0.21, 0.14) + uGBlock * 0.35, 0.58);
+    vec3 cliffRock = mix(vec3(0.18, 0.19, 0.23), vec3(0.32, 0.33, 0.37), strata) + uFogCol * 0.22;
+    if (uTerrainMode > 2.5 && uTerrainMode < 3.5) {
+      // Volcanic basalt / obsidian ridges + warm mineral veins in deep gullies
+      cliffRock = mix(vec3(0.09, 0.08, 0.10), vec3(0.22, 0.16, 0.15), strata) + uFogCol * 0.14;
+      foothillVeg = mix(uGBlock * 0.7, vec3(0.16, 0.13, 0.12), 0.65);
+    }
+    vec3 mtnCol = mix(foothillVeg, cliffRock, smoothstep(0.025, 0.15, terrSlope) * 0.85 + smoothstep(140.0, 340.0, vElev) * 0.45);
+    // Alpine snow / frost caps on high mountain peaks (mode 0)
+    if (uTerrainMode < 0.5) {
+      float snowLine = smoothstep(310.0, 520.0, vElev - terrSlope * 260.0 + vnoise(p * 0.008) * 55.0);
+      vec3 snowCol = mix(vec3(0.76, 0.82, 0.90), uSunFogCol * 0.55 + vec3(0.55), 0.38);
+      mtnCol = mix(mtnCol, snowCol, snowLine * 0.88);
+    }
+    col = mix(col, mtnCol, terMask);
+  }
+  col *= reliefShade;
+
+  // 5. Coastal Sandy Beach / Rocky Waterfront Apron along Ocean & Lake Shores
+  if (uWaterMode > 0.5 && uWaterMode < 3.5 && coastDist < 68.0) {
+    float beachBand = (1.0 - smoothstep(6.0, 62.0, max(coastDist, 0.0))) * (1.0 - gridFade * 0.75);
+    vec3 sandShore = mix(uGBlock + vec3(0.22, 0.19, 0.13), vec3(0.46, 0.40, 0.30) + uFogCol * 0.2, 0.58);
+    float wetTide = 1.0 - smoothstep(-4.0, 14.0, coastDist);
+    sandShore *= mix(1.0, 0.58, wetTide);
+    col = mix(col, sandShore, beachBand * 0.82);
+  }
+
+  // Centre lines, multi-lane dashes on core avenues, kerbs & intersection zebra crosswalks
   float dashZ = step(0.42, fract(p.y / 14.0));
   float dashX = step(0.42, fract(p.x / 14.0));
   float centerX = (1.0 - smoothstep(0.0, 1.25, dx)) * roadX * (1.0 - roadZ * 0.85);
   float centerZ = (1.0 - smoothstep(0.0, 1.25, dz)) * roadZ * (1.0 - roadX * 0.85);
-  float subCenter = (1.0 - smoothstep(0.0, 0.85, min(subCell.x, subCell.y))) * subRoad * 0.45;
+  float subCenter = (1.0 - smoothstep(0.0, 0.75, subVor.x)) * subRoad * 0.38;
   float laneDashX = (1.0 - smoothstep(0.0, 0.75, abs(dx - 11.0))) * isAveX * dashZ * roadX * (1.0 - roadZ);
   float laneDashZ = (1.0 - smoothstep(0.0, 0.75, abs(dz - 11.0))) * isAveZ * dashX * roadZ * (1.0 - roadX);
   float line = max(max(max(centerX, centerZ), subCenter), max(laneDashX, laneDashZ) * 0.75);
@@ -922,22 +1206,19 @@ void main() {
   col = mix(col, uGLine, markings);
   col += uGLine * (line + crosswalk * 0.55) * uGLineGlow * 0.38;
 
-  // Wet street puddles & neon/streetlamp asphalt sheen (intensifies in rain/storm)
+  // Wet street puddles & neon/streetlamp asphalt sheen
   float puddle = smoothstep(0.42, 0.78, vnoise(p * 0.045 + 3.1));
   float wet = clamp(0.16 + uWetness * 0.84, 0.0, 1.0) * road * puddle;
   vec3 vdir = normalize(vWorld - cameraPosition);
-  vec3 upN = bendNormal(p, vec3(0.0, 1.0, 0.0));
-  float fres = pow(1.0 - max(dot(-vdir, upN), 0.0), 2.6);
+  float fres = pow(1.0 - max(dot(-vdir, surfN), 0.0), 2.6);
   vec3 streetRefl = mix(uPoolCol, uBillA, vnoise(p * 0.014 - 7.3));
   col += streetRefl * wet * (0.18 + 0.55 * fres) * max(uLightK, 0.15);
 
-  // Spherical planetoid day/night terminator shading when curved into a globe
   if (uWorldCurve > 0.01) {
-    float globeShade = mix(1.0, 0.38 + 0.68 * max(dot(upN, normalize(uSunDir)), 0.0), clamp(uWorldCurve * 1.1, 0.0, 1.0));
+    float globeShade = mix(1.0, 0.38 + 0.68 * max(dot(flatUp, sd), 0.0), clamp(uWorldCurve * 1.1, 0.0, 1.0));
     col *= globeShade;
   }
 
-  // faint fine plaza paving inside urban blocks only
   vec2 gf = abs(fract(p / 25.0) - 0.5);
   float fine = (1.0 - smoothstep(0.0, 0.035, min(gf.x, gf.y))) * gridFade * (1.0 - road);
   col += uGLine * fine * uGLineGlow * 0.12;
@@ -947,10 +1228,12 @@ void main() {
   float dist = length(vWorld - cameraPosition);
   float density = uFogDensity * exp(-max(vFlat.y, 0.0) * uFogHeight);
   float fogF = (1.0 - exp(-density * dist)) * (1.0 - uWorldCurve * 0.45);
-  vec3 fogCol = mix(uFogCol, uSunFogCol, pow(max(dot(vdir, normalize(uSunDir)), 0.0), 6.0) * uHazeSun);
-  float horizonMix = smoothstep(fadeInner * 0.72, fadeOuter, edgeR) * (1.0 - uWorldCurve * 0.75);
+  vec3 fogCol = mix(uFogCol, uSunFogCol, pow(max(dot(vdir, sd), 0.0), 6.0) * uHazeSun);
+  // Let tall distant mountain silhouettes remain majestically visible against the horizon sky!
+  float mtnSilhouette = smoothstep(80.0, 420.0, vElev) * 0.48;
+  float horizonMix = smoothstep(fadeInner * 0.78, fadeOuter, edgeR) * (1.0 - uWorldCurve * 0.75) * (1.0 - mtnSilhouette);
   vec3 far3 = mix(fogCol, uSunFogCol, horizonMix);
-  gl_FragColor = vec4(mix(col, far3, clamp(max(fogF, horizonMix), 0.0, 1.0)), edgeAlpha);
+  gl_FragColor = vec4(mix(col, far3, clamp(max(fogF * (1.0 - mtnSilhouette * 0.45), horizonMix), 0.0, 1.0)), edgeAlpha);
 }
 `;
 
@@ -1716,39 +1999,116 @@ uniform vec3 uSunDir;
 uniform vec3 uSkySunCol;
 uniform vec3 uFogCol;
 uniform vec3 uSunFogCol;
+uniform float uGroundRadius;
 uniform float uHazeSun;
 uniform float uTime;
 uniform float uSat;
+uniform vec3 uPoolCol;
+uniform float uLightK;
 varying vec3 vFlat;
 varying vec3 vWorld;
 ${GLSL_NOISE}
 ${GLSL_UTIL}
 ${GLSL_CURVE}
+${GLSL_TERRAIN}
 
 void main() {
+  vec2 xz = vFlat.xz;
+  float edgeWarp = (vnoise(xz * 0.00045 + 4.2) - 0.5) * uGroundRadius * 0.14;
+  float edgeR = length(xz) + edgeWarp;
+  float fadeInner = mix(uGroundRadius * 0.48, uPlanetR * 2.55, uWorldCurve);
+  float fadeOuter = mix(uGroundRadius * 0.96, uPlanetR * 3.08, uWorldCurve);
+  float edgeAlpha = 1.0 - smoothstep(fadeInner, fadeOuter, edgeR);
+  if (edgeAlpha < 0.004) discard;
+
   vec3 vdir = normalize(vWorld - cameraPosition);
-  vec2 p = vFlat.xz * 0.012;
+  vec2 p = xz * 0.012;
   float w1 = fbm(p + vec2(uTime * 0.05, uTime * 0.031));
   float w2 = fbm(p * 2.7 - vec2(uTime * 0.033, uTime * 0.05));
   float wave = clamp(w1 * 0.7 + w2 * 0.5, 0.0, 1.0);
   vec3 col = mix(uWaterDeep, uWaterShallow, wave * 0.65);
 
+  // Shallow turquoise shoal + animated breaking surf foam near coastal & island shores!
+  if (uWaterMode > 0.5 && uWaterMode < 3.5) {
+    float cDist = evalCoastSignedDist(xz);
+    float shoal = 1.0 - smoothstep(0.0, 145.0, -cDist);
+    col = mix(col, uWaterShallow * 1.28, shoal * 0.55);
+    float surfWave = sin((-cDist) * 0.19 - uTime * 2.3 + w1 * 4.5);
+    float surfFoam = (1.0 - smoothstep(0.0, 46.0, -cDist)) * smoothstep(0.35, 0.92, surfWave);
+    float shoreLip = 1.0 - smoothstep(0.0, 9.0, abs(cDist + 2.5));
+    vec3 foamCol = mix(vec3(0.84, 0.92, 0.98), uSkySunCol, 0.35);
+    col = mix(col, foamCol, clamp(surfFoam * 0.68 + shoreLip * 0.55, 0.0, 0.88));
+  }
+
   vec3 sd = normalize(uSunDir);
-  vec3 waveN = bendNormal(vFlat.xz, normalize(vec3((w1 - w2) * 2.0, 1.0, (w2 - w1) * 2.0)));
+  vec3 waveN = bendNormal(xz, normalize(vec3((w1 - w2) * 2.0, 1.0, (w2 - w1) * 2.0)));
   float facing = pow(max(dot(waveN, sd), 0.0), 24.0);
   float glint = pow(smoothstep(0.55, 0.95, w2), 5.0);
   col += uSkySunCol * (facing * 1.3 + glint * 0.55);
 
-  vec3 upN = bendNormal(vFlat.xz, vec3(0.0, 1.0, 0.0));
+  // Subtle waterfront city-light shimmer near the urban core at night
+  float nearCity = 1.0 - smoothstep(uCitySpan * 0.5, uCitySpan * 2.1, length(xz));
+  col += uPoolCol * nearCity * wave * max(uLightK, 0.0) * 0.22;
+
+  vec3 upN = bendNormal(xz, vec3(0.0, 1.0, 0.0));
   float fres = pow(1.0 - max(dot(-vdir, upN), 0.0), 3.0);
   col = mix(col, uSunFogCol, fres * 0.55);
 
   float dist = length(vWorld - cameraPosition);
   vec3 fogCol = mix(uFogCol, uSunFogCol, pow(max(dot(vdir, sd), 0.0), 6.0) * uHazeSun);
-  float fogF = (1.0 - exp(-uTime * 0.0 - 0.00028 * dist)) * (1.0 - uWorldCurve * 0.45);
-  col = mix(col, fogCol, clamp(fogF, 0.0, 1.0));
+  float fogF = (1.0 - exp(-0.00024 * dist)) * (1.0 - uWorldCurve * 0.45);
+  float horizonMix = smoothstep(fadeInner * 0.78, fadeOuter, edgeR) * (1.0 - uWorldCurve * 0.75);
+  vec3 far3 = mix(fogCol, uSunFogCol, horizonMix);
+  col = mix(col, far3, clamp(max(fogF, horizonMix), 0.0, 1.0));
   col = saturate3(col, uSat);
-  gl_FragColor = vec4(col, 1.0);
+  gl_FragColor = vec4(col, edgeAlpha);
+}
+`;
+
+/* ----------------------------------------------------- park tree connections */
+
+export const TREE_LINK_VERT = /* glsl */ `
+attribute float aSeed;
+varying vec2 vUv;
+varying float vSeed;
+${GLSL_CURVE}
+void main() {
+  vUv = uv;
+  vSeed = aSeed;
+  vec4 wp = modelMatrix * vec4(position, 1.0);
+  wp.xyz = bendWorld(wp.xyz);
+  gl_Position = projectionMatrix * viewMatrix * wp;
+}
+`;
+
+export const TREE_LINK_FRAG = /* glsl */ `
+uniform vec3 uLinkColA;
+uniform vec3 uLinkColB;
+uniform float uTreeCyber;
+uniform float uTime;
+uniform float uLightK;
+varying vec2 vUv;
+varying float vSeed;
+void main() {
+  float core = sin(3.14159 * clamp(vUv.y, 0.0, 1.0));
+  float brightness = max(uLightK, 0.28);
+  vec3 col;
+  float alpha;
+  if (uTreeCyber < 0.5) {
+    // Organic park mode: warm festoon string-light bulbs along a subtle cable
+    float bulbs = pow(0.5 + 0.5 * cos(vUv.x * 44.0 + vSeed * 6.28), 8.0);
+    float twinkle = 0.85 + 0.15 * sin(uTime * 2.4 + vUv.x * 19.0 + vSeed * 40.0);
+    col = mix(uLinkColA * 0.45, uLinkColB * 1.45, bulbs) * twinkle * (0.55 + 0.75 * brightness);
+    alpha = core * (0.28 + 0.72 * bulbs);
+  } else {
+    // Cyber / Artificial mode: bioluminescent fiber-optic filament with traveling neural pulses
+    float pulse1 = pow(0.5 + 0.5 * sin(vUv.x * 12.56 - uTime * 2.8 + vSeed * 31.4), 5.0);
+    float pulse2 = pow(0.5 + 0.5 * sin(vUv.x * 18.84 + uTime * 1.9 - vSeed * 17.1), 6.0);
+    float energy = clamp(0.32 + pulse1 * 0.85 + pulse2 * 0.55, 0.0, 1.5);
+    col = mix(uLinkColA, uLinkColB, clamp(pulse1 + pulse2 * 0.5, 0.0, 1.0)) * energy * (0.65 + 0.85 * brightness);
+    alpha = core * clamp(0.38 + (pulse1 + pulse2) * 0.55, 0.0, 0.96);
+  }
+  gl_FragColor = vec4(col, alpha);
 }
 `;
 

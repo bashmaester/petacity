@@ -367,6 +367,7 @@ button.icon-btn.rec-on, button.action.rec-on {
     <div class="brand" title="One seed grows the whole city — swap the look or bend the world into a globe">Peta<b>city</b></div>
     <div class="head-actions">
       <button id="b-glide" class="icon-btn" type="button" aria-pressed="false" aria-label="Glide mode" title="Start Glide mode — drag to steer, wheel for speed (G)">&#x2708;&#xFE0E;</button>
+      <button id="b-avoid" class="icon-btn on" type="button" aria-pressed="true" aria-label="Anticipatory obstacle avoidance" title="Anticipatory shallow-angle obstacle &amp; terrain avoidance: on (V)">&#x2934;</button>
       <button id="b-collide" class="icon-btn on" type="button" aria-pressed="true" aria-label="Toggle collision detection" title="Collision: on — toggle noclip (C)">&#x2B21;</button>
       <button id="b-export" class="icon-btn" type="button" aria-pressed="false" aria-label="Export or share exact state" title="Export / share exact state (URL &amp; JSON)">&#x2912;</button>
       <button id="b-ui" class="icon-btn" type="button" aria-pressed="true" aria-label="Toggle interface" title="Hide interface (H)">&#x25E7;</button>
@@ -435,6 +436,39 @@ button.icon-btn.rec-on, button.action.rec-on {
         <span>&#x21C4;</span>
         <input id="sl-traffic" type="range" min="0" max="1" step="0.005" value="0.25" aria-label="Multi-strata traffic density">
         <em id="traffic-label">320</em>
+      </div>
+      <div class="slider-row wide" title="Large water bodies, shoreline &amp; lake layout">
+        <span>&#x2248;</span>
+        <select id="sel-water" aria-label="Water body and shoreline mode">
+          <option value="0">Water · Harbor &amp; Winding River</option>
+          <option value="1" selected>Water · Coastal Ocean &amp; Bay</option>
+          <option value="2">Water · Archipelago &amp; Peninsula</option>
+          <option value="3">Water · Great Crater Lake</option>
+          <option value="4">Water · Dry Arid Basin</option>
+        </select>
+      </div>
+      <div class="slider-row wide" title="Distant mountains, deserts, hills &amp; caldera relief">
+        <span>&#x25B2;</span>
+        <select id="sel-terrain" aria-label="Distant terrain and relief mode">
+          <option value="0" selected>Terrain · Distant Mountains</option>
+          <option value="1">Terrain · Desert Dunes &amp; Mesas</option>
+          <option value="2">Terrain · Rolling Farmland Hills</option>
+          <option value="3">Terrain · Volcanic Caldera Rim</option>
+          <option value="4">Terrain · Flat Horizon Plain</option>
+        </select>
+      </div>
+      <div class="slider-row" title="Distant mountain &amp; dune elevation scale">
+        <span>&#x22F0;</span>
+        <input id="sl-relief" type="range" min="0" max="2" step="0.05" value="1" aria-label="Distant terrain elevation scale">
+      </div>
+      <div class="slider-row" title="Park trees &amp; canopy network style">
+        <span>&#x2740;</span>
+        <select id="sel-trees" aria-label="Park tree and canopy architecture">
+          <option value="0">Trees · Auto</option>
+          <option value="1">Trees · Botanical</option>
+          <option value="2">Trees · Cyber</option>
+          <option value="3">Trees · Bio-Cyber</option>
+        </select>
       </div>
     </div>
 
@@ -508,8 +542,23 @@ button.icon-btn.rec-on, button.action.rec-on {
       </div>
     </div>
 
-    <span class="lab">Post &amp; Film</span>
+    <span class="lab">Post, Film &amp; Art Styles</span>
     <div class="slider-grid">
+      <div class="slider-row wide" title="Artistic &amp; diagnostic render style (X-Ray, Sketch, Charcoal, Painterly, Impressionist)">
+        <span>&#x270F;&#xFE0E;</span>
+        <select id="sel-art" aria-label="Artistic and X-ray render style">
+          <option value="0" selected>Style · Cinema (Default)</option>
+          <option value="1">Style · X-Ray Structural</option>
+          <option value="2">Style · Architectural Ink Sketch</option>
+          <option value="3">Style · Charcoal &amp; Chalk</option>
+          <option value="4">Style · Painterly Impasto</option>
+          <option value="5">Style · Impressionist Nocturne</option>
+        </select>
+      </div>
+      <div class="slider-row wide" title="Artistic / X-Ray filter blend &amp; intensity">
+        <span>&#x25D2;</span>
+        <input id="sl-artstr" type="range" min="0" max="1.4" step="0.02" value="1" aria-label="Artistic filter intensity">
+      </div>
       <div class="slider-row" title="Bloom intensity"><span>&#x263C;</span><input id="sl-bloom" type="range" min="0" max="2" step="0.02" value="0.95" aria-label="Bloom intensity"></div>
       <div class="slider-row" title="Lens optics &amp; chromatic dispersion"><span>&#x25CE;</span><input id="sl-lens" type="range" min="0" max="1.5" step="0.02" value="0.55" aria-label="Chromatic aberration and lens halation"></div>
       <div class="slider-row" title="Color grading contrast"><span>&#x25D1;</span><input id="sl-contrast" type="range" min="0.65" max="1.5" step="0.01" value="1.08" aria-label="Color grading contrast"></div>
@@ -566,6 +615,7 @@ button.icon-btn.rec-on, button.action.rec-on {
   <span title="Boost"><kbd>&#x21E7;</kbd>&#x00BB;</span>
   <span title="Dolly / speed"><kbd>&#x27F3;</kbd>&#x00B1;</span>
   <span title="Glide mode"><kbd>G</kbd>&#x2708;&#xFE0E;</span>
+  <span title="Anticipatory steer"><kbd>V</kbd>&#x2934;</span>
   <span title="Collision"><kbd>C</kbd>&#x2B21;</span>
   <span title="Record path"><kbd>R</kbd>&#x25CF;</span>
   <span title="Play path"><kbd>P</kbd>&#x25B6;</span>
