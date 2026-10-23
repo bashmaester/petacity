@@ -17,6 +17,11 @@ float hash13(vec3 p3) {
   p3 += dot(p3, p3.zyx + 31.32);
   return fract((p3.x + p3.y) * p3.z);
 }
+float hash14(vec4 p4) {
+  p4 = fract(p4 * vec4(0.1031, 0.1030, 0.0973, 0.1099));
+  p4 += dot(p4, p4.wzxy + 33.33);
+  return fract((p4.x + p4.y) * (p4.z + p4.w));
+}
 float vnoise(vec2 p) {
   vec2 i = floor(p);
   vec2 f = fract(p);
@@ -47,6 +52,38 @@ float vnoise3(vec3 p) {
   float nxy1 = mix(nx01, nx11, f.y);
   return mix(nxy0, nxy1, f.z);
 }
+float vnoise4(vec4 p) {
+  vec4 i = floor(p);
+  vec4 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float w0 = mix(
+    mix(
+      mix(hash14(i), hash14(i + vec4(1.0, 0.0, 0.0, 0.0)), f.x),
+      mix(hash14(i + vec4(0.0, 1.0, 0.0, 0.0)), hash14(i + vec4(1.0, 1.0, 0.0, 0.0)), f.x),
+      f.y
+    ),
+    mix(
+      mix(hash14(i + vec4(0.0, 0.0, 1.0, 0.0)), hash14(i + vec4(1.0, 0.0, 1.0, 0.0)), f.x),
+      mix(hash14(i + vec4(0.0, 1.0, 1.0, 0.0)), hash14(i + vec4(1.0, 1.0, 1.0, 0.0)), f.x),
+      f.y
+    ),
+    f.z
+  );
+  float w1 = mix(
+    mix(
+      mix(hash14(i + vec4(0.0, 0.0, 0.0, 1.0)), hash14(i + vec4(1.0, 0.0, 0.0, 1.0)), f.x),
+      mix(hash14(i + vec4(0.0, 1.0, 0.0, 1.0)), hash14(i + vec4(1.0, 1.0, 0.0, 1.0)), f.x),
+      f.y
+    ),
+    mix(
+      mix(hash14(i + vec4(0.0, 0.0, 1.0, 1.0)), hash14(i + vec4(1.0, 0.0, 1.0, 1.0)), f.x),
+      mix(hash14(i + vec4(0.0, 1.0, 1.0, 1.0)), hash14(i + vec4(1.0, 1.0, 1.0, 1.0)), f.x),
+      f.y
+    ),
+    f.z
+  );
+  return mix(w0, w1, f.w);
+}
 float fbm(vec2 p) {
   float s = 0.0;
   float a = 0.5;
@@ -66,6 +103,177 @@ float fbm3(vec3 p) {
     a *= 0.5;
   }
   return s;
+}
+float fbm4Cloud(vec3 p, float w, float lac, float seedOff) {
+  float s = 0.0;
+  float a = 0.5;
+  float normA = 0.0;
+  float gain = clamp(1.02 / max(lac, 1.25), 0.34, 0.66);
+  vec4 q = vec4(p + vec3(seedOff * 1.37, -seedOff * 0.83, seedOff * 1.91), w + seedOff * 0.41);
+  for (int i = 0; i < 4; i++) {
+    s += vnoise4(q) * a;
+    normA += a;
+    q.xyz = q.xyz * lac + vec3(2.71, -1.53, 3.19);
+    q.w = q.w * (1.0 + (lac - 1.0) * 0.45) + 1.13;
+    a *= gain;
+  }
+  return s / max(normA, 1e-4);
+}
+`;
+
+/**
+ * Invented procedural script engine ("Synth-Linear"):
+ * Zero real-world alphabet characters — synthesizes crisp vector strokes inspired
+ * by Aegean Minoan Linear A / Mycenaean Linear B syllabograms (central hastae,
+ * cross-bars, horned lunettes, splayed tripods, double-dot word dividers) fused
+ * with futuristic cyber-sigils & astral geometric glyphs that morph over time.
+ */
+export const GLSL_GLYPHS = /* glsl */ `
+float glyphSeg(vec2 p, vec2 a, vec2 b) {
+  vec2 pa = p - a;
+  vec2 ba = b - a;
+  float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-5), 0.0, 1.0);
+  return length(pa - ba * h);
+}
+
+float evalLinearStrokeSet(vec2 p, float gid) {
+  float k = floor(mod(gid, 16.0));
+  float d = 9.0;
+  // Primary vertical spine or twin prongs (Linear A/B syllabogram backbone)
+  if (k < 5.5) {
+    d = min(d, glyphSeg(p, vec2(0.50, 0.14), vec2(0.50, 0.86)));
+  } else if (k < 9.5) {
+    d = min(d, glyphSeg(p, vec2(0.32, 0.16), vec2(0.32, 0.84)));
+    d = min(d, glyphSeg(p, vec2(0.68, 0.16), vec2(0.68, 0.84)));
+  } else if (k < 12.5) {
+    d = min(d, glyphSeg(p, vec2(0.50, 0.42), vec2(0.50, 0.86)));
+    d = min(d, glyphSeg(p, vec2(0.50, 0.44), vec2(0.24, 0.14)));
+    d = min(d, glyphSeg(p, vec2(0.50, 0.44), vec2(0.76, 0.14)));
+  } else {
+    d = min(d, glyphSeg(p, vec2(0.24, 0.16), vec2(0.50, 0.86)));
+    d = min(d, glyphSeg(p, vec2(0.76, 0.16), vec2(0.50, 0.86)));
+  }
+
+  // Quantized horizontal crossbars (classic Linear B PA / DA / RO / TI motifs)
+  float bars = floor(mod(gid * 3.7, 4.0));
+  if (bars > 0.5) d = min(d, glyphSeg(p, vec2(0.22, 0.72), vec2(0.78, 0.72)));
+  if (bars > 1.5) d = min(d, glyphSeg(p, vec2(0.26, 0.48), vec2(0.74, 0.48)));
+  if (bars > 2.5) d = min(d, glyphSeg(p, vec2(0.20, 0.26), vec2(0.80, 0.26)));
+
+  // Aegean lunette / horned crown / side-loop flourish
+  float crown = floor(mod(gid * 7.3, 5.0));
+  if (crown < 1.5) {
+    vec2 cp = p - vec2(0.50, 0.78);
+    if (cp.y < 0.08) d = min(d, abs(length(cp * vec2(1.0, 1.25)) - 0.23));
+  } else if (crown < 2.5) {
+    d = min(d, glyphSeg(p, vec2(0.22, 0.86), vec2(0.50, 0.62)));
+    d = min(d, glyphSeg(p, vec2(0.78, 0.86), vec2(0.50, 0.62)));
+  } else if (crown < 3.5) {
+    d = min(d, abs(length(p - vec2(0.50, 0.64)) - 0.17));
+  } else if (crown < 4.5) {
+    d = min(d, glyphSeg(p, vec2(0.20, 0.56), vec2(0.20, 0.82)));
+    d = min(d, glyphSeg(p, vec2(0.80, 0.56), vec2(0.80, 0.82)));
+  }
+  return d;
+}
+
+float evalSynthStrokeSet(vec2 p, float gid) {
+  float k = floor(mod(gid, 12.0));
+  float d = 9.0;
+  // 45-degree chamfered cyber-traces & resonator gates
+  if (k < 3.5) {
+    d = min(d, glyphSeg(p, vec2(0.20, 0.82), vec2(0.62, 0.82)));
+    d = min(d, glyphSeg(p, vec2(0.62, 0.82), vec2(0.80, 0.62)));
+    d = min(d, glyphSeg(p, vec2(0.80, 0.62), vec2(0.80, 0.18)));
+    d = min(d, glyphSeg(p, vec2(0.24, 0.48), vec2(0.60, 0.48)));
+    d = min(d, glyphSeg(p, vec2(0.24, 0.48), vec2(0.44, 0.18)));
+  } else if (k < 6.5) {
+    d = min(d, glyphSeg(p, vec2(0.22, 0.20), vec2(0.22, 0.78)));
+    d = min(d, glyphSeg(p, vec2(0.22, 0.78), vec2(0.78, 0.78)));
+    d = min(d, glyphSeg(p, vec2(0.48, 0.56), vec2(0.78, 0.22)));
+    d = min(d, abs(length(p - vec2(0.56, 0.54)) - 0.11));
+  } else if (k < 9.5) {
+    d = min(d, glyphSeg(p, vec2(0.20, 0.66), vec2(0.50, 0.86)));
+    d = min(d, glyphSeg(p, vec2(0.80, 0.66), vec2(0.50, 0.86)));
+    d = min(d, glyphSeg(p, vec2(0.26, 0.38), vec2(0.74, 0.38)));
+    d = min(d, glyphSeg(p, vec2(0.36, 0.16), vec2(0.64, 0.16)));
+    d = min(d, glyphSeg(p, vec2(0.50, 0.38), vec2(0.50, 0.70)));
+  } else {
+    d = min(d, glyphSeg(p, vec2(0.22, 0.82), vec2(0.78, 0.22)));
+    d = min(d, glyphSeg(p, vec2(0.22, 0.52), vec2(0.52, 0.82)));
+    d = min(d, abs(length(p - vec2(0.30, 0.28)) - 0.09));
+    d = min(d, glyphSeg(p, vec2(0.56, 0.62), vec2(0.80, 0.62)));
+  }
+  // Terminal circuit node pip
+  if (fract(gid * 0.37) > 0.45) {
+    vec2 np = vec2(0.24 + 0.52 * step(0.5, fract(gid * 1.9)), 0.22 + 0.56 * step(0.5, fract(gid * 2.7)));
+    d = min(d, max(0.0, length(p - np) - 0.045));
+  }
+  return d;
+}
+
+float evalAstralStrokeSet(vec2 p, float gid) {
+  vec2 c = p - 0.5;
+  float d = abs(length(c) - 0.31);
+  float k = floor(mod(gid, 8.0));
+  if (k < 2.5) {
+    d = min(d, abs(abs(c.x) + abs(c.y) - 0.26));
+    d = min(d, glyphSeg(p, vec2(0.50, 0.12), vec2(0.50, 0.88)));
+  } else if (k < 5.5) {
+    d = min(d, abs(length(p - vec2(0.60, 0.56)) - 0.22));
+    d = min(d, glyphSeg(p, vec2(0.16, 0.50), vec2(0.84, 0.50)));
+  } else {
+    d = min(d, glyphSeg(p, vec2(0.22, 0.22), vec2(0.78, 0.78)));
+    d = min(d, glyphSeg(p, vec2(0.22, 0.78), vec2(0.78, 0.22)));
+    d = min(d, max(0.0, length(c) - 0.065));
+  }
+  return d;
+}
+
+float evalSingleGlyphDist(vec2 p, float gid, float glyphStyle) {
+  if (glyphStyle > 0.5 && glyphStyle < 1.5) return evalLinearStrokeSet(p, gid);
+  if (glyphStyle >= 1.5 && glyphStyle < 2.5) return evalSynthStrokeSet(p, gid);
+  if (glyphStyle >= 2.5) return evalAstralStrokeSet(p, gid);
+  // 0: Hybrid Linear-A/B + Synth sigil script
+  return (fract(gid * 0.61803) < 0.58)
+    ? evalLinearStrokeSet(p, gid)
+    : evalSynthStrokeSet(p, gid * 1.37);
+}
+
+float evalSynthGlyph(vec2 cellUv, float charSeed, float glyphStyle, float animT, float strokeW) {
+  if (cellUv.x < 0.08 || cellUv.x > 0.92 || cellUv.y < 0.08 || cellUv.y > 0.92) return 0.0;
+  vec2 p = (cellUv - 0.08) / 0.84;
+  // Quantized temporal glyph-morphing: symbols periodically rewrite into new syllabograms!
+  float phase = animT * 0.28 + charSeed * 19.7;
+  float epoch = floor(phase);
+  float morph = smoothstep(0.74, 0.96, fract(phase));
+  float g0 = floor(hash12(vec2(charSeed * 97.3, epoch * 13.1)) * 64.0);
+  float g1 = floor(hash12(vec2(charSeed * 97.3, (epoch + 1.0) * 13.1)) * 64.0);
+  float d0 = evalSingleGlyphDist(p, g0, glyphStyle);
+  float d1 = evalSingleGlyphDist(p, g1, glyphStyle);
+  float d = mix(d0, d1, morph);
+  float aa = max(fwidth(d), 0.018);
+  return 1.0 - smoothstep(strokeW - aa * 0.5, strokeW + aa, d);
+}
+
+// Multi-character Linear-Synth text line with authentic Aegean double-dot word dividers
+float evalGlyphLine(vec2 uv, float cols, float scrollT, float rowSeed, float glyphStyle, float animT) {
+  if (uv.y < 0.04 || uv.y > 0.96) return 0.0;
+  float xShift = uv.x * cols + scrollT;
+  float cid = floor(xShift);
+  vec2 cUv = vec2(fract(xShift), uv.y);
+  float wordSlot = mod(cid + floor(rowSeed * 11.0), 5.0);
+  if (wordSlot > 3.5) {
+    // Linear A/B vertical colon word-separator puncta (:)
+    float dDot = min(
+      length(cUv - vec2(0.5, 0.34)),
+      length(cUv - vec2(0.5, 0.68))
+    );
+    return 1.0 - smoothstep(0.045, 0.085, dDot);
+  }
+  float chSeed = hash12(vec2(cid * 1.73, rowSeed * 53.7));
+  if (chSeed < 0.08) return 0.0;
+  return evalSynthGlyph(cUv, chSeed, glyphStyle, animT, 0.056);
 }
 `;
 
@@ -244,6 +452,9 @@ uniform float uStarRot;
 uniform float uCloud;
 uniform float uCloudType;
 uniform float uCloudStyle;
+uniform float uCloudSeed;
+uniform float uCloudEvol;
+uniform float uCloudLac;
 uniform float uHaze;
 uniform float uTime;
 uniform float uSunGlow;
@@ -269,19 +480,22 @@ vec2 intersectSphereShell(vec3 oc, vec3 rd, float rad) {
   return vec2(-b - s, -b + s);
 }
 
-// Multi-regime 3D volumetric cloud density:
+// Multi-regime 3D volumetric cloud density driven by 4D noise evolution, seed & lacunarity:
 // 0 = Cumulus, 1 = Cumulonimbus thunderheads, 2 = Stratocumulus deck,
 // 3 = High ice Cirrus, 4 = Multi-layer Altocumulus + Cirrus, 5 = Low Sea-of-Clouds
 float skyCumulusDensity(vec3 p, float h01, float covK, float cType, float t) {
   vec3 wind = vec3(t * 22.0, 0.0, t * 9.5);
+  float w4 = t * 0.095 * max(uCloudEvol, 0.0);
+  float lac = clamp(uCloudLac, 1.25, 3.4);
+  float sOff = uCloudSeed;
   float over = clamp((covK - 1.05) / 1.15, 0.0, 1.0);
 
   if (cType > 2.5 && cType < 3.5) {
     // 3: High ice-crystal Cirrus & wind-sheared mares' tails
     vec3 cw = (p + wind * 2.1 + vec3(h01 * 520.0, 0.0, -h01 * 210.0)) * vec3(0.00019, 0.0014, 0.00052);
-    float warp = fbm3(cw * 0.85);
-    float wisps = fbm3(cw * vec3(1.6, 1.0, 3.4) + vec3(warp * 2.4, 0.0, -warp * 1.6));
-    float fine = vnoise3(cw * vec3(4.5, 1.8, 7.5));
+    float warp = fbm4Cloud(cw * 0.85, w4 * 0.7, lac, sOff);
+    float wisps = fbm4Cloud(cw * vec3(1.6, 1.0, 3.4) + vec3(warp * 2.4, 0.0, -warp * 1.6), w4, lac, sOff + 3.1);
+    float fine = vnoise4(vec4(cw * vec3(4.5, 1.8, 7.5), w4 * 1.3 + sOff));
     float prof = smoothstep(0.05, 0.45, h01) * smoothstep(1.0, 0.48, h01);
     float shape = (wisps * 0.72 + fine * 0.28) * (0.65 + 0.55 * prof);
     float thresh = mix(clamp(0.58 - covK * 0.20, 0.22, 0.64), 0.16, over);
@@ -291,9 +505,9 @@ float skyCumulusDensity(vec3 p, float h01, float covK, float cType, float t) {
   if (cType > 1.5 && cType < 2.5) {
     // 2: Stratocumulus cellular rolls & unbroken overcast ceiling at high cover
     vec3 sq = (p + wind * 0.85) * vec3(0.00028, 0.00125, 0.00044);
-    float rolls = fbm3(sq * vec3(0.85, 1.0, 1.55));
-    float cells = fbm3(sq * 2.6 + vec3(4.1, -1.3, 2.7));
-    float detail = vnoise3(sq * 5.4);
+    float rolls = fbm4Cloud(sq * vec3(0.85, 1.0, 1.55), w4 * 0.8, lac, sOff);
+    float cells = fbm4Cloud(sq * 2.6 + vec3(4.1, -1.3, 2.7), w4 * 1.15, lac, sOff + 5.7);
+    float detail = vnoise4(vec4(sq * 5.4, w4 * 1.4 + sOff));
     float prof = smoothstep(0.03, 0.26, h01) * smoothstep(1.0, 0.44, h01);
     float shape = (rolls * 0.62 + cells * 0.38) * (0.62 + 0.52 * prof) - detail * 0.09;
     float thresh = mix(clamp(0.53 - covK * 0.24, 0.16, 0.60), 0.06, over);
@@ -305,9 +519,9 @@ float skyCumulusDensity(vec3 p, float h01, float covK, float cType, float t) {
     float anvilShear = smoothstep(0.58, 0.96, h01);
     vec3 tp = p + wind * (0.9 + anvilShear * 1.15) - vec3(anvilShear * 680.0, 0.0, anvilShear * 240.0);
     vec3 tq = tp * vec3(mix(0.00028, 0.00017, anvilShear), 0.00042, mix(0.00028, 0.00019, anvilShear));
-    float core = fbm3(tq);
-    float turret = fbm3(tq * 2.45 + vec3(2.9, -3.1, 4.7));
-    float detail = vnoise3(tq * 5.6);
+    float core = fbm4Cloud(tq, w4, lac, sOff);
+    float turret = fbm4Cloud(tq * 2.45 + vec3(2.9, -3.1, 4.7), w4 * 1.35, lac, sOff + 7.9);
+    float detail = vnoise4(vec4(tq * 5.6, w4 * 1.6 + sOff));
     float baseProf = smoothstep(0.01, 0.14, h01);
     float topProf = smoothstep(1.0, 0.78, h01);
     float anvilBoost = 1.0 + anvilShear * 0.28;
@@ -324,15 +538,15 @@ float skyCumulusDensity(vec3 p, float h01, float covK, float cType, float t) {
     float dOut = 0.0;
     if (lowBand > 0.005) {
       vec3 mq = (p + wind * 0.95) * vec3(0.00042, 0.0011, 0.00048);
-      float m1 = fbm3(mq * 1.4);
-      float m2 = vnoise3(mq * 4.2);
+      float m1 = fbm4Cloud(mq * 1.4, w4, lac, sOff);
+      float m2 = vnoise4(vec4(mq * 4.2, w4 * 1.3 + sOff));
       float sh = m1 * 0.78 + m2 * 0.22;
       float th = mix(clamp(0.55 - covK * 0.22, 0.18, 0.62), 0.09, over);
       dOut += clamp((sh - th) * 3.0, 0.0, 1.0) * lowBand;
     }
     if (hiBand > 0.005) {
       vec3 hq = (p + wind * 2.2 + vec3(320.0, 0.0, -180.0)) * vec3(0.00020, 0.0015, 0.00055);
-      float w1 = fbm3(hq * vec3(1.5, 1.0, 3.1));
+      float w1 = fbm4Cloud(hq * vec3(1.5, 1.0, 3.1), w4 * 0.85, lac, sOff + 9.3);
       float thH = mix(clamp(0.56 - covK * 0.20, 0.20, 0.62), 0.14, over);
       dOut += clamp((w1 - thH) * 2.3, 0.0, 0.75) * hiBand;
     }
@@ -342,8 +556,8 @@ float skyCumulusDensity(vec3 p, float h01, float covK, float cType, float t) {
   if (cType > 4.5) {
     // 5: Low urban Sea-of-Clouds / canyon inversion blanket
     vec3 fq = (p + wind * 0.55) * vec3(0.00030, 0.0016, 0.00030);
-    float swell = fbm3(fq);
-    float crest = fbm3(fq * 2.5 + vec3(1.7, 2.3, -3.4));
+    float swell = fbm4Cloud(fq, w4 * 0.75, lac, sOff);
+    float crest = fbm4Cloud(fq * 2.5 + vec3(1.7, 2.3, -3.4), w4 * 1.1, lac, sOff + 4.4);
     float prof = smoothstep(0.0, 0.22, h01) * smoothstep(1.0, 0.42, h01);
     float shape = (swell * 0.66 + crest * 0.34) * (0.66 + 0.48 * prof);
     float thresh = mix(clamp(0.50 - covK * 0.24, 0.12, 0.58), 0.04, over);
@@ -352,9 +566,9 @@ float skyCumulusDensity(vec3 p, float h01, float covK, float cType, float t) {
 
   // 0: Fair-weather Cumulus humilis / mediocris
   vec3 q = (p + wind) * vec3(0.00034, 0.00072, 0.00034);
-  float macro = fbm3(q);
-  float billow = fbm3(q * 2.35 + vec3(3.7, -1.9, 5.1));
-  float detail = vnoise3(q * 5.8 - vec3(t * 0.08, 0.0, 0.0));
+  float macro = fbm4Cloud(q, w4, lac, sOff);
+  float billow = fbm4Cloud(q * 2.35 + vec3(3.7, -1.9, 5.1), w4 * 1.3, lac, sOff + 6.2);
+  float detail = vnoise4(vec4(q * 5.8 - vec3(t * 0.08, 0.0, 0.0), w4 * 1.7 + sOff));
   float prof = smoothstep(0.02, 0.22, h01) * smoothstep(1.0, 0.36, h01);
   float shape = (macro * 0.66 + billow * 0.34) * (0.55 + 0.62 * prof) - detail * 0.14;
   float thresh = mix(clamp(0.56 - covK * 0.21, 0.20, 0.62), 0.08, over);
@@ -661,6 +875,9 @@ uniform float uHazeSun;
 uniform float uCloud;
 uniform float uCloudType;
 uniform float uCloudStyle;
+uniform float uCloudSeed;
+uniform float uCloudEvol;
+uniform float uCloudLac;
 uniform float uSunGlow;
 uniform vec3 uPoolCol;
 uniform float uLightK;
@@ -692,18 +909,23 @@ float puffVolDensity(vec3 pL, float covK, float cType, float seed, float t) {
   float r = length(sq);
   if (r >= 0.88) return 0.0;
   float baseFloor = (cType > 2.5 && cType < 3.5) ? smoothstep(-0.85, 0.0, pL.y) : smoothstep(-0.78, -0.20, pL.y);
-  float env = (1.0 - smoothstep(0.20, 0.87, r)) * baseFloor;
-  vec3 freq = (cType > 2.5 && cType < 3.5) ? vec3(1.3, 3.2, 4.4) : vec3(2.15, 2.15, 2.15);
+  float wallFade = smoothstep(0.88, 0.56, r) * baseFloor;
+  float coreEnv = (1.0 - smoothstep(0.18, 0.86, r)) * baseFloor;
+  vec3 freq = (cType > 2.5 && cType < 3.5) ? vec3(1.4, 3.3, 4.5) : vec3(2.35, 2.35, 2.35);
   vec3 drift = vec3(t * 0.045, 0.0, t * 0.022) + seed * 17.3;
-  float n1 = fbm3(pL * freq + drift);
-  float n2 = fbm3(pL * (freq * 2.1) - drift * 1.4);
-  float raw = (n1 * 0.68 + n2 * 0.32) * env;
-  float cut = clamp(0.27 - covK * 0.10, 0.05, 0.31);
-  return clamp((raw - cut) * 3.15, 0.0, 1.0) * env;
+  float w4 = t * 0.105 * max(uCloudEvol, 0.0);
+  float lac = clamp(uCloudLac, 1.25, 3.4);
+  float n1 = fbm4Cloud(pL * freq + drift, w4, lac, uCloudSeed + seed * 7.0);
+  float n2 = fbm4Cloud(pL * (freq * 2.15) - drift * 1.4, w4 * 1.35, lac, uCloudSeed + 4.3);
+  // Deep fractal carving so puff edges form irregular cauliflower wisps instead of smooth oval pills!
+  float fbmMix = n1 * 0.66 + n2 * 0.34;
+  float raw = coreEnv * 0.48 + (fbmMix - 0.44) * 0.88;
+  float cut = clamp(0.30 - covK * 0.11, 0.04, 0.34);
+  return clamp((raw - cut) * 3.10, 0.0, 1.0) * wallFade;
 }
 
 void main() {
-  if (uCloud < 0.05) discard;
+  if (uCloud <= 0.015) discard;
   vec3 rayVec = vWorld - cameraPosition;
   float distToBack = length(rayVec);
   if (distToBack < 1e-3) discard;
@@ -798,6 +1020,8 @@ export const GLSL_TERRAIN = /* glsl */ `
 uniform float uCitySpan;
 uniform float uSuburbSpan;
 uniform float uWaterMode;
+uniform float uWaterAmt;
+uniform float uShoreDist;
 uniform float uTerrainMode;
 uniform float uTerrainScale;
 uniform float uCoastAngle;
@@ -834,22 +1058,24 @@ float envRidgeFbm(vec2 p, vec2 ts) {
 }
 
 float evalCoastSignedDist(vec2 p) {
-  if (uWaterMode < 0.5 || uWaterMode > 3.5) return 9999.0;
+  if (uWaterAmt <= 0.005 || uWaterMode < 0.5 || uWaterMode > 3.5) return 9999.0;
   float ca = cos(uCoastAngle);
   float sa = sin(uCoastAngle);
   float u = p.x * ca + p.y * sa;
   float v = -p.x * sa + p.y * ca;
+  float sdMul = max(uShoreDist, 0.30);
+  float amtScale = 0.55 + 0.45 * clamp(uWaterAmt, 0.0, 2.0);
   float warp = sin(v * 0.00058 + uTerrainSeed.x) * 410.0
     + cos(v * 0.00131 - uTerrainSeed.y) * 195.0
     + sin(v * 0.00285 + uTerrainSeed.x * 1.7) * 82.0;
-  float bayIndent = -255.0 * exp(-(v * v) / (690.0 * 690.0));
+  float bayIndent = -255.0 * amtScale * exp(-(v * v) / (690.0 * 690.0));
 
   if (uWaterMode < 1.5) {
-    float shoreU = max(460.0, uCitySpan * 0.94) + warp + bayIndent;
+    float shoreU = max(320.0, uCitySpan * 0.94 * sdMul) + warp + bayIndent;
     return shoreU - u;
   }
   if (uWaterMode < 2.5) {
-    float baseSpan = max(500.0, uCitySpan * 1.02);
+    float baseSpan = max(360.0, uCitySpan * 1.02 * sdMul);
     float best = (baseSpan + warp * 0.84 + bayIndent * 0.65) - (u + 0.000115 * v * v);
     for (int k = 0; k < 4; k++) {
       float fk = float(k);
@@ -865,8 +1091,8 @@ float evalCoastSignedDist(vec2 p) {
     }
     return best;
   }
-  float lakeU = max(1550.0, uCitySpan * 2.25);
-  float lakeR = max(1050.0, uCitySpan * 1.32);
+  float lakeU = max(950.0, uCitySpan * 2.25 * sdMul);
+  float lakeR = max(680.0, uCitySpan * 1.32 * amtScale);
   vec2 dL = vec2(u - lakeU, v * 0.82);
   float angL = atan(dL.y, dL.x);
   float lWarp = sin(angL * 3.0 + uTerrainSeed.x) * 185.0 + cos(v * 0.0019 + uTerrainSeed.y) * 125.0;
@@ -1382,6 +1608,11 @@ uniform float uBillMono;
 uniform vec3 uPoolCol;
 uniform float uLightK;
 uniform float uDayPhase;
+uniform float uTint;
+uniform float uSignAmt;
+uniform float uMegaWrap;
+uniform float uGlyphStyle;
+uniform float uSignAnim;
 varying vec3 vLocal;
 varying vec3 vN;
 varying vec3 vFlat;
@@ -1392,6 +1623,7 @@ varying float vKind;
 varying float vStyle;
 ${GLSL_NOISE}
 ${GLSL_UTIL}
+${GLSL_GLYPHS}
 
 vec3 pickPal(float p) {
   vec3 c = uPal[0];
@@ -1400,6 +1632,18 @@ vec3 pickPal(float p) {
   if (p > 0.5)    c = uPal[3];
   if (p > 0.6666) c = uPal[4];
   if (p > 0.8333) c = uPal[5];
+  return c;
+}
+
+vec3 pickNaturalArch(float p) {
+  // Real-world architectural materials: travertine stone, slate curtain-wall,
+  // champagne bronze, charcoal precast, warm terracotta brick, brushed silver steel
+  vec3 c = vec3(0.54, 0.50, 0.45);
+  if (p > 0.17) c = vec3(0.27, 0.34, 0.43);
+  if (p > 0.35) c = vec3(0.44, 0.40, 0.35);
+  if (p > 0.52) c = vec3(0.23, 0.25, 0.29);
+  if (p > 0.70) c = vec3(0.49, 0.33, 0.27);
+  if (p > 0.85) c = vec3(0.48, 0.52, 0.57);
   return c;
 }
 
@@ -1414,11 +1658,14 @@ void main() {
   vec3 vdir = normalize(vWorld - cameraPosition);
 
   float h = hash12(vec2(vSeed * 127.1, floor(vKind + 0.5) * 311.7));
-  vec3 base = mix(uBaseA, uBaseB, h);
+  vec3 lookBase = mix(uBaseA, uBaseB, h);
   if (uUsePal > 0.5) {
-    base = pickPal(hash12(vec2(vSeed * 91.3, 7.7)));
-    base *= 0.92 + 0.16 * hash12(vec2(vSeed * 13.1, 2.2));
+    lookBase = pickPal(hash12(vec2(vSeed * 91.3, 7.7)));
+    lookBase *= 0.92 + 0.16 * hash12(vec2(vSeed * 13.1, 2.2));
   }
+  vec3 natBase = pickNaturalArch(hash12(vec2(vSeed * 73.9, 4.3))) * (0.84 + 0.30 * h);
+  // Look acts as a controllable tint over diverse per-building real materials!
+  vec3 base = mix(natBase, lookBase, clamp(uTint, 0.0, 1.0));
 
   float sty = vStyle;
   float isMedia = step(2.5, sty) * step(sty, 3.5);
@@ -1463,36 +1710,53 @@ void main() {
   else if (aLoc.y >= aLoc.x && aLoc.y >= aLoc.z) { uvm = vLocal.xz * vDims.xz; face = 1.0; }
   else { uvm = vLocal.xy * vDims.xy; face = 2.0; }
 
+  float extraMegaTower = step(52.0, vDims.y) * step(18.0, vDims.x) * step(1.0 - clamp(uMegaWrap * uSignAmt * 0.28, 0.0, 0.72), fract(vSeed * 19.37));
+  float showMediaFacade = clamp(isMedia + extraMegaTower, 0.0, 1.0) * step(0.02, uSignAmt) * step(0.02, uMegaWrap);
+
   if ((face < 0.5 || face > 1.5) && vKind < 1.5) {
-    if (isMedia > 0.5 && wy > 14.0) {
-      // Selective architectural media facade: mostly dark glass/mullions with 1-2 framed LED screens
+    if (showMediaFacade > 0.5 && wy > 14.0) {
+      // Architectural media & mega-facade wrap: framed LED canvases + giant Linear-Synth animated calligraphics!
+      float animT = uTime * max(uSignAnim, 0.0);
       float faceHash = hash12(vec2(face * 13.7, floor(vSeed * 89.0)));
-      vec2 scrUv = vec2(uvm.x / max(vDims.x, 22.0) + 0.5, (wy - 14.0) / 38.0);
-      vec2 panelId = floor(vec2(scrUv.x * 1.5, scrUv.y));
-      vec2 pf = fract(vec2(scrUv.x * 1.5, scrUv.y));
+      float wrapScaleY = mix(38.0, 68.0, clamp(uMegaWrap * 0.5, 0.0, 1.0));
+      vec2 scrUv = vec2(uvm.x / max(vDims.x, 22.0) + 0.5, (wy - 14.0) / wrapScaleY);
+      vec2 panelId = floor(vec2(scrUv.x * 1.4, scrUv.y));
+      vec2 pf = fract(vec2(scrUv.x * 1.4, scrUv.y));
       float pHash = hash12(panelId * 3.7 + faceHash * 19.0 + vSeed * 43.0);
-      // Only ~32% of facade zones carry an inset LED screen; the rest stays dark structural glass!
-      float activeScreen = step(0.68, pHash) * step(0.10, pf.x) * step(pf.x, 0.90) * step(0.12, pf.y) * step(pf.y, 0.88);
+      float covThresh = clamp(0.74 - 0.28 * clamp(uMegaWrap, 0.0, 2.0) * clamp(uSignAmt, 0.0, 2.0), 0.18, 0.85);
+      float activeScreen = step(covThresh, pHash) * step(0.07, pf.x) * step(pf.x, 0.93) * step(0.09, pf.y) * step(pf.y, 0.91);
       if (activeScreen > 0.5) {
-        vec2 uvS = (pf - vec2(0.10, 0.12)) / vec2(0.80, 0.76);
+        vec2 uvS = (pf - vec2(0.07, 0.09)) / vec2(0.86, 0.82);
         float mode = fract(pHash * 7.31);
         float motif = 0.0;
-        if (mode < 0.34) {
-          float sunR = length((uvS - vec2(0.5, 0.56)) * vec2(1.3, 1.0));
-          motif = (1.0 - smoothstep(0.22, 0.27, sunR)) * step(0.18, fract(uvS.y * 9.0));
-        } else if (mode < 0.68) {
-          float diag = smoothstep(0.08, 0.0, abs(uvS.x * 0.8 + uvS.y * 0.6 - fract(uTime * 0.12 + pHash) * 1.4));
-          float chyron = step(uvS.y, 0.18) * step(0.45, fract(uvS.x * 12.0 - uTime * 0.9));
-          motif = clamp(diag * 0.9 + chyron * 0.8, 0.0, 1.0);
+        if (mode < 0.30) {
+          // Oversized Hero Linear-A/B + Synth Calligraphic Banner + scrolling bottom ticker
+          float bigGlyph = evalSynthGlyph(vec2(fract(uvS.x * 2.0), clamp((uvS.y - 0.24) / 0.68, 0.0, 1.0)), pHash + floor(uvS.x * 2.0) * 0.31, uGlyphStyle, animT, 0.052) * step(0.24, uvS.y);
+          float ticker = evalGlyphLine(vec2(uvS.x, uvS.y / 0.20), 9.0, animT * 0.85, pHash, uGlyphStyle, animT) * step(uvS.y, 0.20);
+          motif = clamp(bigGlyph + ticker * 0.9, 0.0, 1.0);
+        } else if (mode < 0.60) {
+          // Vertical Skyscraper Glyph Cascade (streaming Linear-Synth columns)
+          float colIdx = floor(uvS.x * 4.0);
+          vec2 vCell = vec2(fract(uvS.x * 4.0), fract(uvS.y * 5.0 + animT * (0.28 + 0.15 * fract(colIdx * 0.37))));
+          float cSeed = hash12(vec2(colIdx, floor(uvS.y * 5.0 + animT * (0.28 + 0.15 * fract(colIdx * 0.37))) + pHash * 17.0));
+          motif = evalSynthGlyph(vCell, cSeed, uGlyphStyle, animT, 0.058) * step(0.22, fract(pHash * 5.3 + colIdx * 0.29));
+        } else if (mode < 0.82) {
+          // Cyber-sun horizon disc + Linear-B subtitle strip
+          float sunR = length((uvS - vec2(0.5, 0.60)) * vec2(1.3, 1.0));
+          float sunM = (1.0 - smoothstep(0.22, 0.26, sunR)) * step(0.18, fract(uvS.y * 9.0 - animT * 0.2));
+          float sub = evalGlyphLine(vec2(uvS.x, (uvS.y - 0.06) / 0.18), 7.0, -animT * 0.55, pHash + 2.1, uGlyphStyle, animT) * step(0.06, uvS.y) * step(uvS.y, 0.24);
+          motif = clamp(sunM + sub, 0.0, 1.0);
         } else {
-          float wave = smoothstep(0.12, 0.0, abs(uvS.y - 0.5 - 0.24 * sin(uvS.x * 6.28 + uTime * 1.3 + pHash * 9.0)));
-          motif = wave;
+          // Kinetic harmonic waveform + corner sigil badge
+          float wave = smoothstep(0.08, 0.0, abs(uvS.y - 0.56 - 0.20 * sin(uvS.x * 6.28 + animT * 1.4 + pHash * 9.0)));
+          float badge = evalSynthGlyph((uvS - vec2(0.68, 0.08)) / 0.26, pHash * 3.1, uGlyphStyle, animT, 0.06) * step(0.68, uvS.x) * step(uvS.y, 0.34);
+          motif = clamp(wave + badge, 0.0, 1.0);
         }
-        vec3 adBg = mix(base * 0.35, styleBillColor(uBillB) * 0.22, 0.55);
-        vec3 adFg = styleBillColor(mix(uBillA, uBillB, fract(pHash * 4.1)));
+        vec3 adBg = mix(base * 0.32, styleBillColor(uBillB) * 0.18, 0.52);
+        vec3 adFg = styleBillColor(mix(uBillA, uBillB, fract(pHash * 4.1 + motif * 0.25)));
         vec3 screenRgb = mix(adBg, saturate3(adFg, uSat), motif);
-        float scan = 0.86 + 0.14 * sin(wy * 6.0 + uTime * 6.0);
-        float emK = clamp(uBillK * max(uLightK, 0.28), 0.0, 1.35) * 0.78;
+        float scan = 0.86 + 0.14 * sin(wy * 6.0 + animT * 6.0);
+        float emK = clamp(uBillK * max(uLightK, 0.28) * min(uSignAmt, 1.6), 0.0, 1.55) * 0.82;
         col = mix(col, screenRgb * (0.45 + emK) * scan, 0.92);
       } else {
         // Dark architectural office windows on the non-screen structural bays
@@ -1605,9 +1869,14 @@ void main() {
       litWin *= blinds * holoPulse;
 
       float r2 = hash12(gid + vec2(vSeed * 37.7, 5.0));
-      vec3 wc = uWinA;
-      if (r2 > 0.55) wc = uWinB;
-      if (r2 > 0.82) wc = uWinC;
+      vec3 lookWin = uWinA;
+      if (r2 > 0.55) lookWin = uWinB;
+      if (r2 > 0.82) lookWin = uWinC;
+      // Natural interior Kelvin variety (2700K warm tungsten, 3800K neutral, 5400K cool office)
+      vec3 natWin = vec3(1.0, 0.82, 0.56);
+      if (r2 > 0.45) natWin = vec3(1.0, 0.93, 0.82);
+      if (r2 > 0.76) natWin = vec3(0.76, 0.88, 1.0);
+      vec3 wc = mix(natWin, lookWin, clamp(0.22 + 0.78 * uTint, 0.0, 1.0));
 
       // Exterior glass express elevator shaft on tall towers: glowing cabs gliding smoothly up & down!
       float nCols = max(3.0, floor(vDims.x / bayW));
@@ -1722,6 +1991,7 @@ uniform float uFogHeight;
 uniform float uHazeSun;
 uniform float uTime;
 uniform float uSat;
+uniform float uTint;
 varying vec3 vN;
 varying vec3 vFlat;
 varying vec3 vWorld;
@@ -1746,7 +2016,9 @@ void main() {
   float cofferX = fract(uCoord / 6.0);
   float cofferY = fract(wy / 4.2);
   float panelShade = (0.92 + 0.08 * step(0.09, cofferX) * step(cofferX, 0.91) * step(0.10, cofferY)) * megaSeam;
-  vec3 base = uCol * mix(panelShade, 1.0, uFlat * 0.7);
+  float lmMatHash = hash12(floor(vFlat.xz * 0.004) + vec2(3.7, 9.1));
+  vec3 natStone = mix(vec3(0.55, 0.52, 0.47), vec3(0.35, 0.41, 0.48), step(0.5, lmMatHash));
+  vec3 base = mix(natStone, uCol, clamp(0.20 + 0.80 * uTint, 0.0, 1.0)) * mix(panelShade, 1.0, uFlat * 0.7);
 
   float dif = max(dot(n, normalize(uSunDir)), 0.0);
   float toonD = floor(dif * 3.0 + 0.5) / 3.0;
@@ -1928,6 +2200,7 @@ export const VEHICLE_FRAG = /* glsl */ `
 uniform vec3 uSunDir;
 uniform float uLightK;
 uniform float uBillMono;
+uniform float uTint;
 varying vec3 vHullCol;
 varying vec3 vPartTint;
 varying vec3 vWorldN;
@@ -1938,16 +2211,27 @@ void main() {
   float skyHemi = 0.45 + 0.55 * clamp(n.y * 0.5 + 0.5, 0.0, 1.0);
   float shade = mix(0.46 * skyHemi + 0.78 * sunD, 0.68 * skyHemi + 0.32 * sunD, uLightK * 0.55);
 
+  // Derive a per-instance automotive coat from vHullCol hash so vehicles vary naturally!
+  float coatId = fract(dot(vHullCol, vec3(17.31, 43.17, 29.53)));
+  vec3 autoPaint = vec3(0.76, 0.80, 0.85); // brushed DeLorean stainless silver
+  if (coatId > 0.18) autoPaint = vec3(0.92, 0.70, 0.12); // Fifth Element cab gold-yellow
+  if (coatId > 0.34) autoPaint = vec3(0.16, 0.24, 0.38); // midnight sapphire
+  if (coatId > 0.50) autoPaint = vec3(0.88, 0.90, 0.93); // pearl white
+  if (coatId > 0.64) autoPaint = vec3(0.24, 0.27, 0.31); // titanium gunmetal
+  if (coatId > 0.78) autoPaint = vec3(0.74, 0.16, 0.20); // crimson metallic
+  if (coatId > 0.90) autoPaint = vec3(0.18, 0.42, 0.36); // racing emerald
+  vec3 effHull = mix(autoPaint, vHullCol, clamp(uTint, 0.0, 1.0));
+
   vec3 col;
   if (vRole < 0.5) {
     // Role 0: Painted / brushed-alloy primary vehicle hull
-    col = mix(vPartTint, vHullCol, 0.72) * shade + vec3(0.06) * pow(sunD, 6.0) * (1.0 - uLightK * 0.6);
+    col = mix(vPartTint, effHull, 0.76) * shade + vec3(0.08) * pow(sunD, 6.0) * (1.0 - uLightK * 0.55);
   } else if (vRole < 1.5) {
     // Role 1: Dark alloy trim, louvers, hover-pontoons & undercarriage
-    col = mix(vPartTint, vHullCol * 0.38, 0.28) * (0.55 + 0.45 * shade);
+    col = mix(vPartTint, effHull * 0.38, 0.28) * (0.55 + 0.45 * shade);
   } else if (vRole < 2.5) {
     // Role 2: Tinted cockpit canopy glass + warm interior instrument glint
-    col = vPartTint * (0.55 + 0.65 * skyHemi) + vHullCol * 0.14 * uLightK;
+    col = vPartTint * (0.55 + 0.65 * skyHemi) + effHull * 0.14 * uLightK;
   } else if (vRole < 3.5) {
     // Role 3: FRONT HEADLIGHTS (+X) — crisp warm-white / ice-xenon (untinted by hull!)
     vec3 headRgb = vPartTint * (1.05 + uLightK * 1.15);
@@ -2174,6 +2458,7 @@ void main() {
 export const SWARM_FRAG = /* glsl */ `
 uniform float uLightK;
 uniform float uBillMono;
+uniform float uTint;
 varying vec3 vColor;
 varying vec3 vLocalP;
 varying float vFade;
@@ -2191,9 +2476,18 @@ void main() {
     ? (step(abs(vLocalP.x - 0.06), 0.14) * smoothstep(0.32, 0.48, vLocalP.y) * step(abs(vLocalP.z), 0.24))
     : 0.0;
 
+  // Natural per-vehicle paint diversity blended with look tint uTint
+  float coatId = fract(vModel * 7.91 + dot(vColor, vec3(5.3, 11.7, 3.1)));
+  vec3 natCar = vec3(0.68, 0.73, 0.79);
+  if (coatId > 0.20) natCar = vec3(0.92, 0.68, 0.12);
+  if (coatId > 0.40) natCar = vec3(0.18, 0.27, 0.42);
+  if (coatId > 0.60) natCar = vec3(0.84, 0.87, 0.90);
+  if (coatId > 0.78) natCar = vec3(0.72, 0.17, 0.21);
+  vec3 carTint = mix(natCar, vColor, clamp(uTint, 0.0, 1.0));
+
   // Brushed metallic / painted hull + dark tinted cockpit glass window band
   float canopy = step(-0.18, vLocalP.x) * step(vLocalP.x, 0.24) * smoothstep(0.08, 0.32, vLocalP.y);
-  vec3 hullCol = mix(vec3(0.10, 0.12, 0.17) + vColor * 0.34, vec3(0.05, 0.08, 0.13), canopy * 0.75);
+  vec3 hullCol = mix(vec3(0.09, 0.11, 0.15) + carTint * 0.42, vec3(0.05, 0.08, 0.13), canopy * 0.75);
 
   vec3 headRaw = mix(vec3(1.0, 0.96, 0.82), vec3(0.84, 0.96, 1.0), step(0.65, vModel)) * (1.05 + uLightK * 1.15);
   vec3 tailRaw = vec3(1.0, 0.10, 0.15) * (1.08 + uLightK * 1.25);
@@ -2280,10 +2574,13 @@ void main() {
 /* ---------------------------------------------------------------- water */
 
 export const WATER_VERT = /* glsl */ `
+attribute float aAnalytical;
 varying vec3 vFlat;
 varying vec3 vWorld;
+varying float vAnalytical;
 ${GLSL_CURVE}
 void main() {
+  vAnalytical = aAnalytical;
   vec4 wp = modelMatrix * vec4(position, 1.0);
   vFlat = wp.xyz;
   wp.xyz = bendWorld(wp.xyz);
@@ -2307,13 +2604,19 @@ uniform vec3 uPoolCol;
 uniform float uLightK;
 varying vec3 vFlat;
 varying vec3 vWorld;
+varying float vAnalytical;
 ${GLSL_NOISE}
 ${GLSL_UTIL}
 ${GLSL_CURVE}
 ${GLSL_TERRAIN}
 
 void main() {
+  if (uWaterAmt <= 0.005) discard;
   vec2 xz = vFlat.xz;
+  float cDist = evalCoastSignedDist(xz);
+  // Strictly clip analytical ocean/lake geometry on dry land (cDist > 0) so water NEVER floods streets!
+  if (vAnalytical > 0.5 && cDist > 0.0) discard;
+
   float edgeWarp = (vnoise(xz * 0.00045 + 4.2) - 0.5) * uGroundRadius * 0.14;
   float edgeR = length(xz) + edgeWarp;
   float fadeInner = mix(uGroundRadius * 0.48, uPlanetR * 2.55, uWorldCurve);
@@ -2322,22 +2625,34 @@ void main() {
   if (edgeAlpha < 0.004) discard;
 
   vec3 vdir = normalize(vWorld - cameraPosition);
+  float ca = cos(uCoastAngle);
+  float sa = sin(uCoastAngle);
+  vec2 shoreDir = vec2(-ca, -sa); // inward from open sea toward shore!
   vec2 p = xz * 0.012;
-  float w1 = fbm(p + vec2(uTime * 0.05, uTime * 0.031));
-  float w2 = fbm(p * 2.7 - vec2(uTime * 0.033, uTime * 0.05));
-  float wave = clamp(w1 * 0.7 + w2 * 0.5, 0.0, 1.0);
+  // Wind-driven swells drift shoreward (+shoreDir * uTime)
+  float w1 = fbm(p - shoreDir * (uTime * 0.065) + vec2(uTime * 0.018, -uTime * 0.014));
+  float w2 = fbm(p * 2.7 - shoreDir * (uTime * 0.095) - vec2(uTime * 0.024, uTime * 0.031));
+  float wave = clamp(w1 * 0.68 + w2 * 0.48, 0.0, 1.0);
   vec3 col = mix(uWaterDeep, uWaterShallow, wave * 0.65);
 
-  // Shallow turquoise shoal + animated breaking surf foam near coastal & island shores!
-  if (uWaterMode > 0.5 && uWaterMode < 3.5) {
-    float cDist = evalCoastSignedDist(xz);
-    float shoal = 1.0 - smoothstep(0.0, 145.0, -cDist);
-    col = mix(col, uWaterShallow * 1.28, shoal * 0.55);
-    float surfWave = sin((-cDist) * 0.19 - uTime * 2.3 + w1 * 4.5);
-    float surfFoam = (1.0 - smoothstep(0.0, 46.0, -cDist)) * smoothstep(0.35, 0.92, surfWave);
-    float shoreLip = 1.0 - smoothstep(0.0, 9.0, abs(cDist + 2.5));
-    vec3 foamCol = mix(vec3(0.84, 0.92, 0.98), uSkySunCol, 0.35);
-    col = mix(col, foamCol, clamp(surfFoam * 0.68 + shoreLip * 0.55, 0.0, 0.88));
+  // Shallow turquoise shoal + shoreward-propagating breaking surf foam along coastal & lake shores!
+  if (vAnalytical > 0.5 && uWaterMode > 0.5 && uWaterMode < 3.5) {
+    float seaDist = max(0.0, -cDist);
+    float shoal = 1.0 - smoothstep(0.0, 155.0, seaDist);
+    col = mix(col, uWaterShallow * 1.26, shoal * 0.54);
+    // + uTime advances phase inward toward seaDist = 0 (waves roll ONTO shore, never backward out to sea!)
+    float shoalK = pow(seaDist, 0.86);
+    float surfWave = sin(shoalK * 0.23 + uTime * 2.15 + w1 * 3.8);
+    float surfWave2 = sin(shoalK * 0.42 + uTime * 3.05 - w2 * 3.1);
+    float surfBand = (1.0 - smoothstep(4.0, 66.0, seaDist)) * smoothstep(0.0, 2.2, seaDist);
+    float surfFoam = surfBand * smoothstep(0.40, 0.93, surfWave * 0.72 + surfWave2 * 0.28);
+    float shoreLip = (1.0 - smoothstep(0.0, 4.8, seaDist)) * (0.65 + 0.35 * sin(uTime * 2.15 + w1 * 5.0));
+    vec3 foamCol = mix(vec3(0.86, 0.93, 0.99), uSkySunCol, 0.32);
+    col = mix(col, foamCol, clamp(surfFoam * 0.62 + shoreLip * 0.52, 0.0, 0.86));
+  } else {
+    // Polygon harbors, winding rivers & park lagoons: gentle current ripples without ocean surf bands
+    float rip = smoothstep(0.62, 0.92, wave) * 0.18;
+    col += uWaterShallow * rip;
   }
 
   vec3 sd = normalize(uSunDir);
@@ -2437,6 +2752,9 @@ uniform vec3 uBillA;
 uniform vec3 uBillB;
 uniform float uBillK;
 uniform float uBillMono;
+uniform float uSignAmt;
+uniform float uGlyphStyle;
+uniform float uSignAnim;
 uniform float uTime;
 uniform float uLightK;
 uniform float uSat;
@@ -2444,45 +2762,74 @@ varying vec2 vUv;
 varying float vSeed;
 ${GLSL_NOISE}
 ${GLSL_UTIL}
+${GLSL_GLYPHS}
 
 void main() {
-  // Dark architectural bezel around every billboard so panels never fuse into a solid blob
-  float bezel = smoothstep(0.0, 0.045, vUv.x) * smoothstep(1.0, 0.955, vUv.x)
-              * smoothstep(0.0, 0.06, vUv.y) * smoothstep(1.0, 0.94, vUv.y);
+  if (uSignAmt <= 0.008) discard;
+  float animT = uTime * max(uSignAnim, 0.0);
+
+  // Dark architectural bezel around every billboard & sign so panels frame crisply
+  float bezel = smoothstep(0.0, 0.04, vUv.x) * smoothstep(1.0, 0.96, vUv.x)
+              * smoothstep(0.0, 0.05, vUv.y) * smoothstep(1.0, 0.95, vUv.y);
   float layoutId = fract(vSeed * 13.37);
-  vec3 darkBg = mix(uBillB, uBillA, 0.25) * 0.09;
+  vec3 darkBg = mix(uBillB, uBillA, 0.22) * 0.08;
   vec3 col = darkBg;
 
-  if (layoutId < 0.22) {
-    // 1. Cyber-sun horizon disc + segmented scan bands
-    vec2 dc = (vUv - vec2(0.5, 0.54)) * vec2(1.45, 1.0);
-    float sunDisc = (1.0 - smoothstep(0.24, 0.27, length(dc))) * step(0.22, fract(vUv.y * 11.0));
-    float horLine = smoothstep(0.03, 0.0, abs(vUv.y - 0.28));
-    col = mix(darkBg, mix(uBillB, uBillA, clamp(vUv.y * 1.2, 0.0, 1.0)), clamp(sunDisc + horLine * 0.8, 0.0, 1.0));
-  } else if (layoutId < 0.46) {
-    // 2. Bold diagonal slash + vertical glyph column (high negative space)
-    float slash = smoothstep(0.11, 0.01, abs((vUv.x - 0.46) * 0.85 + (vUv.y - 0.5) * 0.55));
-    float glyphCol = step(0.74, vUv.x) * step(vUv.x, 0.88) * step(0.38, fract(vUv.y * 8.0 - uTime * 0.25)) * step(0.35, hash12(vec2(floor(vUv.y * 8.0), vSeed * 31.0)));
-    col = mix(darkBg, uBillA, slash * 0.88);
-    col = mix(col, uBillB, glyphCol * 0.92);
-  } else if (layoutId < 0.70) {
-    // 3. Minimalist flowing sine wave + bottom scrolling ticker
-    float wY = 0.56 + 0.20 * sin(vUv.x * 6.283 + uTime * (0.8 + vSeed) + vSeed * 12.0);
-    float ribbon = smoothstep(0.09, 0.01, abs(vUv.y - wY));
-    float chyron = step(0.08, vUv.y) * step(vUv.y, 0.20) * step(0.42, fract(vUv.x * 14.0 - uTime * 0.65));
-    col = mix(darkBg, uBillB, ribbon * 0.9);
-    col = mix(col, uBillA, chyron * 0.85);
+  if (layoutId < 0.18) {
+    // 1. Classic Shopfront / Rooftop Wordmark: Bold Linear-A/B + Synth Syllabogram Headline + scrolling sub-ticker
+    float heroLine = evalGlyphLine(vec2(vUv.x * 0.90 + 0.05, clamp((vUv.y - 0.30) / 0.56, 0.0, 1.0)), 6.0, floor(animT * 0.12) * 0.0, vSeed * 19.3, uGlyphStyle, animT) * step(0.30, vUv.y) * step(vUv.y, 0.86);
+    float subTick = evalGlyphLine(vec2(vUv.x, clamp((vUv.y - 0.08) / 0.16, 0.0, 1.0)), 13.0, animT * 0.95, vSeed * 41.1, uGlyphStyle, animT) * step(0.08, vUv.y) * step(vUv.y, 0.24);
+    float rule = smoothstep(0.015, 0.0, abs(vUv.y - 0.27)) * step(0.06, vUv.x) * step(vUv.x, 0.94);
+    col = mix(darkBg, uBillA * 1.12, heroLine);
+    col = mix(col, uBillB, clamp(subTick * 0.92 + rule * 0.65, 0.0, 1.0));
+  } else if (layoutId < 0.34) {
+    // 2. Vertical Skyscraper Blade: Twin columns of streaming Minoan-Synth sigils
+    float cIdx = floor(vUv.x * 2.0);
+    vec2 cell = vec2(fract(vUv.x * 2.0) * 0.84 + 0.08, fract(vUv.y * 6.0 - animT * (0.24 - 0.48 * cIdx)));
+    float rowIdx = floor(vUv.y * 6.0 - animT * (0.24 - 0.48 * cIdx));
+    float chS = hash12(vec2(cIdx * 7.1 + vSeed * 31.0, rowIdx * 1.9));
+    float g = evalSynthGlyph(cell, chS, uGlyphStyle, animT, 0.060) * step(0.16, chS);
+    float divider = smoothstep(0.018, 0.0, abs(vUv.x - 0.5)) * 0.45;
+    col = mix(darkBg, mix(uBillA, uBillB, cIdx), g * 0.96);
+    col += mix(uBillA, uBillB, 0.5) * divider;
+  } else if (layoutId < 0.50) {
+    // 3. Cyber-Sun Horizon Emblem + Linear-B Calligraphic Overlays
+    vec2 dc = (vUv - vec2(0.34, 0.55)) * vec2(1.45, 1.0);
+    float sunDisc = (1.0 - smoothstep(0.22, 0.25, length(dc))) * step(0.22, fract(vUv.y * 11.0 - animT * 0.25));
+    float rightScript = evalGlyphLine(vec2(clamp((vUv.x - 0.52) / 0.42, 0.0, 1.0), clamp((vUv.y - 0.42) / 0.38, 0.0, 1.0)), 4.0, 0.0, vSeed * 23.0, uGlyphStyle, animT) * step(0.52, vUv.x) * step(0.42, vUv.y) * step(vUv.y, 0.80);
+    float botScript = evalGlyphLine(vec2(vUv.x, clamp((vUv.y - 0.10) / 0.18, 0.0, 1.0)), 11.0, -animT * 0.7, vSeed * 11.0, uGlyphStyle, animT) * step(0.10, vUv.y) * step(vUv.y, 0.28);
+    col = mix(darkBg, mix(uBillB, uBillA, clamp(vUv.y * 1.2, 0.0, 1.0)), sunDisc);
+    col = mix(col, uBillA * 1.08, rightScript);
+    col = mix(col, uBillB, botScript * 0.88);
+  } else if (layoutId < 0.68) {
+    // 4. Diagonal Kinetic Slash + Giant Morphing Hero Crest + Side Glyph Column
+    float sweep = fract(animT * 0.16 + vSeed);
+    float slash = smoothstep(0.09, 0.01, abs((vUv.x - 0.36) * 0.85 + (vUv.y - 0.5) * 0.55 - (sweep - 0.5) * 0.18));
+    float crest = evalSynthGlyph(vec2(clamp((vUv.x - 0.10) / 0.44, 0.0, 1.0), clamp((vUv.y - 0.18) / 0.64, 0.0, 1.0)), vSeed * 7.7, uGlyphStyle, animT, 0.050) * step(0.10, vUv.x) * step(vUv.x, 0.54);
+    float vCol = evalSynthGlyph(vec2(clamp((vUv.x - 0.68) / 0.22, 0.0, 1.0), fract(vUv.y * 5.0 - animT * 0.35)), hash12(vec2(floor(vUv.y * 5.0 - animT * 0.35), vSeed * 29.0)), uGlyphStyle, animT, 0.062) * step(0.68, vUv.x) * step(vUv.x, 0.90);
+    col = mix(darkBg, uBillB * 0.65, slash * 0.75);
+    col = mix(col, uBillA * 1.15, crest);
+    col = mix(col, uBillB * 1.08, vCol);
+  } else if (layoutId < 0.84) {
+    // 5. Harmonic Telemetry Ribbon + Dual Scrolling Linear-Synth Tickers
+    float wY = 0.56 + 0.18 * sin(vUv.x * 6.283 + animT * (1.1 + vSeed) + vSeed * 12.0);
+    float ribbon = smoothstep(0.075, 0.01, abs(vUv.y - wY));
+    float topLine = evalGlyphLine(vec2(vUv.x, clamp((vUv.y - 0.78) / 0.15, 0.0, 1.0)), 10.0, -animT * 0.6, vSeed * 13.0, uGlyphStyle, animT) * step(0.78, vUv.y) * step(vUv.y, 0.93);
+    float botLine = evalGlyphLine(vec2(vUv.x, clamp((vUv.y - 0.08) / 0.16, 0.0, 1.0)), 12.0, animT * 0.85, vSeed * 37.0, uGlyphStyle, animT) * step(0.08, vUv.y) * step(vUv.y, 0.24);
+    col = mix(darkBg, uBillB, ribbon * 0.92);
+    col = mix(col, uBillA, clamp(topLine + botLine, 0.0, 1.0));
   } else {
-    // 4. Asymmetric hero portrait block + crisp caption bars
-    float portrait = step(0.08, vUv.x) * step(vUv.x, 0.46) * step(0.16, vUv.y) * step(vUv.y, 0.84);
-    float ring = smoothstep(0.035, 0.0, abs(length((vUv - vec2(0.27, 0.52)) * vec2(1.4, 1.0)) - 0.14));
-    float copyBars = step(0.54, vUv.x) * step(vUv.x, 0.90) * step(0.48, fract(vUv.y * 5.0)) * step(0.22, vUv.y) * step(vUv.y, 0.78);
-    col = mix(darkBg, uBillB * 0.55, portrait * 0.65);
-    col = mix(col, uBillA, clamp(ring + copyBars * 0.82, 0.0, 1.0));
+    // 6. Full-Matrix Ancient-Futuristic Tablet: 3-row living Linear-A/B + Synth Proclamation
+    float row = floor(clamp((vUv.y - 0.10) / 0.80, 0.0, 0.999) * 3.0);
+    float rowY = fract(clamp((vUv.y - 0.10) / 0.80, 0.0, 0.999) * 3.0);
+    float dirSgn = (mod(row, 2.0) < 0.5) ? 1.0 : -1.0;
+    float tablet = evalGlyphLine(vec2(vUv.x * 0.90 + 0.05, rowY), 7.0 + row, animT * 0.32 * dirSgn, vSeed * 17.0 + row * 5.3, uGlyphStyle, animT) * step(0.10, vUv.y) * step(vUv.y, 0.90);
+    vec3 rowTint = mix(uBillA, uBillB, row * 0.45);
+    col = mix(darkBg, rowTint * 1.1, tablet);
   }
 
   // Thin inner neon trim line
-  float innerRim = smoothstep(0.025, 0.0, abs(max(abs(vUv.x - 0.5), abs(vUv.y - 0.5)) - 0.45));
+  float innerRim = smoothstep(0.022, 0.0, abs(max(abs(vUv.x - 0.5), abs(vUv.y - 0.5)) - 0.455));
   col += mix(uBillA, uBillB, 0.5) * innerRim * 0.35;
 
   float lum = dot(col, vec3(0.299, 0.587, 0.114));
@@ -2490,9 +2837,9 @@ void main() {
   col = mix(col, mono, clamp(uBillMono, 0.0, 1.0));
   col = saturate3(col, uSat * (1.0 - 0.85 * clamp(uBillMono, 0.0, 1.0)));
 
-  col *= 0.88 + 0.12 * sin(vUv.y * 85.0 + uTime * 2.5);
-  float k = clamp(uBillK * max(uLightK, 0.25), 0.0, 1.25) * (0.68 + 0.16 * sin(uTime * 1.3 + vSeed * 20.0));
-  gl_FragColor = vec4(col * (0.28 + k * 0.72) * bezel, 1.0);
+  col *= 0.88 + 0.12 * sin(vUv.y * 85.0 + animT * 2.5);
+  float k = clamp(uBillK * max(uLightK, 0.25) * min(uSignAmt, 1.65), 0.0, 1.45) * (0.70 + 0.16 * sin(animT * 1.3 + vSeed * 20.0));
+  gl_FragColor = vec4(col * (0.28 + k * 0.74) * bezel, 1.0);
 }
 `;
 
@@ -2590,6 +2937,9 @@ uniform vec3 uBillA;
 uniform vec3 uBillB;
 uniform float uBillK;
 uniform float uBillMono;
+uniform float uSignAmt;
+uniform float uGlyphStyle;
+uniform float uSignAnim;
 uniform float uTime;
 uniform float uLightK;
 uniform float uSat;
@@ -2597,29 +2947,32 @@ varying vec2 vUv;
 varying float vSeed;
 ${GLSL_NOISE}
 ${GLSL_UTIL}
+${GLSL_GLYPHS}
 
 void main() {
+  if (uSignAmt <= 0.008) discard;
+  float animT = uTime * max(uSignAnim, 0.0);
   vec2 cUv = vUv - 0.5;
   float r = length(cUv * vec2(1.35, 1.0));
-  // Crisp thin wireframe rings & sparse telemetry lines (mostly transparent negative space!)
-  float rings = smoothstep(0.024, 0.0, abs(fract(r * 4.0 - uTime * 0.24 + vSeed * 4.0) - 0.5)) * smoothstep(0.52, 0.12, r);
-  float horiz = smoothstep(0.018, 0.0, abs(fract(vUv.y * 9.0 - uTime * 0.18 + vSeed * 3.0) - 0.5)) * 0.38;
-  vec2 g = vec2(vUv.x * 9.0, vUv.y * 6.0 - uTime * 0.18);
-  float blocks = hash12(floor(g) + vSeed * 17.0);
-  float glyphs = step(0.78, blocks) * step(0.28, fract(g.x)) * step(fract(g.x), 0.72) * step(0.28, fract(g.y));
-  float motif = clamp(rings * 0.95 + glyphs * 0.75 + horiz, 0.0, 1.0);
+  // Crisp wireframe orbital rings + floating Linear-Synth holographic glyphs!
+  float rings = smoothstep(0.022, 0.0, abs(fract(r * 4.0 - animT * 0.24 + vSeed * 4.0) - 0.5)) * smoothstep(0.52, 0.12, r);
+  float centerSigil = evalSynthGlyph(clamp((vUv - vec2(0.32, 0.28)) / vec2(0.36, 0.44), 0.0, 1.0), vSeed * 9.3, uGlyphStyle, animT, 0.055)
+    * step(0.32, vUv.x) * step(vUv.x, 0.68) * step(0.28, vUv.y) * step(vUv.y, 0.72);
+  float scrollArc = evalGlyphLine(vec2(vUv.x, clamp((vUv.y - 0.12) / 0.16, 0.0, 1.0)), 10.0, animT * 0.55, vSeed * 17.0, uGlyphStyle, animT)
+    * step(0.12, vUv.y) * step(vUv.y, 0.28);
+  float motif = clamp(rings * 0.85 + centerSigil * 0.95 + scrollArc * 0.85, 0.0, 1.0);
   if (motif < 0.03) discard;
 
-  vec3 col = mix(uBillB, uBillA, clamp(rings * 0.65 + fract(vSeed * 5.3) * 0.45, 0.0, 1.0));
+  vec3 col = mix(uBillB, uBillA, clamp(rings * 0.55 + centerSigil * 0.65 + fract(vSeed * 5.3) * 0.35, 0.0, 1.0));
   float lum = dot(col, vec3(0.299, 0.587, 0.114));
   vec3 mono = mix(uBillB * 0.4, uBillA * 1.05, clamp(lum, 0.0, 1.2));
   col = mix(col, mono, clamp(uBillMono, 0.0, 1.0));
   col = saturate3(col, uSat * (1.0 - 0.85 * clamp(uBillMono, 0.0, 1.0)));
 
-  float scan = 0.68 + 0.32 * sin(vUv.y * 160.0 + uTime * 8.0);
+  float scan = 0.68 + 0.32 * sin(vUv.y * 160.0 + animT * 8.0);
   float edge = smoothstep(0.0, 0.08, vUv.x) * smoothstep(1.0, 0.92, vUv.x)
              * smoothstep(0.0, 0.14, vUv.y) * smoothstep(1.0, 0.86, vUv.y);
-  float a = motif * scan * edge * clamp(uBillK, 0.0, 1.3) * max(uLightK, 0.3) * 0.36;
-  gl_FragColor = vec4(col * 0.85, clamp(a, 0.0, 0.38));
+  float a = motif * scan * edge * clamp(uBillK * min(uSignAmt, 1.5), 0.0, 1.4) * max(uLightK, 0.3) * 0.38;
+  gl_FragColor = vec4(col * 0.88, clamp(a, 0.0, 0.42));
 }
 `;

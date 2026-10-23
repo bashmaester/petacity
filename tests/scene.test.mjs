@@ -15,8 +15,9 @@ import {
   makeVehicles, makeSearchlights, makeLightPools,
   buildWater, buildBoulevards, buildBillboards, buildTrees, buildSculptures,
   makeWeather, WEATHER_NAMES, CLOUD_TYPE_NAMES,
-  WATER_MODE_NAMES, TERRAIN_MODE_NAMES, TREE_MODE_NAMES, describeMoonPhase,
+  WATER_MODE_NAMES, TERRAIN_MODE_NAMES, TREE_MODE_NAMES, GLYPH_STYLE_NAMES, describeMoonPhase,
   buildSigns, buildHolos,
+  buildTransitInfrastructure, buildBridges, buildHarbor, buildSpaceport,
 } from '../src/scene.js';
 import {
   WORLD_PRESETS, DEFAULT_BOOKMARKS, encodeExactState, decodeExactState,
@@ -1377,6 +1378,87 @@ test('Phase-11: sci-fi vehicle designs, realistic fleet ratios, smooth rail-lock
   assert.equal(lmMat.uniforms.uDayPhase, U.uDayPhase, 'landmarkMat shares live uDayPhase uniform');
   assert.ok(SHADERS.TOWER_FRAG.includes('isElevShaft') && SHADERS.TOWER_FRAG.includes('duskOn'), 'TOWER_FRAG animates circadian dusk waves & exterior glass elevators');
 });
+
+test('Phase-12 scene: Unreal Cinema look + uTint diversity, non-flooding shoreward water, 4D clouds (0=clear), Linear-Synth glyphs & harbor/bridge/spaceport/transit meshes', () => {
+  // 1) Unreal Cinema ('realistic') look + controllable Look Tint Amount (`uTint`)
+  assert.ok(LOOK_BY_ID.realistic, 'realistic (Unreal Cinema) look exists in LOOK_BY_ID');
+  const U = makeUniforms();
+  const world = makeWorld(U);
+  applyLook(U, LOOK_BY_ID.realistic, { win: 1, glow: 1, fog: 1, tint: 0.35 });
+  assert.ok(Math.abs(U.uTint.value - 0.35) < 1e-6, 'applyLook wires tune.tint -> uTint');
+  assert.ok(SHADERS.TOWER_FRAG.includes('uTint') && SHADERS.VEHICLE_FRAG.includes('uTint'), 'TOWER_FRAG & VEHICLE_FRAG blend natural materials with uTint');
+
+  // 2) Water anti-flooding & shoreward wave propagation
+  assert.ok(SHADERS.WATER_FRAG.includes('vAnalytical > 0.5 && cDist > 0.0) discard;'), 'WATER_FRAG discards analytical water over positive-cDist dry land');
+  assert.ok(SHADERS.WATER_FRAG.includes('shoalK * 0.23 + uTime'), 'WATER_FRAG surf waves propagate shoreward (+ uTime)');
+
+  const { city, collider } = growCity(4417, 5, world.towerMat, 1.0, {
+    waterMode: 1,
+    waterAmount: 1.0,
+    shoreDist: 1.0,
+    vegCover: 1.2,
+    vegScale: 2.8,
+    transitAmt: 1.0,
+    maritimeAmt: 1.2,
+    airAmt: 1.2,
+    signAmt: 1.4,
+    megaWrap: 1.4,
+    U,
+  });
+  const waterGrp = buildWater(city, world.waterMat);
+  assert.ok(waterGrp.children.length >= 2, 'coastal ocean + river/harbor water meshes built');
+  for (const wm of waterGrp.children) {
+    assert.ok(wm.geometry.getAttribute('aAnalytical'), 'every water mesh carries aAnalytical attribute');
+  }
+
+  // 3) Cloud 0=off guarantee + 4D noise evolution & lacunarity
+  for (const L of LOOKS) {
+    applyLook(U, L, { win: 1, glow: 1, fog: 1, clouds: 0, cloudSeed: 42, cloudEvol: 1.2, cloudLac: 2.5 });
+    applyTime(U, L, L.defTime, { lights: 1, glow: 1, clouds: 0, cloudSeed: 42, cloudEvol: 1.2, cloudLac: 2.5 });
+    assert.equal(U.uCloud.value, 0, `clouds=0 yields strictly uCloud=0 on look ${L.id}`);
+  }
+  assert.equal(U.uCloudSeed.value, 42);
+  assert.ok(Math.abs(U.uCloudEvol.value - 1.2) < 1e-6);
+  assert.ok(Math.abs(U.uCloudLac.value - 2.5) < 1e-6);
+  assert.ok(SHADERS.SKY_FRAG.includes('fbm4Cloud') && SHADERS.CLOUD_FRAG.includes('fbm4Cloud'), 'SKY_FRAG & CLOUD_FRAG evaluate 4D fbm4Cloud');
+
+  // 4) Procedural synthetic Linear A/B + Cyber-Synth glyph language
+  assert.equal(GLYPH_STYLE_NAMES.length, 3);
+  assert.ok(SHADERS.BILL_FRAG.includes('evalSynthGlyph') && SHADERS.HOLO_FRAG.includes('evalSynthGlyph') && SHADERS.TOWER_FRAG.includes('evalSynthGlyph'),
+    'BILL_FRAG, HOLO_FRAG & TOWER_FRAG render animated synthetic Linear-Synth glyphs');
+
+  // 5) 3D Transit Viaducts/Stations, River Bridges, Harbor Ships & Orbital Spaceport build and animate!
+  const transitGrp = buildTransitInfrastructure(city, U, world.lampMat);
+  const bridgeGrp = buildBridges(city, U, world.beaconMat, world.lampMat);
+  const harborObj = buildHarbor(city, U, world.beaconMat, world.lampMat);
+  const spaceportObj = buildSpaceport(city, U, world.beaconMat, world.lampMat, world.beamMat);
+  assert.ok(transitGrp.children.length >= 4, 'transit guideways & elevated stations built');
+  assert.ok(bridgeGrp.children.length >= 3, 'architectural river bridges built');
+  assert.ok(harborObj.ships.length >= 3, 'docked & offshore cruising ships built');
+  const offShip = harborObj.ships.find((s) => !s.spec.docked);
+  assert.ok(offShip, 'at least one offshore cruising ship exists');
+  const sx0 = offShip.mesh.position.x, sz0 = offShip.mesh.position.z;
+  harborObj.update(4.0);
+  assert.ok(Math.hypot(offShip.mesh.position.x - sx0, offShip.mesh.position.z - sz0) > 5, 'offshore ship steams along sea lane');
+
+  spaceportObj.update(25.0);
+  assert.ok(spaceportObj.group.children.length >= 6, 'spaceport runways, terminal, ATC tower, launch pads & shuttles built');
+
+  // Mega-vegetation runtime scaling (`trees.setScale`)
+  const trees = buildTrees(city, U);
+  trees.setScale(3.5);
+  const mat3 = new THREE.Matrix4();
+  trees.trunkO?.getMatrixAt?.(0, mat3);
+  assert.ok(trees.group.children.length === 2, 'organic + cyber mega-tree groups active');
+
+  // Lower default public-transit density in fleet
+  const veh = makeVehicles(city, world.trailMat, 600, collider, { transitAmt: 1.0, U });
+  assert.ok(veh.bodies[2].count <= 14, `public transit train count is sparse & realistic (got ${veh.bodies[2].count})`);
+  veh.setTransitAmt(0);
+  veh.update(0.1, 1.0, 1.0);
+  assert.equal(veh.bodies[2].count, 0, 'setTransitAmt(0) immediately hides all public transit trains');
+});
+
 
 
 

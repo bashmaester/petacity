@@ -74,10 +74,10 @@ const MEDIA_NAMES = [
 
 export const WATER_MODE_NAMES = [
   'Harbor & Winding River',
-  'Coastal Ocean & Bay',
-  'Archipelago & Peninsula',
+  'Coastal Ocean & Harbor',
+  'Archipelago & Islands',
   'Great Crater Lake',
-  'Dry Arid Basin',
+  'No Shoreline (Dry Basin)',
 ];
 
 export const TERRAIN_MODE_NAMES = [
@@ -148,23 +148,28 @@ export function envRidgeFbm(px, pz, sx = 0, sz = 0) {
  *   3: Great Crater Lake (expansive organic lake nestled between suburbs & foothills)
  *   4: Dry Arid Basin (+9999 everywhere)
  */
-export function evalCoastSignedDist(px, pz, coreSpan = 750, coastAngle = 0.7, waterMode = 0, sx = 0, sz = 0) {
-  if (waterMode === 0 || waterMode === 4) return 9999.0;
+export function evalCoastSignedDist(
+  px, pz, coreSpan = 750, coastAngle = 0.7, waterMode = 0,
+  sx = 0, sz = 0, shoreDist = 1.0, waterAmount = 1.0
+) {
+  if (waterAmount <= 0.005 || waterMode === 0 || waterMode === 4) return 9999.0;
   const ca = Math.cos(coastAngle);
   const sa = Math.sin(coastAngle);
   const u = px * ca + pz * sa;
   const v = -px * sa + pz * ca;
+  const sdMul = Math.max(shoreDist ?? 1.0, 0.30);
+  const amtScale = 0.55 + 0.45 * Math.min(2.0, Math.max(0.0, waterAmount ?? 1.0));
   const warp = Math.sin(v * 0.00058 + sx) * 410.0
     + Math.cos(v * 0.00131 - sz) * 195.0
     + Math.sin(v * 0.00285 + sx * 1.7) * 82.0;
-  const bayIndent = -255.0 * Math.exp(-(v * v) / (690.0 * 690.0));
+  const bayIndent = -255.0 * amtScale * Math.exp(-(v * v) / (690.0 * 690.0));
 
   if (waterMode === 1) {
-    const shoreU = Math.max(460.0, coreSpan * 0.94) + warp + bayIndent;
+    const shoreU = Math.max(320.0, coreSpan * 0.94 * sdMul) + warp + bayIndent;
     return shoreU - u;
   }
   if (waterMode === 2) {
-    const baseSpan = Math.max(500.0, coreSpan * 1.02);
+    const baseSpan = Math.max(360.0, coreSpan * 1.02 * sdMul);
     const penDist = (baseSpan + warp * 0.84 + bayIndent * 0.65) - (u + 0.000115 * v * v);
     let best = penDist;
     // 4 scenic hilly offshore islands out in the archipelago sea
@@ -182,8 +187,8 @@ export function evalCoastSignedDist(px, pz, coreSpan = 750, coastAngle = 0.7, wa
     return best;
   }
   if (waterMode === 3) {
-    const lakeU = Math.max(1550.0, coreSpan * 2.25);
-    const lakeR = Math.max(1050.0, coreSpan * 1.32);
+    const lakeU = Math.max(950.0, coreSpan * 2.25 * sdMul);
+    const lakeR = Math.max(680.0, coreSpan * 1.32 * amtScale);
     const du = u - lakeU;
     const dv = v * 0.82;
     const ang = Math.atan2(dv, du);
@@ -205,11 +210,12 @@ export function evalTerrainHeight(
   coreSpan = 750, suburbSpan = 5200,
   terrainMode = 0, terrainScale = 1,
   coastAngle = 0.7, waterMode = 0,
-  sx = 0, sz = 0
+  sx = 0, sz = 0,
+  shoreDist = 1.0, waterAmount = 1.0
 ) {
-  const coastDist = evalCoastSignedDist(px, pz, coreSpan, coastAngle, waterMode, sx, sz);
+  const coastDist = evalCoastSignedDist(px, pz, coreSpan, coastAngle, waterMode, sx, sz, shoreDist, waterAmount);
   if (coastDist < 0) {
-    // Smooth bathymetric slope below sea level (water mesh sits at y = 0.25)
+    // Smooth bathymetric slope below sea level (analytical water sits below y = 0)
     return -18.0 * smoothstep01(0.0, 240.0, -coastDist);
   }
 
@@ -220,7 +226,7 @@ export function evalTerrainHeight(
   const ca = Math.cos(coastAngle);
   const sa = Math.sin(coastAngle);
   const u = px * ca + pz * sa;
-  if (waterMode === 2 && u > Math.max(500.0, coreSpan * 1.02) + 520.0) {
+  if (waterMode === 2 && u > Math.max(360.0, coreSpan * 1.02 * Math.max(shoreDist, 0.30)) + 520.0) {
     const islPeak = smoothstep01(0.0, 360.0, coastDist);
     const islRidge = envRidgeFbm(px * 1.8, pz * 1.8, sx, sz);
     return islPeak * (34.0 + 135.0 * islRidge) * Math.max(0.45, terrainScale);
@@ -387,11 +393,13 @@ export function evalRoadWeb(px, pz, sx = 0, sz = 0) {
  */
 export function isPointInWater(city, x, z, pad = 0) {
   if (!city) return false;
+  if ((city.waterAmount ?? 1) <= 0.005 || city.waterMode === 4) return false;
   const coreSpan = (city.radius || 5) * CELL;
   const coastDist = evalCoastSignedDist(
     x, z, coreSpan,
     city.coastAngle ?? 0, city.waterMode ?? 0,
-    city.terrainSeedX ?? 0, city.terrainSeedZ ?? 0
+    city.terrainSeedX ?? 0, city.terrainSeedZ ?? 0,
+    city.shoreDist ?? 1.0, city.waterAmount ?? 1.0
   );
   if (coastDist < pad) return true;
   const waters = city.water || [];
@@ -422,8 +430,17 @@ export function generateCity(
   const radius = opts ? (opts.radius ?? 13) : radiusArg;
   const suburbReach = opts ? (opts.suburbReach ?? 1.0) : suburbReachArg;
   const waterMode = Math.max(0, Math.min(4, Math.round(opts ? (opts.waterMode ?? 0) : waterModeArg)));
+  const waterAmount = Math.max(0, Math.min(2.5, Number.isFinite(opts?.waterAmount) ? opts.waterAmount : 1.0));
+  const shoreDist = Math.max(0.30, Math.min(2.8, Number.isFinite(opts?.shoreDist) ? opts.shoreDist : 1.0));
   const terrainMode = Math.max(0, Math.min(4, Math.round(opts ? (opts.terrainMode ?? 0) : terrainModeArg)));
   const terrainScale = Math.max(0, Math.min(2.5, Number.isFinite(opts ? opts.terrainScale : terrainScaleArg) ? (opts ? opts.terrainScale : terrainScaleArg) : 1.0));
+  const vegCover = Math.max(0, Math.min(2.5, Number.isFinite(opts?.vegCover) ? opts.vegCover : 1.0));
+  const vegScale = Math.max(0.4, Math.min(4.5, Number.isFinite(opts?.vegScale) ? opts.vegScale : 1.0));
+  const transitAmt = Math.max(0, Math.min(2.5, Number.isFinite(opts?.transitAmt) ? opts.transitAmt : 1.0));
+  const maritimeAmt = Math.max(0, Math.min(2.5, Number.isFinite(opts?.maritimeAmt) ? opts.maritimeAmt : 1.0));
+  const airAmt = Math.max(0, Math.min(2.5, Number.isFinite(opts?.airAmt) ? opts.airAmt : 1.0));
+  const signAmt = Math.max(0, Math.min(2.5, Number.isFinite(opts?.signAmt) ? opts.signAmt : 1.0));
+  const megaWrap = Math.max(0, Math.min(2.0, Number.isFinite(opts?.megaWrap) ? opts.megaWrap : 1.0));
 
   const coastAngle = hash2i(79, 23, seed) * Math.PI * 2;
   const terrainSeedX = (hash2i(71, 13, seed) - 0.5) * 16.0;
@@ -435,12 +452,14 @@ export function generateCity(
   let towers = 0;
 
   const coreSpan = radius * CELL;
-  const coastDistAt = (x, z) => evalCoastSignedDist(x, z, coreSpan, coastAngle, waterMode, terrainSeedX, terrainSeedZ);
+  const coastDistAt = (x, z) => evalCoastSignedDist(
+    x, z, coreSpan, coastAngle, waterMode, terrainSeedX, terrainSeedZ, shoreDist, waterAmount
+  );
 
   // Voronoi-ish structure: relaxed sites give the city its large-scale
   // division (water, parks, cores) and break the pure grid.
   const sites = makeSites(seed, radius);
-  const water = makeWaters(seed, sites, radius, waterMode, coastAngle, terrainSeedX, terrainSeedZ);
+  const water = makeWaters(seed, sites, radius, waterMode, coastAngle, terrainSeedX, terrainSeedZ, shoreDist, waterAmount);
   const boulevards = makeBoulevards(seed, radius);
 
   // Precompute bounding boxes + 280m spatial edge grid for polygonal water bodies (harbors + rivers)
@@ -613,16 +632,18 @@ export function generateCity(
   // and lush botanical/cyber parks whenever the city is big enough.
   const places = [];
   const featured = radius >= 4
-    ? ['arena', 'theatre', 'stadium', 'park', 'park']
-    : radius >= 2 ? ['arena', 'theatre', 'park'] : [];
+    ? ['park', 'arena', 'theatre', 'stadium', 'park']
+    : radius >= 2 ? ['park', 'arena', 'theatre'] : [];
   const extraCount = 3 + Math.floor(hash2i(29, 31, seed) * 4);
   const wantKinds = [...featured];
   for (let k = 0; k < extraCount; k++) {
     wantKinds.push(PLACE_KINDS[Math.floor(hash2i(k, 61, seed) * PLACE_KINDS.length) % PLACE_KINDS.length]);
   }
+  let hasShowcasePark = false;
   for (let k = 0; k < wantKinds.length; k++) {
     const kind = wantKinds[k];
-    const big = kind === 'arena' || kind === 'stadium' || kind === 'theatre';
+    const wantSuperPark = kind === 'park' && !hasShowcasePark && radius >= 4;
+    const big = kind === 'arena' || kind === 'stadium' || kind === 'theatre' || wantSuperPark;
     // try deterministic candidate blocks until we find an open spot off water/boulevards
     for (let attempt = 0; attempt < 80; attempt++) {
       const spanB = Math.max(1, radius - 1);
@@ -630,7 +651,7 @@ export function generateCity(
       const bj = Math.floor(hash2i(k * 31 + attempt, 401, seed) * (spanB * 2)) - spanB;
       const key = bi + ',' + bj;
       if (lmCells.has(key) || spireCells.has(key) || (Math.abs(bi - heroBi) <= 1 && Math.abs(bj - heroBj) <= 1)) continue;
-      // big venues prefer a 2x2 superblock without crossing a 4th-street avenue, with 1x1 fallback after 40 tries
+      // big venues & Showcase Central Park prefer a 2x2 superblock without crossing a 4th-street avenue
       if (big && radius >= 4 && attempt < 42) {
         if (((bi + 1) % 4 + 4) % 4 === 0 || ((bj + 1) % 4 + 4) % 4 === 0) continue;
         if (bi + 1 >= radius || bj + 1 >= radius) continue;
@@ -640,6 +661,7 @@ export function generateCity(
         const scz = (bj + 1) * CELL;
         if (!cellDryFor(scx, scz, 108) || nearBoulevard(scx, scz, 110)) continue;
         addPlaceData(places, lmCells, pushBeacon, pushSignDry, kind, bi, bj, seed, true);
+        if (kind === 'park') hasShowcasePark = true;
         break;
       } else {
         const scx = bi * CELL + CELL / 2;
@@ -744,7 +766,7 @@ export function generateCity(
           } else {
             addTower(
               push, pushBeacon, pushBillDry, pushSignDry,
-              rand, xs[a], xs[a + 1], zs[b], zs[b + 1], h01, d, edgeT, baseAngle
+              rand, xs[a], xs[a + 1], zs[b], zs[b + 1], h01, d, edgeT, baseAngle, signAmt, megaWrap
             );
           }
           towers++;
@@ -801,33 +823,51 @@ export function generateCity(
     evalTerrainHeight(
       px, pz, coreSpan, suburbSpan,
       terrainMode, terrainScale, coastAngle, waterMode,
-      terrainSeedX, terrainSeedZ
+      terrainSeedX, terrainSeedZ, shoreDist, waterAmount
     )
   );
   const terrainSlopeAt = (px, pz) => {
     if ((terrainMode === 4 || terrainScale <= 0.001) && waterMode !== 2) return 0;
     const e = 18.0;
-    const hx = evalTerrainHeight(px + e, pz, coreSpan, suburbSpan, terrainMode, terrainScale, coastAngle, waterMode, terrainSeedX, terrainSeedZ)
-      - evalTerrainHeight(px - e, pz, coreSpan, suburbSpan, terrainMode, terrainScale, coastAngle, waterMode, terrainSeedX, terrainSeedZ);
-    const hz = evalTerrainHeight(px, pz + e, coreSpan, suburbSpan, terrainMode, terrainScale, coastAngle, waterMode, terrainSeedX, terrainSeedZ)
-      - evalTerrainHeight(px, pz - e, coreSpan, suburbSpan, terrainMode, terrainScale, coastAngle, waterMode, terrainSeedX, terrainSeedZ);
+    const hx = evalTerrainHeight(px + e, pz, coreSpan, suburbSpan, terrainMode, terrainScale, coastAngle, waterMode, terrainSeedX, terrainSeedZ, shoreDist, waterAmount)
+      - evalTerrainHeight(px - e, pz, coreSpan, suburbSpan, terrainMode, terrainScale, coastAngle, waterMode, terrainSeedX, terrainSeedZ, shoreDist, waterAmount);
+    const hz = evalTerrainHeight(px, pz + e, coreSpan, suburbSpan, terrainMode, terrainScale, coastAngle, waterMode, terrainSeedX, terrainSeedZ, shoreDist, waterAmount)
+      - evalTerrainHeight(px, pz - e, coreSpan, suburbSpan, terrainMode, terrainScale, coastAngle, waterMode, terrainSeedX, terrainSeedZ, shoreDist, waterAmount);
     return Math.hypot(hx, hz) / (2 * e);
   };
+
+  // Reserve a flat dry plateau for the Air/Spaceport so suburbs & trees keep its runways clear!
+  const spaceport = makeSpaceport(seed, radius, coreSpan, coastAngle, inWater, terrainY, terrainSlopeAt, airAmt);
+  const inSpaceport = (px, pz, pad = 26) => {
+    if (!spaceport) return false;
+    const dx = px - spaceport.x;
+    const dz = pz - spaceport.z;
+    const lx = dx * spaceport.cos + dz * spaceport.sin;
+    const lz = -dx * spaceport.sin + dz * spaceport.cos;
+    return Math.abs(lx) < spaceport.halfLen + pad && Math.abs(lz) < spaceport.halfWid + pad;
+  };
+  const inRestricted = (px, pz, pad = 24) => inWater(px, pz, pad) || inSpaceport(px, pz, pad);
 
   // Organic Ribbon / Finger City Corridors growing outward along the 12 major radial highways!
   const subLamps = [];
   const subTrees = [];
   const pushLampDry = (lp) => {
-    if (!inWater(lp.x, lp.z, 14.0)) subLamps.push(lp);
+    if (!inRestricted(lp.x, lp.z, 14.0)) subLamps.push(lp);
   };
   const pushTreeDry = (tr) => {
-    if (!inWater(tr.x, tr.z, 14.0)) subTrees.push(tr);
+    if (vegCover > 0.01 && !inRestricted(tr.x, tr.z, 14.0) && hash2i(Math.round(tr.x), Math.round(tr.z), seed ^ 0x71b) < vegCover) {
+      subTrees.push(tr);
+    }
+  };
+  const pushOuter = (x0, y0, z0, w0, h0, d0, s0, k0, st0 = 0, r0 = 0) => {
+    if (inSpaceport(x0, z0, Math.max(w0, d0) * 0.5 + 16)) return;
+    push(x0, y0, z0, w0, h0, d0, s0, k0, st0, r0);
   };
   towers += addArterialCorridors({
     seed, noise, coreSpan, suburbSpan, reach: effSubReach,
     terrainSeedX, terrainSeedZ,
-    inWater, nearBoulevard, terrainY, terrainSlopeAt,
-    push, pushBeacon, pushBill: pushBillDry, pushSign: pushSignDry, pushLamp: pushLampDry,
+    inWater: inRestricted, nearBoulevard, terrainY, terrainSlopeAt,
+    push: pushOuter, pushBeacon, pushBill: pushBillDry, pushSign: pushSignDry, pushLamp: pushLampDry,
   });
 
   // Organic non-grid peri-urban belt (warehouses, silos, sheds & pylons scattered
@@ -841,14 +881,14 @@ export function generateCity(
       const rr = coreSpan * 1.04 + f * outSpan * 0.78;
       const cx = Math.cos(a) * rr;
       const cz = Math.sin(a) * rr;
-      if (inWater(cx, cz, 34) || nearBoulevard(cx, cz, 52)) continue;
+      if (inRestricted(cx, cz, 34) || nearBoulevard(cx, cz, 52)) continue;
       if (terrainSlopeAt(cx, cz) > 0.24) continue;
       const fade = Math.pow(clamp01(1 - f * 0.88), 1.35);
       if (hash2i(m * 13 + l, 829, seed) > fade * 0.86 + 0.08) continue;
       const rand = mulberry32(hash2i(m * 17 + l, 839, seed) * 4294967296);
       const baseY = terrainY(cx, cz);
       const tangentRot = -a + (rand() - 0.5) * 0.5;
-      addOutskirtsCluster(push, pushBeacon, pushSignDry, rand, cx, cz, baseY, tangentRot, fade);
+      addOutskirtsCluster(pushOuter, pushBeacon, pushSignDry, rand, cx, cz, baseY, tangentRot, fade);
     }
   }
 
@@ -919,12 +959,42 @@ export function generateCity(
     suburbCount = addHorizonSuburbs({
       seed, noise, coreSpan, outSpan, suburbSpan, reach: effSubReach,
       waterMode, terrainMode, coastAngle, terrainSeedX, terrainSeedZ,
-      inWater, coastDistAt, terrainY, terrainSlopeAt,
-      push, pushBeacon,
+      inWater: inRestricted, coastDistAt, terrainY, terrainSlopeAt,
+      push: pushOuter, pushBeacon,
       pushSign: pushSignDry,
       pushLamp: pushLampDry,
       pushTree: pushTreeDry,
       suburbPOIs,
+    });
+  }
+
+  // Deepwater Harbor, Piers, Cranes, Cruise Liners & Container Ships
+  const harbor = makeHarbor(seed, radius, water, waterMode, waterAmount, coastAngle, coastDistAt, inWater, terrainY, maritimeAmt);
+  if (harbor) {
+    suburbPOIs.unshift({
+      kind: 'harbor',
+      name: 'Port Nexus Harbor',
+      x: harbor.x, y: harbor.y, z: harbor.z, h: 46, r: 95,
+    });
+  }
+
+  // Architectural Cable-Stayed & Tied-Arch Bridges spanning rivers
+  const bridges = makeBridges(seed, water, terrainY);
+  if (bridges.length > 0) {
+    const b0 = bridges[0];
+    suburbPOIs.unshift({
+      kind: 'bridge',
+      name: b0.name,
+      x: b0.cx, y: b0.yDeck, z: b0.cz, h: b0.towerH, r: Math.max(55, b0.span * 0.45),
+    });
+  }
+
+  // Orbital Air & Spaceport POI
+  if (spaceport) {
+    suburbPOIs.unshift({
+      kind: 'spaceport',
+      name: 'Orbital Air & Spaceport',
+      x: spaceport.x, y: spaceport.y, z: spaceport.z, h: 92, r: 165,
     });
   }
 
@@ -1003,23 +1073,42 @@ export function generateCity(
     maxY = Math.max(maxY, y[k] + h[k] / 2);
   }
 
+  if (signAmt <= 0.008) {
+    bills.length = 0;
+    signs.length = 0;
+    holos.length = 0;
+  } else if (signAmt < 0.98) {
+    const keepF = clamp01(signAmt);
+    const filterDet = (arr) => arr.filter((it, idx) => hash2i(idx, 613, seed) <= keepF);
+    const bKeep = filterDet(bills);
+    const sKeep = filterDet(signs);
+    const hKeep = filterDet(holos);
+    bills.length = 0; bills.push(...bKeep);
+    signs.length = 0; signs.push(...sKeep);
+    holos.length = 0; holos.push(...hKeep);
+  }
+
   const collider = makeCityCollider({
     count: n, x, y, z, w, h, d, rot, landmarks, places,
-    radius, suburbSpan, waterMode, terrainMode, terrainScale,
+    radius, suburbSpan, waterMode, waterAmount, shoreDist, terrainMode, terrainScale,
     coastAngle, terrainSeedX, terrainSeedZ,
   });
-  const lanes = makeLanes(seed, radius, boulevards, collider, terrainSeedX, terrainSeedZ, inWater, suburbSpan);
+  const transit = makeTransitNetwork(seed, radius, collider, inWater, transitAmt);
+  const lanes = makeLanes(seed, radius, boulevards, collider, terrainSeedX, terrainSeedZ, inWater, suburbSpan, transit);
   const lamps = makeLamps(seed, radius, boulevards, mediaZone, inWater);
   for (let i = 0; i < subLamps.length; i++) lamps.push(subLamps[i]);
-  const trees = makeTrees(seed, radius, water, lmCells, places, boulevards, sites, inWater);
+  const trees = makeTrees(seed, radius, water, lmCells, places, boulevards, sites, inRestricted, vegCover, vegScale);
   for (let i = 0; i < subTrees.length; i++) trees.push(subTrees[i]);
   const treeLinks = makeTreeConnections(trees, seed);
   return {
     seed, radius, suburbReach: effSubReach, suburbSpan, suburbCount,
-    waterMode, terrainMode, terrainScale, coastAngle, terrainSeedX, terrainSeedZ,
+    waterMode, waterAmount, shoreDist, terrainMode, terrainScale,
+    vegCover, vegScale, transitAmt, maritimeAmt, airAmt, signAmt, megaWrap,
+    coastAngle, terrainSeedX, terrainSeedZ,
     count: n, towers, maxY, x, y, z, w, h, d, s, kind, style, rot,
-    districts, landmarks, places, suburbPOIs, mediaZone, lanes, beacons, lamps,
-    sites, water, boulevards, trees, treeLinks, bills, signs, holos,
+    districts, landmarks, places, suburbPOIs, mediaZone, lanes, transit,
+    harbor, bridges, spaceport,
+    beacons, lamps, sites, water, boulevards, trees, treeLinks, bills, signs, holos,
   };
 }
 
@@ -1130,13 +1219,16 @@ function addPlaceData(places, lmCells, pushBeacon, pushSign, kind, bi, bj, seed,
   for (let n = 0; n < pool.length && places.some((l) => l.name === name); n++) {
     name = pool[(pool.indexOf(name) + 1) % pool.length];
   }
-  const big = kind === 'arena' || kind === 'stadium' || kind === 'theatre';
-  const r = superBlock ? 82 + rnd(23) * 34 : (big ? 52 + rnd(23) * 10 : 44 + rnd(23) * 16);
+  const showcase = superBlock && kind === 'park';
+  if (showcase) name = 'Grand Conservatory Park';
+  const big = kind === 'arena' || kind === 'stadium' || kind === 'theatre' || showcase;
+  const r = superBlock ? 86 + rnd(23) * 30 : (big ? 52 + rnd(23) * 10 : 44 + rnd(23) * 16);
   const rot = rnd(31) * Math.PI * 2;
   places.push({
     kind, name, x: cx, z: cz, r,
     rot,
     bi, bj,
+    showcase,
     colorSeed: rnd(37),
     seed: rnd(41),
   });
@@ -1201,7 +1293,8 @@ function makeLanes(
   terrainSeedX = 0,
   terrainSeedZ = 0,
   inWater = null,
-  suburbSpan = 4000
+  suburbSpan = 4000,
+  transit = null
 ) {
   const lanes = [];
   const span = radius * CELL + CELL * 0.85;
@@ -1557,57 +1650,37 @@ function makeLanes(
     }
   }
 
-  // Dedicated wide-radius continuous Sky-Train Express Loops (railLoop: true):
-  // Multi-car articulated trains ride smooth 8-arc closed maglev rings with zero 90-degree corners!
-  const railRings = [
-    { rr: Math.max(320, 0.56 * span), y: 128, spd: 108 },
-    { rr: Math.max(480, 0.88 * span), y: 156, spd: 122 },
-  ];
-  for (let rIdx = 0; rIdx < railRings.length; rIdx++) {
-    const rc = railRings[rIdx];
-    const segs = 8;
-    const dAng = (Math.PI * 2) / segs;
-    const ctrlScale = 1 / Math.cos(dAng * 0.5);
-    const phase0 = rIdx * 0.39 + 0.18;
-    let yRail = rc.y + R(rIdx, 91) * 18;
-    if (collider) {
-      for (let s = 0; s < segs; s++) {
-        const a0 = s * dAng + phase0;
-        const a1 = (s + 1) * dAng + phase0;
-        const aMid = (a0 + a1) * 0.5;
-        const x1 = Math.cos(a0) * rc.rr, z1 = Math.sin(a0) * rc.rr;
-        const cx = Math.cos(aMid) * rc.rr * ctrlScale, cz = Math.sin(aMid) * rc.rr * ctrlScale;
-        const x2 = Math.cos(a1) * rc.rr, z2 = Math.sin(a1) * rc.rr;
-        for (let k = 0; k <= 12; k++) {
-          const t = k / 12;
-          const om = 1 - t;
-          const px = om * om * x1 + 2 * om * t * cx + t * t * x2;
-          const pz = om * om * z1 + 2 * om * t * cz + t * t * z2;
-          const top = collider.maxHeightNear(px, pz, 34);
-          if (top + 34 > yRail) yRail = top + 34;
-        }
+  // Multi-Line Cross-City Public Transit Network (railLoop: true):
+  // Replaces dense concentric circles with real rectilinear avenue trunk lines & beltways!
+  if (transit && transit.active && Array.isArray(transit.lines)) {
+    for (let lIdx = 0; lIdx < transit.lines.length; lIdx++) {
+      const line = transit.lines[lIdx];
+      const indices = [];
+      for (let s = 0; s < line.segments.length; s++) {
+        const sg = line.segments[s];
+        const idx = pushSeg(
+          sg.x1, sg.z1, sg.cx, sg.cz, sg.x2, sg.z2,
+          line.y, line.y,
+          line.speed, 'ground',
+          {
+            ringId: 20 + lIdx,
+            ringSeg: s,
+            ringSegs: line.segments.length,
+            lineId: lIdx,
+            axis: 'ring',
+            deck: 3,
+            kind: 'ring',
+            railLoop: true,
+          }
+        );
+        indices.push(idx);
       }
-    }
-    const indices = [];
-    for (let s = 0; s < segs; s++) {
-      const a0 = s * dAng + phase0;
-      const a1 = (s + 1) * dAng + phase0;
-      const aMid = (a0 + a1) * 0.5;
-      const idx = pushSeg(
-        Math.cos(a0) * rc.rr, Math.sin(a0) * rc.rr,
-        Math.cos(aMid) * rc.rr * ctrlScale, Math.sin(aMid) * rc.rr * ctrlScale,
-        Math.cos(a1) * rc.rr, Math.sin(a1) * rc.rr,
-        yRail, yRail,
-        rc.spd, 'air-mid',
-        { ringId: 20 + rIdx, ringSeg: s, ringSegs: segs, axis: 'ring', deck: 3, kind: 'ring', railLoop: true }
-      );
-      indices.push(idx);
-    }
-    for (let s = 0; s < segs; s++) {
-      const nextI = indices[(s + 1) % segs];
-      lanes[indices[s]].nextIdx = nextI;
-      lanes[indices[s]].prevIdx = indices[(s - 1 + segs) % segs];
-      lanes[indices[s]].outs = [nextI];
+      for (let s = 0; s < indices.length; s++) {
+        const nextI = indices[(s + 1) % indices.length];
+        lanes[indices[s]].nextIdx = nextI;
+        lanes[indices[s]].prevIdx = indices[(s - 1 + indices.length) % indices.length];
+        lanes[indices[s]].outs = [nextI];
+      }
     }
   }
 
@@ -1742,15 +1815,17 @@ function makeSites(seed, radius) {
  *   3: Great Crater Lake + downtown canal lagoon
  *   4: Dry Arid Basin (no open water)
  */
-function makeWaters(seed, sites, radius, waterMode = 0, coastAngle = 0.7, sx = 0, sz = 0) {
-  if (waterMode === 4) return [];
+function makeWaters(seed, sites, radius, waterMode = 0, coastAngle = 0.7, sx = 0, sz = 0, shoreDist = 1.0, waterAmount = 1.0) {
+  if (waterMode === 4 || waterAmount <= 0.005) return [];
   const out = [];
   const coreSpan = radius * CELL;
+  const amtScale = 0.55 + 0.45 * Math.min(2.0, Math.max(0.0, waterAmount));
+  const sdMul = Math.max(0.30, shoreDist);
   const waterSites = sites.filter((s) => s.kind === 'water');
   const limit = Math.min(waterSites.length, waterMode === 0 ? (1 + Math.floor(hash2i(5, 61, seed) * 2)) : 1);
   for (let k = 0; k < limit; k++) {
     const s = waterSites[k];
-    const rad = 160 + hash2i(k, 67, seed) * 240;
+    const rad = (160 + hash2i(k, 67, seed) * 240) * amtScale;
     const pts = [];
     const m = 10 + Math.floor(hash2i(k, 71, seed) * 6);
     for (let i = 0; i < m; i++) {
@@ -1761,23 +1836,35 @@ function makeWaters(seed, sites, radius, waterMode = 0, coastAngle = 0.7, sx = 0
     out.push({ x: s.x, z: s.z, r: rad, pts, kind: 'harbor', seed: hash2i(k, 89, seed) });
   }
 
-  if (waterMode === 0) {
-    // Meandering river ribbon flowing from the inner harbor out across the countryside
-    const rAng = coastAngle;
+  // Build meandering river channel in both Harbor+River (0) and Coastal Ocean+Harbor (1) modes!
+  if (waterMode === 0 || waterMode === 1) {
+    const rAng = waterMode === 0 ? coastAngle : (coastAngle + Math.PI);
     const ca = Math.cos(rAng);
     const sa = Math.sin(rAng);
-    const startX = out[0] ? out[0].x : 0;
-    const startZ = out[0] ? out[0].z : 0;
-    const steps = 28;
+    let startX = out[0] ? out[0].x : 0;
+    let startZ = out[0] ? out[0].z : 0;
+    if (waterMode === 1) {
+      const sideSgn = hash2i(17, 63, seed) >= 0.5 ? 1 : -1;
+      const vMouth = sideSgn * (coreSpan * 0.62 + 340);
+      const uMouth = Math.max(300, coreSpan * 0.90 * sdMul);
+      const c0 = Math.cos(coastAngle), s0 = Math.sin(coastAngle);
+      startX = c0 * uMouth - s0 * vMouth;
+      startZ = s0 * uMouth + c0 * vMouth;
+    }
+    const steps = 30;
     const maxLen = Math.max(4600, coreSpan * 4.5);
     const leftBank = [];
     const rightBank = [];
+    const centerline = [];
+    const latSign = waterMode === 1 ? (hash2i(17, 63, seed) >= 0.5 ? -1 : 1) : 0;
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
       const u = t * maxLen;
-      const meander = Math.sin(u * 0.00145 + sx) * (95 + t * 240)
+      const lateralBias = latSign * t * 420;
+      const meander = lateralBias + Math.sin(u * 0.00145 + sx) * (95 + t * 240)
         + Math.cos(u * 0.00062 - sz) * (45 + t * 150);
-      const dMeander = Math.cos(u * 0.00145 + sx) * 0.00145 * (95 + t * 240);
+      const dMeander = (latSign * 420) / maxLen
+        + Math.cos(u * 0.00145 + sx) * 0.00145 * (95 + t * 240);
       const cx = startX + ca * u - sa * meander;
       const cz = startZ + sa * u + ca * meander;
       const tx = ca - sa * dMeander;
@@ -1785,9 +1872,10 @@ function makeWaters(seed, sites, radius, waterMode = 0, coastAngle = 0.7, sx = 0
       const tl = Math.hypot(tx, tz) || 1;
       const nx = -tz / tl;
       const nz = tx / tl;
-      const halfW = 38 + t * 44 + Math.sin(i * 1.3 + sx) * 9;
+      const halfW = (36 + t * 42 + Math.sin(i * 1.3 + sx) * 8) * amtScale;
       leftBank.push([cx + nx * halfW, cz + nz * halfW]);
       rightBank.push([cx - nx * halfW, cz - nz * halfW]);
+      centerline.push({ x: cx, z: cz, tx: tx / tl, tz: tz / tl, nx, nz, halfW, u });
     }
     const riverPts = [...leftBank, ...rightBank.reverse()];
     out.push({
@@ -1795,18 +1883,23 @@ function makeWaters(seed, sites, radius, waterMode = 0, coastAngle = 0.7, sx = 0
       z: startZ + sa * maxLen * 0.45,
       r: maxLen * 0.5,
       pts: riverPts,
+      centerline,
       kind: 'river',
       seed: hash2i(19, 91, seed),
     });
-  } else if (waterMode === 1 || waterMode === 2) {
-    // Vast Coastal Ocean / Archipelago Sea (GROUND_VERT carves pixel-smooth coves & islands)
+  }
+
+  if (waterMode === 1 || waterMode === 2) {
+    // Vast Coastal Ocean / Archipelago Sea (WATER_FRAG discards cDist > 0 so land NEVER floods!)
     const ca = Math.cos(coastAngle);
     const sa = Math.sin(coastAngle);
     const outerR = 13500;
-    const uStart = waterMode === 2 ? -Math.max(950, coreSpan * 1.45) : Math.max(240, coreSpan * 0.48);
+    const uStart = waterMode === 2
+      ? -Math.max(950, coreSpan * 1.45)
+      : Math.max(80, coreSpan * 0.32 * sdMul - 380);
     const pts = [];
     const arcSegs = 28;
-    const maxAng = waterMode === 2 ? Math.PI * 0.78 : Math.PI * 0.54;
+    const maxAng = waterMode === 2 ? Math.PI * 0.78 : Math.PI * 0.56;
     for (let i = 0; i <= arcSegs; i++) {
       const a = coastAngle - maxAng + (i / arcSegs) * (maxAng * 2);
       pts.push([Math.cos(a) * outerR, Math.sin(a) * outerR]);
@@ -1817,8 +1910,8 @@ function makeWaters(seed, sites, radius, waterMode = 0, coastAngle = 0.7, sx = 0
       pts.push([ca * uStart - sa * v, sa * uStart + ca * v]);
     }
     out.push({
-      x: ca * (coreSpan * 2.5),
-      z: sa * (coreSpan * 2.5),
+      x: ca * (coreSpan * 2.5 * sdMul),
+      z: sa * (coreSpan * 2.5 * sdMul),
       r: outerR,
       pts,
       kind: 'ocean',
@@ -1834,8 +1927,8 @@ function makeWaters(seed, sites, radius, waterMode = 0, coastAngle = 0.7, sx = 0
     // Great Crater Lake nestled between suburbs and foothills
     const ca = Math.cos(coastAngle);
     const sa = Math.sin(coastAngle);
-    const lakeU = Math.max(1550.0, coreSpan * 2.25);
-    const lakeR = Math.max(1050.0, coreSpan * 1.32) + 380.0;
+    const lakeU = Math.max(950.0, coreSpan * 2.25 * sdMul);
+    const lakeR = Math.max(680.0, coreSpan * 1.32 * amtScale) + 380.0;
     const lx = ca * lakeU;
     const lz = sa * lakeU;
     const pts = [];
@@ -1882,26 +1975,30 @@ function makeBoulevards(seed, radius) {
  * Trees & Park Groves — procedural real branching canopies or cyber-dendritic
  * supertrees depending on look/mode, with dense groves inside every park.
  */
-function makeTrees(seed, radius, water, lmCells, places, boulevards = [], sites = [], inWaterFn = null) {
+function makeTrees(seed, radius, water, lmCells, places, boulevards = [], sites = [], inWaterFn = null, vegCover = 1.0, vegScale = 1.0) {
+  if (vegCover <= 0.008) return [];
   const trees = [];
   const span = radius * CELL + CELL * 0.4;
   const inWater = inWaterFn || ((x, z) => water.some((w) => !w.analytical && pointInPoly(x, z, w.pts)));
   const nonParkNear = (x, z) => places.some((p) => p.kind !== 'park' && Math.hypot(p.x - x, p.z - z) < p.r + 22);
+  const cov = Math.max(0, Math.min(2.5, vegCover));
   let k = 0;
 
-  // 1. Avenue colonnade trees inside the core (kept < 1700m & h in 9..20m)
-  for (let a = -radius; a <= radius; a += 4) {
+  // 1. Avenue colonnade trees inside the core (kept < 1700m & h in 9..20m for contract)
+  const aveStep = cov >= 1.65 ? 2 : 4;
+  const zStep = Math.max(36, Math.round(64 / Math.max(0.5, Math.min(1.8, cov))));
+  for (let a = -radius; a <= radius; a += aveStep) {
     const p = a * CELL;
-    for (let z = -span; z <= span; z += 64) {
+    for (let z = -span; z <= span; z += zStep) {
       for (const sx of [1, -1]) {
-        const x = p + sx * 24 + (hash2i(k, 131, seed) - 0.5) * 8;
+        const x = p + sx * (a % 4 === 0 ? 24 : 11) + (hash2i(k, 131, seed) - 0.5) * 8;
         const zz = z + (hash2i(k, 137, seed) - 0.5) * 12;
         k++;
         if (Math.abs(x) > span || Math.abs(zz) > span) continue;
         if (inWater(x, zz) || nonParkNear(x, zz)) continue;
         const cell = Math.floor(x / CELL) + ',' + Math.floor(zz / CELL);
         if (lmCells.has(cell)) continue;
-        if (hash2i(k, 139, seed) < 0.35) continue;
+        if (hash2i(k, 139, seed) > 0.65 * cov) continue;
         trees.push({ x, y: 0, z: zz, h: 9 + hash2i(k, 149, seed) * 9, seed: hash2i(k, 151, seed), role: 'avenue' });
       }
     }
@@ -1915,7 +2012,7 @@ function makeTrees(seed, radius, water, lmCells, places, boulevards = [], sites 
     const len = Math.hypot(dx, dz) || 1;
     const nx = -dz / len;
     const nz = dx / len;
-    const steps = Math.floor(len / 72);
+    const steps = Math.max(4, Math.floor((len / 72) * Math.min(1.8, Math.max(0.5, cov))));
     for (let s = 1; s < steps; s++) {
       const t = s / steps;
       for (const side of [-1, 1]) {
@@ -1924,40 +2021,60 @@ function makeTrees(seed, radius, water, lmCells, places, boulevards = [], sites 
         k++;
         if (Math.abs(tx) > span || Math.abs(tz) > span) continue;
         if (inWater(tx, tz) || nonParkNear(tx, tz)) continue;
-        if (hash2i(k, 157, seed) < 0.3) continue;
+        if (hash2i(k, 157, seed) > 0.7 * cov) continue;
         trees.push({ x: tx, y: 0, z: tz, h: 10 + hash2i(k, 163, seed) * 10, seed: hash2i(k, 167, seed), role: 'boulevard' });
       }
     }
   }
 
-  // 3. Rich Botanical / Cyber Park Groves inside every `park` place!
+  // 3. Rich Botanical / Cyber Park Groves + Monumental Bio-Arcology Mega-Trees inside every `park` place!
   for (let pIdx = 0; pIdx < places.length; pIdx++) {
     const pl = places[pIdx];
     if (pl.kind !== 'park') continue;
-    // Central hero Mother-Tree / Supertree hub (kept strictly < 28m for test contract)
+    // Central hero Mother-Tree / Supertree hub
+    const heroBase = pl.showcase ? 25.5 : (20 + hash2i(pIdx, 173, seed) * 7.2);
+    const megaBoost = vegScale > 1.05 ? Math.pow(vegScale, 1.15) : 1.0;
     trees.push({
       x: pl.x - pl.r * 0.14,
       y: 0.7,
       z: pl.z + pl.r * 0.12,
-      h: 20 + hash2i(pIdx, 173, seed) * 7.5,
+      h: Math.min(220, heroBase * megaBoost),
       seed: hash2i(pIdx, 179, seed),
       role: 'park-hero',
       parkId: pIdx,
     });
-    const groveN = 20 + Math.floor(hash2i(pIdx, 181, seed) * 10);
+    // In Showcase Central Park or elevated vegScale, add a crown ring of towering Supertree Bio-Arcologies!
+    if ((pl.showcase || vegScale > 1.25) && cov > 0.25) {
+      const superN = pl.showcase ? 5 : 3;
+      for (let st = 0; st < superN; st++) {
+        const sang = (st / superN) * Math.PI * 2 + 0.45;
+        const srr = pl.r * 0.52;
+        const sx = pl.x + Math.cos(sang) * srr;
+        const sz = pl.z + Math.sin(sang) * srr;
+        if (inWater(sx, sz)) continue;
+        const sh = (22 + hash2i(pIdx * 17 + st, 183, seed) * 5.5) * megaBoost;
+        trees.push({
+          x: sx, y: 0.7, z: sz,
+          h: Math.min(200, sh),
+          seed: hash2i(pIdx * 17 + st, 187, seed),
+          role: 'park-hero',
+          parkId: pIdx,
+        });
+      }
+    }
+    const groveN = Math.max(4, Math.round((20 + Math.floor(hash2i(pIdx, 181, seed) * 12) + (pl.showcase ? 18 : 0)) * cov));
     for (let g = 0; g < groveN; g++) {
-      // Golden-angle phyllotaxis spiral avoiding the park's central reflecting pond
       const frac = (g + 0.5) / groveN;
       const ang = g * 2.39996 + pl.seed * 6.28;
-      const rr = pl.r * (0.28 + 0.64 * Math.sqrt(frac));
+      const rr = pl.r * (0.28 + 0.66 * Math.sqrt(frac));
       const tx = pl.x + Math.cos(ang) * rr;
       const tz = pl.z + Math.sin(ang) * rr;
-      // Leave room for the park's inner pond at (+0.18r, -0.1r)
       if (Math.hypot(tx - (pl.x + pl.r * 0.18), tz - (pl.z - pl.r * 0.10)) < pl.r * 0.24) continue;
+      if (pl.showcase && Math.hypot(tx - (pl.x - pl.r * 0.28), tz - (pl.z - pl.r * 0.22)) < pl.r * 0.20) continue;
       if (inWater(tx, tz)) continue;
-      const hTree = g % 5 === 0
+      const hTree = (g % 5 === 0
         ? 17 + hash2i(pIdx * 41 + g, 191, seed) * 8.5
-        : 8.5 + hash2i(pIdx * 41 + g, 193, seed) * 9.5;
+        : 8.5 + hash2i(pIdx * 41 + g, 193, seed) * 9.5) * (vegScale > 1.05 ? (0.65 + 0.35 * vegScale) : 1.0);
       trees.push({
         x: tx,
         y: 0.7,
@@ -1970,12 +2087,13 @@ function makeTrees(seed, radius, water, lmCells, places, boulevards = [], sites 
     }
   }
 
-  // 4. Pocket greenbelt groves around Voronoi `park` district sites
+  // 4. Pocket greenbelt groves around Voronoi `park` district sites + riverside riparian corridors!
   for (let sIdx = 0; sIdx < sites.length; sIdx++) {
     const st = sites[sIdx];
     if (st.kind !== 'park') continue;
-    for (let g = 0; g < 10; g++) {
-      const a = (g / 10) * Math.PI * 2 + hash2i(sIdx * 19 + g, 199, seed) * 0.5;
+    const siteGroveN = Math.max(2, Math.round(10 * cov));
+    for (let g = 0; g < siteGroveN; g++) {
+      const a = (g / siteGroveN) * Math.PI * 2 + hash2i(sIdx * 19 + g, 199, seed) * 0.5;
       const rr = 18 + hash2i(sIdx * 19 + g, 211, seed) * 44;
       const tx = st.x + Math.cos(a) * rr;
       const tz = st.z + Math.sin(a) * rr;
@@ -1984,11 +2102,34 @@ function makeTrees(seed, radius, water, lmCells, places, boulevards = [], sites 
         x: tx,
         y: 0,
         z: tz,
-        h: 9.5 + hash2i(sIdx * 19 + g, 223, seed) * 10.5,
+        h: (9.5 + hash2i(sIdx * 19 + g, 223, seed) * 10.5) * (vegScale > 1.05 ? (0.7 + 0.3 * vegScale) : 1.0),
         seed: hash2i(sIdx * 19 + g, 227, seed),
         role: 'grove',
         parkId: 100 + sIdx,
       });
+    }
+  }
+
+  // 5. Lush Riparian Riverbank Groves lining meandering rivers
+  const river = water.find((w) => w.kind === 'river' && Array.isArray(w.centerline));
+  if (river && cov > 0.2) {
+    const rStep = Math.max(1, Math.round(2 / Math.min(2.0, cov)));
+    for (let i = 1; i < river.centerline.length - 1; i += rStep) {
+      const rp = river.centerline[i];
+      for (const bSide of [-1, 1]) {
+        if (hash2i(i * 7 + (bSide > 0 ? 1 : 0), 233, seed) > 0.55 * cov) continue;
+        const off = rp.halfW + 30 + hash2i(i, 239, seed) * 24;
+        const rx = rp.x + rp.nx * bSide * off;
+        const rz = rp.z + rp.nz * bSide * off;
+        if (inWater(rx, rz) || nonParkNear(rx, rz)) continue;
+        trees.push({
+          x: rx, y: 0, z: rz,
+          h: (11 + hash2i(i, 241, seed) * 11) * (vegScale > 1.05 ? (0.7 + 0.3 * vegScale) : 1.0),
+          seed: hash2i(i + (bSide > 0 ? 50 : 0), 251, seed),
+          role: 'grove',
+          parkId: 300,
+        });
+      }
     }
   }
 
@@ -2091,7 +2232,7 @@ function rotOff(cx, cz, ox, oz, rot) {
   return [cx + ox * c + oz * s, cz - ox * s + oz * c];
 }
 
-function addTower(push, pushBeacon, pushBill, pushSign, rand, x0, x1, z0, z1, h01, d, edgeT = 1, baseAngle = 0) {
+function addTower(push, pushBeacon, pushBill, pushSign, rand, x0, x1, z0, z1, h01, d, edgeT = 1, baseAngle = 0, signAmt = 1.0, megaWrap = 1.0) {
   const w0 = x1 - x0;
   const d0 = z1 - z0;
   if (w0 < 12 || d0 < 12) return;
@@ -2327,20 +2468,31 @@ function addTower(push, pushBeacon, pushBill, pushSign, rand, x0, x1, z0, z1, h0
   const tw = Math.max(10, w - iw * 2) * 0.92;
   const td = Math.max(10, dp - id * 2) * 0.92;
   push(cx, y + 1.1, cz, tw, 2.2, td, rand(), KIND.SLAB, style, rot);
-  // illuminated billboards on ~28% of medium & tall towers (organic spacing, varied aspect ratios)
-  if (H > 115 && rand() < 0.28) {
-    const portrait = rand() < 0.38;
-    const bh = portrait ? 24 + rand() * 28 : 9 + rand() * 14;
-    const bw = portrait
-      ? Math.min(24, Math.max(10, (rand() < 0.5 ? tw : td) * (0.42 + rand() * 0.25)))
-      : Math.min(46, Math.max(14, (rand() < 0.5 ? tw : td) * (0.68 + rand() * 0.35)));
-    const by = Math.max(46, H * (0.34 + rand() * 0.46));
+  // Illuminated billboards & giant facade-covering wraps on medium & tall towers (scaled by signAmt & megaWrap!)
+  const billProb = Math.min(0.92, 0.42 * signAmt);
+  if (H > 72 && rand() < billProb) {
+    const wantMega = H > 130 && megaWrap > 0.15 && rand() < Math.min(0.75, 0.28 * megaWrap);
+    const portrait = wantMega || rand() < 0.42;
+    const bh = wantMega
+      ? Math.min(H * 0.58, 42 + rand() * 54 * Math.min(1.6, megaWrap))
+      : (portrait ? 22 + rand() * 28 : 9 + rand() * 14);
+    const bw = wantMega
+      ? Math.min(54, Math.max(18, (rand() < 0.5 ? tw : td) * (0.76 + rand() * 0.18)))
+      : (portrait
+        ? Math.min(26, Math.max(10, (rand() < 0.5 ? tw : td) * (0.44 + rand() * 0.26)))
+        : Math.min(48, Math.max(14, (rand() < 0.5 ? tw : td) * (0.68 + rand() * 0.32))));
+    const by = Math.max(44, H * (wantMega ? (0.42 + rand() * 0.24) : (0.34 + rand() * 0.46)));
     if (rand() < 0.5) {
-      const [bx, bz] = rotOff(cx, cz, (rand() < 0.5 ? 1 : -1) * (tw / 2 + 1.2), 0, segRot);
-      pushBill({ x: bx, y: by, z: bz, w: 2.2, h: bh, d: bw, rot: segRot, seed: rand() });
+      const [bx, bz] = rotOff(cx, cz, (rand() < 0.5 ? 1 : -1) * (tw / 2 + 1.25), 0, segRot);
+      pushBill({ x: bx, y: by, z: bz, w: 2.2, h: bh, d: bw, rot: segRot, seed: rand(), mega: wantMega });
     } else {
-      const [bx, bz] = rotOff(cx, cz, 0, (rand() < 0.5 ? 1 : -1) * (td / 2 + 1.2), segRot);
-      pushBill({ x: bx, y: by, z: bz, w: bw, h: bh, d: 2.2, rot: segRot, seed: rand() });
+      const [bx, bz] = rotOff(cx, cz, 0, (rand() < 0.5 ? 1 : -1) * (td / 2 + 1.25), segRot);
+      pushBill({ x: bx, y: by, z: bz, w: bw, h: bh, d: 2.2, rot: segRot, seed: rand(), mega: wantMega });
+    }
+    // High signAmt adds a complementary secondary billboard on an adjacent face!
+    if (signAmt > 1.25 && H > 105 && rand() < (signAmt - 1.0) * 0.55) {
+      const [bx2, bz2] = rotOff(cx, cz, 0, (rand() < 0.5 ? 1 : -1) * (td / 2 + 1.25), segRot);
+      pushBill({ x: bx2, y: Math.max(44, H * 0.72), z: bz2, w: Math.min(42, tw * 0.78), h: 12 + rand() * 10, d: 2.2, rot: segRot, seed: rand() });
     }
   }
   if (H > 170 && rand() < 0.7) {
@@ -3032,6 +3184,8 @@ export function makeCityCollider(city) {
   const suburbSpan = city.suburbSpan || Math.max(4500, coreSpan * 4.4 + 1900);
   const hasTerrain = Number.isFinite(city.terrainMode) && city.terrainMode !== 4 && (city.terrainScale ?? 1) > 0.001;
   const wMode = city.waterMode ?? 0;
+  const wAmt = city.waterAmount ?? 1;
+  const sDist = city.shoreDist ?? 1;
   const tMode = city.terrainMode ?? 0;
   const tScale = city.terrainScale ?? 1;
   const cAng = city.coastAngle ?? 0.7;
@@ -3042,7 +3196,7 @@ export function makeCityCollider(city) {
     if (!hasTerrain && wMode !== 2) return 0;
     return Math.max(
       0,
-      evalTerrainHeight(px, pz, coreSpan, suburbSpan, tMode, tScale, cAng, wMode, tsx, tsz)
+      evalTerrainHeight(px, pz, coreSpan, suburbSpan, tMode, tScale, cAng, wMode, tsx, tsz, sDist, wAmt)
     );
   }
 
@@ -3155,7 +3309,8 @@ export function makeCityCollider(city) {
       pos.y = minGround;
       hit = true;
     }
-    for (let iter = 0; iter < 3; iter++) {
+    for (let iter = 0; iter < 7; iter++) {
+      let iterHit = false;
       stamp = (stamp + 1) | 0 || 1;
       const x0 = Math.floor((pos.x - radius) / B);
       const x1 = Math.floor((pos.x + radius) / B);
@@ -3181,17 +3336,18 @@ export function makeCityCollider(city) {
             const ez = b.hd + radius;
             if (Math.abs(lx) >= ex || Math.abs(lz) >= ez) continue;
             hit = true;
+            iterHit = true;
             const penX = ex - Math.abs(lx);
             const penZ = ez - Math.abs(lz);
             const penTop = top + radius - pos.y;
-            if (penTop < Math.min(penX, penZ) && penTop < radius * 1.5) {
-              pos.y = top + radius;
+            if (iter >= 4 || (penTop < Math.min(penX, penZ) && penTop < radius * 1.5)) {
+              pos.y = top + radius + 0.25;
             } else if (penX < penZ) {
-              lx = (lx >= 0 ? 1 : -1) * ex;
+              lx = (lx >= 0 ? 1 : -1) * (ex + 0.05);
               pos.x = b.cx + lx * b.cos + lz * b.sin;
               pos.z = b.cz - lx * b.sin + lz * b.cos;
             } else {
-              lz = (lz >= 0 ? 1 : -1) * ez;
+              lz = (lz >= 0 ? 1 : -1) * (ez + 0.05);
               pos.x = b.cx + lx * b.cos + lz * b.sin;
               pos.z = b.cz - lx * b.sin + lz * b.cos;
             }
@@ -3210,6 +3366,7 @@ export function makeCityCollider(city) {
         const minR = o.r + radius;
         if (dist < minR) {
           hit = true;
+          iterHit = true;
           const penTop = top + radius - pos.y;
           if (penTop < minR - dist && penTop < radius * 1.5) {
             pos.y = top + radius;
@@ -3221,6 +3378,7 @@ export function makeCityCollider(city) {
           }
         }
       }
+      if (!iterHit) break;
     }
     const postGround = groundHeightAt(pos.x, pos.z) + Math.max(6, radius * 0.75);
     if (pos.y < postGround) {
@@ -3489,4 +3647,492 @@ function addMediaTower(push, pushBeacon, pushBill, pushSign, pushHolo, rand, x0,
   pushBeacon(cx, H + 6, cz, rand());
   return { x: cx, z: cz, w, d: dp, h: H };
 }
+
+/* =====================================================================
+ * Phase 12 Macro-Infrastructure:
+ *   1. Multi-Line Cross-City Public Transit Network + Elevated Stations
+ *   2. River Bridges (Cable-Stayed, Tied-Arch & Suspension)
+ *   3. Deepwater Harbor, Piers, Cranes, Cruise Liners & Container Ships
+ *   4. Air / Orbital Spaceport Megacomplex
+ * ===================================================================== */
+
+function makeRoundedRectSegments(xMin, xMax, zMin, zMax, cr) {
+  const r = Math.min(cr, (xMax - xMin) * 0.35, (zMax - zMin) * 0.35);
+  const xm = (xMin + xMax) * 0.5;
+  const zm = (zMin + zMax) * 0.5;
+  return [
+    { x1: xMax, z1: zMin + r, cx: xMax, cz: zm, x2: xMax, z2: zMax - r, straight: true, rot: 0 },
+    { x1: xMax, z1: zMax - r, cx: xMax, cz: zMax, x2: xMax - r, z2: zMax, straight: false, rot: Math.PI * 0.25 },
+    { x1: xMax - r, z1: zMax, cx: xm, cz: zMax, x2: xMin + r, z2: zMax, straight: true, rot: Math.PI * 0.5 },
+    { x1: xMin + r, z1: zMax, cx: xMin, cz: zMax, x2: xMin, z2: zMax - r, straight: false, rot: Math.PI * 0.75 },
+    { x1: xMin, z1: zMax - r, cx: xMin, cz: zm, x2: xMin, z2: zMin + r, straight: true, rot: Math.PI },
+    { x1: xMin, z1: zMin + r, cx: xMin, cz: zMin, x2: xMin + r, z2: zMin, straight: false, rot: -Math.PI * 0.75 },
+    { x1: xMin + r, z1: zMin, cx: xm, cz: zMin, x2: xMax - r, z2: zMin, straight: true, rot: -Math.PI * 0.5 },
+    { x1: xMax - r, z1: zMin, cx: xMax, cz: zMin, x2: xMax, z2: zMin + r, straight: false, rot: -Math.PI * 0.25 },
+  ];
+}
+
+function makeTransitNetwork(seed, radius, collider, inWater, transitAmt = 1.0) {
+  if (transitAmt <= 0.01) {
+    return { active: false, amt: 0, lines: [], stations: [] };
+  }
+  // Align corridors strictly along real orthogonal city streets & 4th-street avenues!
+  const innerG = radius >= 4 ? 4 : Math.max(1, Math.min(2, radius));
+  const outerG = Math.max(2, Math.min(radius, Math.floor(radius / 2) * 2 || 2));
+  const reachG = Math.max(innerG, radius);
+
+  const specs = [
+    // Line 0: North-South Grand Central Trunk (runs along x = 0 Central Ave & x = -innerG Ave)
+    {
+      name: 'Central North–South Trunk',
+      color: '#53d9ff',
+      xMin: -innerG * CELL, xMax: 0,
+      zMin: -reachG * CELL, zMax: reachG * CELL,
+      baseY: 22.5, speed: 92, cr: 15,
+    },
+    // Line 1: East-West Crosstown & Waterfront Express (runs along z = 0 Central Ave & z = +innerG Ave)
+    {
+      name: 'Crosstown Waterfront Express',
+      color: '#ff9e4a',
+      xMin: -reachG * CELL, xMax: reachG * CELL,
+      zMin: 0, zMax: innerG * CELL,
+      baseY: 30.5, speed: 102, cr: 15,
+    },
+    // Line 2: District Quadrangle Beltway
+    {
+      name: 'District Quadrangle Beltway',
+      color: '#ff5c93',
+      xMin: -outerG * CELL, xMax: outerG * CELL,
+      zMin: -outerG * CELL, zMax: outerG * CELL,
+      baseY: 38.5, speed: 96, cr: 22,
+    },
+  ];
+
+  const isLoopClearAtY = (segs, yTest) => {
+    if (!collider) return true;
+    for (let s = 0; s < segs.length; s++) {
+      const sg = segs[s];
+      for (let k = 0; k <= 16; k++) {
+        const t = k / 16;
+        const om = 1 - t;
+        const px = om * om * sg.x1 + 2 * om * t * sg.cx + t * t * sg.x2;
+        const pz = om * om * sg.z1 + 2 * om * t * sg.cz + t * t * sg.z2;
+        if (collider.hitsPoint(px, yTest, pz, 5.2)) return false;
+      }
+    }
+    return true;
+  };
+
+  const lines = [];
+  const stations = [];
+  const stNames = [
+    'Central Grand Hub', 'North Gate Station', 'South Terminal', 'Harbor Crossing',
+    'West End Concourse', 'Civic Exchange', 'Conservatory Stop', 'Midtown Viaduct',
+    'East Quay Station', 'Quadrangle North', 'Quadrangle South', 'Science Park Stop',
+  ];
+  let stCounter = 0;
+
+  for (let lIdx = 0; lIdx < specs.length; lIdx++) {
+    const sp = specs[lIdx];
+    const segs = makeRoundedRectSegments(sp.xMin, sp.xMax, sp.zMin, sp.zMax, sp.cr);
+    let yRail = sp.baseY;
+    let foundClear = false;
+    for (let tryStep = 0; tryStep < 18; tryStep++) {
+      const yTry = sp.baseY + tryStep * 9.0;
+      if (isLoopClearAtY(segs, yTry)) {
+        yRail = yTry;
+        foundClear = true;
+        break;
+      }
+    }
+    if (!foundClear && collider) {
+      let maxTop = sp.baseY;
+      for (const sg of segs) {
+        const top = collider.maxHeightNear(sg.cx, sg.cz, 32);
+        if (top + 28 > maxTop) maxTop = top + 28;
+      }
+      yRail = maxTop;
+    }
+
+    lines.push({
+      id: lIdx,
+      name: sp.name,
+      color: sp.color,
+      y: yRail,
+      speed: sp.speed,
+      segments: segs,
+    });
+
+    // Place elevated transit stations along dry straight avenue legs (sampling 1/4, 1/2, 3/4 span for clear pockets)
+    for (let s = 0; s < segs.length; s += 2) {
+      const sg = segs[s];
+      const len = Math.hypot(sg.x2 - sg.x1, sg.z2 - sg.z1);
+      if (len < 180) continue;
+      for (const frac of [0.5, 0.28, 0.72]) {
+        const sx = sg.x1 + (sg.x2 - sg.x1) * frac;
+        const sz = sg.z1 + (sg.z2 - sg.z1) * frac;
+        if (inWater && inWater(sx, sz, 22)) continue;
+        if (collider && collider.hitsPoint(sx, yRail + 2.5, sz, 8.5)) continue;
+        if (stations.some((st) => Math.hypot(st.x - sx, st.z - sz) < 95 && Math.abs(st.y - yRail) < 12)) continue;
+        stations.push({
+          name: stNames[stCounter % stNames.length],
+          x: sx,
+          y: yRail,
+          z: sz,
+          rot: Math.atan2(sg.x2 - sg.x1, sg.z2 - sg.z1),
+          len: 46,
+          lineId: lIdx,
+          color: sp.color,
+        });
+        stCounter++;
+        break;
+      }
+    }
+  }
+
+  return { active: true, amt: transitAmt, lines, stations };
+}
+
+function makeBridges(seed, water, terrainY) {
+  const bridges = [];
+  const rivers = (water || []).filter((w) => w.kind === 'river' && Array.isArray(w.centerline) && w.centerline.length >= 10);
+  if (!rivers.length) return bridges;
+
+  const bridgeNames = ['Grand Estuary Bridge', 'Meridian Cable Bridge', 'Iron Arch Crossing', 'Valley Viaduct'];
+  const kinds = ['cable-stayed', 'tied-arch', 'suspension', 'cable-stayed'];
+
+  for (let rIdx = 0; rIdx < rivers.length; rIdx++) {
+    const cl = rivers[rIdx].centerline;
+    const slots = [3, 9, 16, 23];
+    for (let k = 0; k < slots.length; k++) {
+      const idx = Math.min(cl.length - 3, slots[k]);
+      const p = cl[idx];
+      if (!p) continue;
+      // Span cleanly from dry bank to dry bank (+32m abutment margin on each side)
+      const clearHalf = p.halfW + 34;
+      const x1 = p.x + p.nx * clearHalf;
+      const z1 = p.z + p.nz * clearHalf;
+      const x2 = p.x - p.nx * clearHalf;
+      const z2 = p.z - p.nz * clearHalf;
+      const bankY = Math.max(terrainY ? terrainY(x1, z1) : 0, terrainY ? terrainY(x2, z2) : 0);
+      const yDeck = Math.max(17.5, bankY + 13.5 + (k === 0 ? 4.5 : 0));
+      const span = clearHalf * 2;
+      const kind = kinds[k % kinds.length];
+      const towerH = yDeck + (kind === 'tied-arch' ? 32 : 48 + (k === 0 ? 14 : 0));
+      bridges.push({
+        name: bridgeNames[(rIdx * 4 + k) % bridgeNames.length],
+        kind,
+        cx: p.x,
+        cz: p.z,
+        x1, z1, x2, z2,
+        rot: Math.atan2(x2 - x1, z2 - z1),
+        span,
+        deckW: k === 0 ? 24 : 18,
+        yDeck,
+        bankY,
+        towerH,
+        seed: hash2i(rIdx * 11 + k, 503, seed),
+      });
+    }
+  }
+  return bridges;
+}
+
+function makeHarbor(seed, radius, water, waterMode, waterAmount, coastAngle, coastDistAt, inWater, terrainY, maritimeAmt = 1.0) {
+  if (waterMode === 4 || waterAmount <= 0.005 || maritimeAmt <= 0.01 || !water.length) return null;
+  const coreSpan = radius * CELL;
+  let anchorX = 0, anchorZ = 0, outX = Math.cos(coastAngle), outZ = Math.sin(coastAngle);
+  let yQuay = 3.2;
+
+  if (waterMode === 1 || waterMode === 2) {
+    // Locate exact shoreline right in the sheltered central bay indent (v = 0)
+    const ca = Math.cos(coastAngle);
+    const sa = Math.sin(coastAngle);
+    const vHarbor = (hash2i(3, 521, seed) - 0.5) * 160;
+    let uLo = -coreSpan;
+    let uHi = coreSpan * 3.2;
+    for (let it = 0; it < 20; it++) {
+      const uMid = (uLo + uHi) * 0.5;
+      const wx = ca * uMid - sa * vHarbor;
+      const wz = sa * uMid + ca * vHarbor;
+      if (coastDistAt(wx, wz) > 0) uLo = uMid;
+      else uHi = uMid;
+    }
+    anchorX = ca * (uLo - 10) - sa * vHarbor;
+    anchorZ = sa * (uLo - 10) + ca * vHarbor;
+    outX = ca;
+    outZ = sa;
+    yQuay = Math.max(3.2, (terrainY ? terrainY(anchorX - outX * 25, anchorZ - outZ * 25) : 0) + 2.8);
+  } else if (waterMode === 3) {
+    // City-facing shore of the Great Crater Lake
+    const lake = water.find((w) => w.kind === 'lake') || water[0];
+    const dx = lake.x;
+    const dz = lake.z;
+    const dl = Math.hypot(dx, dz) || 1;
+    outX = dx / dl;
+    outZ = dz / dl;
+    let dLo = 200;
+    let dHi = dl;
+    for (let it = 0; it < 20; it++) {
+      const dMid = (dLo + dHi) * 0.5;
+      if (coastDistAt(outX * dMid, outZ * dMid) > 0) dLo = dMid;
+      else dHi = dMid;
+    }
+    anchorX = outX * (dLo - 8);
+    anchorZ = outZ * (dLo - 8);
+    yQuay = Math.max(3.2, (terrainY ? terrainY(anchorX - outX * 25, anchorZ - outZ * 25) : 0) + 2.8);
+  } else {
+    // Inner Harbor Lagoon (waterMode === 0): sit on cityward rim pointing across lagoon!
+    const hWater = water.find((w) => w.kind === 'harbor') || water[0];
+    const ang = Math.atan2(hWater.z, hWater.x || 1e-3);
+    outX = Math.cos(ang);
+    outZ = Math.sin(ang);
+    anchorX = hWater.x - outX * (hWater.r * 0.68);
+    anchorZ = hWater.z - outZ * (hWater.r * 0.68);
+    yQuay = 3.2;
+  }
+
+  const tanX = -outZ;
+  const tanZ = outX;
+  const rotOut = Math.atan2(outX, outZ);
+  const pierCount = Math.max(2, Math.min(6, Math.round(3 * Math.min(1.8, Math.max(0.5, maritimeAmt)))));
+  const quayLen = pierCount * 96 + 90;
+  const piers = [];
+  const cranes = [];
+  const containers = [];
+  const boats = [];
+  const ships = [];
+
+  for (let p = 0; p < pierCount; p++) {
+    const along = (p - (pierCount - 1) * 0.5) * 96;
+    const isContainerPier = p % 2 === 0;
+    const isCruisePier = p === 1 || (pierCount >= 4 && p === 3);
+    const len = (isCruisePier ? 215 : isContainerPier ? 195 : 135) * (0.85 + 0.15 * Math.min(1.6, maritimeAmt));
+    const wid = isContainerPier ? 26 : (isCruisePier ? 22 : 14);
+    const px = anchorX + tanX * along + outX * (len * 0.5);
+    const pz = anchorZ + tanZ * along + outZ * (len * 0.5);
+    piers.push({ x: px, y: yQuay, z: pz, len, wid, rot: rotOut, kind: isCruisePier ? 'cruise' : (isContainerPier ? 'cargo' : 'marina') });
+
+    if (isContainerPier) {
+      const nCranes = Math.max(1, Math.min(4, Math.round(2 * maritimeAmt)));
+      for (let c = 0; c < nCranes; c++) {
+        const dOut = 48 + c * 52;
+        cranes.push({
+          x: anchorX + tanX * (along - wid * 0.22) + outX * dOut,
+          y: yQuay,
+          z: anchorZ + tanZ * (along - wid * 0.22) + outZ * dOut,
+          rot: rotOut,
+          h: 44 + (c % 2) * 5,
+          boom: 48,
+        });
+      }
+      // Container stacks on pier & quay apron
+      for (let sIdx = 0; sIdx < 8; sIdx++) {
+        const dOut = -18 + sIdx * 20;
+        containers.push({
+          x: anchorX + tanX * (along + (sIdx % 2 === 0 ? 4 : -4)) + outX * dOut,
+          y: yQuay,
+          z: anchorZ + tanZ * (along + (sIdx % 2 === 0 ? 4 : -4)) + outZ * dOut,
+          rot: rotOut,
+          tiers: 2 + Math.floor(hash2i(p * 13 + sIdx, 541, seed) * 3),
+          seed: hash2i(p * 13 + sIdx, 547, seed),
+        });
+      }
+      // Docked Heavy Container Ship alongside cargo pier
+      ships.push({
+        kind: 'container',
+        docked: true,
+        x: anchorX + tanX * (along - wid * 0.5 - 19) + outX * (len * 0.58),
+        y: 0.2,
+        z: anchorZ + tanZ * (along - wid * 0.5 - 19) + outZ * (len * 0.58),
+        rot: rotOut,
+        len: 178 + hash2i(p, 557, seed) * 36,
+        wid: 28,
+        seed: hash2i(p, 563, seed),
+      });
+    } else if (isCruisePier) {
+      // Docked Illuminated Luxury Cruise Liner alongside cruise terminal pier!
+      ships.push({
+        kind: 'cruise',
+        docked: true,
+        x: anchorX + tanX * (along + wid * 0.5 + 18) + outX * (len * 0.60),
+        y: 0.2,
+        z: anchorZ + tanZ * (along + wid * 0.5 + 18) + outZ * (len * 0.60),
+        rot: rotOut,
+        len: 196 + hash2i(p, 569, seed) * 42,
+        wid: 27,
+        seed: hash2i(p, 571, seed),
+      });
+    } else {
+      // Pleasure marina slips with moored motor-yachts & sailboats
+      const nBoats = Math.max(2, Math.round(6 * maritimeAmt));
+      for (let b = 0; b < nBoats; b++) {
+        const side = b % 2 === 0 ? 1 : -1;
+        const dOut = 28 + Math.floor(b / 2) * 26;
+        boats.push({
+          x: anchorX + tanX * (along + side * (wid * 0.5 + 7)) + outX * dOut,
+          y: 0.35,
+          z: anchorZ + tanZ * (along + side * (wid * 0.5 + 7)) + outZ * dOut,
+          rot: rotOut + Math.PI * 0.5 * side,
+          len: 14 + hash2i(b, 577, seed) * 10,
+          seed: hash2i(b, 587, seed),
+        });
+      }
+    }
+  }
+
+  // Offshore Cruising Fleet (Container Ships & Luxury Cruise Liners steaming across open sea/lake!)
+  if (waterMode === 1 || waterMode === 2 || waterMode === 3) {
+    const cruiseFleet = Math.max(1, Math.min(10, Math.round(4 * maritimeAmt)));
+    for (let s = 0; s < cruiseFleet; s++) {
+      const isCruise = s % 2 === 1;
+      const distOut = (waterMode === 3 ? 520 : 620) + s * 240 + hash2i(s, 593, seed) * 180;
+      const sweepSpan = waterMode === 3 ? 680 : 1850 + s * 220;
+      ships.push({
+        kind: isCruise ? 'cruise' : 'container',
+        docked: false,
+        cx: anchorX + outX * distOut,
+        cz: anchorZ + outZ * distOut,
+        tanX, tanZ,
+        outX, outZ,
+        sweepSpan,
+        speed: (isCruise ? 22 : 17) * (s % 2 === 0 ? 1 : -1),
+        phase: hash2i(s, 599, seed),
+        y: 0.15,
+        len: (isCruise ? 210 : 195) + hash2i(s, 601, seed) * 40,
+        wid: isCruise ? 28 : 30,
+        seed: hash2i(s, 607, seed),
+      });
+    }
+  }
+
+  return {
+    x: anchorX,
+    y: yQuay,
+    z: anchorZ,
+    outX, outZ, tanX, tanZ, rot: rotOut,
+    quayLen,
+    piers,
+    cranes,
+    containers,
+    boats,
+    ships,
+  };
+}
+
+function makeSpaceport(seed, radius, coreSpan, coastAngle, inWater, terrainY, terrainSlopeAt, airAmt = 1.0) {
+  if (airAmt <= 0.01) return null;
+  const halfLen = 430;
+  const halfWid = 225;
+
+  // Search radial candidates (preferring dry inland plateau opposite the ocean!)
+  let best = null;
+  for (let attempt = 0; attempt < 28; attempt++) {
+    const aOff = ((attempt % 2 === 0 ? 1 : -1) * Math.ceil(attempt / 2) * 0.24);
+    const ang = coastAngle + Math.PI + aOff;
+    const dist = coreSpan * 1.52 + 440 + (attempt % 3) * 180;
+    const cx = Math.cos(ang) * dist;
+    const cz = Math.sin(ang) * dist;
+    const rwyRot = ang + Math.PI * 0.5;
+    const cs = Math.cos(rwyRot);
+    const sn = Math.sin(rwyRot);
+
+    let dry = !inWater(cx, cz, 65);
+    for (let sx = -1; sx <= 1 && dry; sx++) {
+      for (let sz = -1; sz <= 1 && dry; sz++) {
+        const px = cx + sx * halfLen * cs - sz * halfWid * sn;
+        const pz = cz + sx * halfLen * sn + sz * halfWid * cs;
+        if (inWater(px, pz, 38)) dry = false;
+      }
+    }
+    if (!dry) continue;
+    const slope = terrainSlopeAt ? terrainSlopeAt(cx, cz) : 0;
+    if (attempt < 20 && slope > 0.14) continue;
+    const baseY = terrainY ? terrainY(cx, cz) : 0;
+    best = { cx, cz, baseY, rwyRot, cs, sn };
+    break;
+  }
+  if (!best) return null;
+
+  const { cx, cz, baseY, rwyRot, cs, sn } = best;
+  const toWorld = (lx, lz) => ({
+    x: cx + lx * cs - lz * sn,
+    z: cz + lx * sn + lz * cs,
+  });
+
+  const rwyLen = 760;
+  const runways = [
+    { ...toWorld(0, -68), len: rwyLen, wid: 34, rot: rwyRot },
+    { ...toWorld(0, 12), len: rwyLen, wid: 30, rot: rwyRot },
+  ];
+  const terminal = { ...toWorld(-45, 118), w: 210, d: 48, h: 24, rot: rwyRot };
+  const tower = { ...toWorld(105, 126), h: 86, rot: rwyRot };
+
+  // Orbital Launch Complex on the outer blast apron
+  const padCount = airAmt >= 0.45 ? 2 : 1;
+  const pads = [];
+  for (let p = 0; p < padCount; p++) {
+    const pt = toWorld(245 - p * 125, 145);
+    pads.push({
+      x: pt.x,
+      y: baseY,
+      z: pt.z,
+      r: 36,
+      gantryH: 108,
+      rocketH: 94,
+      rot: rwyRot,
+      activeLaunch: p === 0,
+      seed: hash2i(p, 631, seed),
+    });
+  }
+
+  // Parked suborbital delta shuttles along terminal gates
+  const gateCount = Math.max(2, Math.min(6, Math.round(4 * airAmt)));
+  const parked = [];
+  for (let g = 0; g < gateCount; g++) {
+    const lx = -125 + g * 44;
+    const pt = toWorld(lx, 74);
+    parked.push({
+      x: pt.x,
+      y: baseY + 1.8,
+      z: pt.z,
+      rot: rwyRot + Math.PI * 0.5,
+      scale: 0.9 + (g % 2) * 0.2,
+      seed: hash2i(g, 641, seed),
+    });
+  }
+
+  // Active flight operations (runway approach/rollout/climbout shuttles)
+  const flightCount = Math.max(1, Math.min(6, Math.round(3 * airAmt)));
+  const flights = [];
+  for (let f = 0; f < flightCount; f++) {
+    const rwyIdx = f % runways.length;
+    flights.push({
+      rwyIdx,
+      phase: f / flightCount + hash2i(f, 647, seed) * 0.15,
+      speed: 0.042 + (f % 3) * 0.008,
+      scale: 1.05 + (f % 2) * 0.2,
+      seed: hash2i(f, 653, seed),
+    });
+  }
+
+  return {
+    x: cx,
+    y: baseY,
+    z: cz,
+    rot: rwyRot,
+    cos: cs,
+    sin: sn,
+    halfLen,
+    halfWid,
+    runways,
+    terminal,
+    tower,
+    pads,
+    parked,
+    flights,
+    amt: airAmt,
+  };
+}
+
 

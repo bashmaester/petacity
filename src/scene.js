@@ -131,6 +131,16 @@ export function makeUniforms() {
     uBillMono: { value: 0 },
     uWaterDeep: { value: col('#0c2033') },
     uWaterShallow: { value: col('#2a6a8c') },
+    uTint: { value: 0.72 },
+    uWaterAmt: { value: 1.0 },
+    uShoreDist: { value: 1.0 },
+    uCloudSeed: { value: 0.0 },
+    uCloudEvol: { value: 0.35 },
+    uCloudLac: { value: 2.08 },
+    uSignAmt: { value: 1.0 },
+    uMegaWrap: { value: 1.0 },
+    uGlyphStyle: { value: 0.0 },
+    uSignAnim: { value: 1.0 },
   };
 }
 
@@ -272,7 +282,7 @@ export function makeWorld(U) {
     fragmentShader: SKY_FRAG,
     uniforms: pick(U, [
       'uZen', 'uHor', 'uSkySunCol', 'uSunDir', 'uSolarDir', 'uCloudCol', 'uStars', 'uStarRot',
-      'uCloud', 'uCloudType', 'uCloudStyle',
+      'uCloud', 'uCloudType', 'uCloudStyle', 'uCloudSeed', 'uCloudEvol', 'uCloudLac',
       'uHaze', 'uTime', 'uSunGlow', 'uSat', 'uMoonDir', 'uMoonSize', 'uMoonGlow', 'uMoonPhase',
       'uFlash', 'uWorldCurve', 'uPlanetR',
     ]),
@@ -288,7 +298,7 @@ export function makeWorld(U) {
     uniforms: pick(U, [
       'uGStreet', 'uGBlock', 'uGLine', 'uGLineGlow', 'uCell', 'uAve', 'uSt',
       'uCitySpan', 'uSuburbSpan', 'uGroundRadius',
-      'uWaterMode', 'uTerrainMode', 'uTerrainScale', 'uCoastAngle', 'uTerrainSeed',
+      'uWaterMode', 'uWaterAmt', 'uShoreDist', 'uTerrainMode', 'uTerrainScale', 'uCoastAngle', 'uTerrainSeed',
       'uWorldCurve', 'uPlanetR',
       'uSunDir', 'uFogCol', 'uSunFogCol', 'uFogDensity', 'uFogHeight', 'uHazeSun', 'uSat',
       'uWetness', 'uPoolCol', 'uBillA', 'uLightK',
@@ -306,7 +316,8 @@ export function makeWorld(U) {
     fragmentShader: CLOUD_FRAG,
     uniforms: pick(U, [
       'uCloudCol', 'uSkySunCol', 'uSunDir', 'uFogCol', 'uSunFogCol', 'uHazeSun',
-      'uCloud', 'uCloudType', 'uCloudStyle', 'uSunGlow', 'uTime', 'uSat',
+      'uCloud', 'uCloudType', 'uCloudStyle', 'uCloudSeed', 'uCloudEvol', 'uCloudLac',
+      'uSunGlow', 'uTime', 'uSat',
       'uPoolCol', 'uLightK', 'uWorldCurve', 'uPlanetR',
     ]),
     transparent: true,
@@ -320,10 +331,12 @@ export function makeWorld(U) {
     fragmentShader: TOWER_FRAG,
     uniforms: pick(U, [
       'uSunDir', 'uSunCol', 'uSunK', 'uAmb', 'uAmbG', 'uBaseA', 'uBaseB',
-      'uPal', 'uUsePal', 'uWinDensity', 'uWinGlow', 'uWinA', 'uWinB', 'uWinC',
+      'uPal', 'uUsePal', 'uTint', 'uWinDensity', 'uWinGlow', 'uWinA', 'uWinB', 'uWinC',
       'uEdge', 'uEdgeCol', 'uBandGlow', 'uToon', 'uFlat',
       'uFogCol', 'uSunFogCol', 'uFogDensity', 'uFogHeight', 'uHazeSun', 'uTime', 'uDayPhase', 'uSat',
-      'uBillA', 'uBillB', 'uBillK', 'uBillMono', 'uPoolCol', 'uLightK',
+      'uBillA', 'uBillB', 'uBillK', 'uBillMono',
+      'uSignAmt', 'uMegaWrap', 'uGlyphStyle', 'uSignAnim',
+      'uPoolCol', 'uLightK',
       'uWorldCurve', 'uPlanetR',
     ]),
   });
@@ -391,7 +404,7 @@ export function makeWorld(U) {
     uniforms: pick(U, [
       'uWaterDeep', 'uWaterShallow', 'uSunDir', 'uSkySunCol', 'uFogCol', 'uSunFogCol',
       'uCitySpan', 'uSuburbSpan', 'uGroundRadius',
-      'uWaterMode', 'uTerrainMode', 'uTerrainScale', 'uCoastAngle', 'uTerrainSeed',
+      'uWaterMode', 'uWaterAmt', 'uShoreDist', 'uTerrainMode', 'uTerrainScale', 'uCoastAngle', 'uTerrainSeed',
       'uPoolCol', 'uLightK',
       'uHazeSun', 'uTime', 'uSat', 'uWorldCurve', 'uPlanetR',
     ]),
@@ -403,13 +416,21 @@ export function makeWorld(U) {
   const billMat = new THREE.ShaderMaterial({
     vertexShader: BILL_VERT,
     fragmentShader: BILL_FRAG,
-    uniforms: pick(U, ['uBillA', 'uBillB', 'uBillK', 'uBillMono', 'uTime', 'uLightK', 'uSat', 'uWorldCurve', 'uPlanetR']),
+    uniforms: pick(U, [
+      'uBillA', 'uBillB', 'uBillK', 'uBillMono',
+      'uSignAmt', 'uGlyphStyle', 'uSignAnim',
+      'uTime', 'uLightK', 'uSat', 'uWorldCurve', 'uPlanetR',
+    ]),
   });
 
   const holoMat = new THREE.ShaderMaterial({
     vertexShader: HOLO_VERT,
     fragmentShader: HOLO_FRAG,
-    uniforms: pick(U, ['uBillA', 'uBillB', 'uBillK', 'uBillMono', 'uTime', 'uLightK', 'uSat', 'uWorldCurve', 'uPlanetR']),
+    uniforms: pick(U, [
+      'uBillA', 'uBillB', 'uBillK', 'uBillMono',
+      'uSignAmt', 'uGlyphStyle', 'uSignAnim',
+      'uTime', 'uLightK', 'uSat', 'uWorldCurve', 'uPlanetR',
+    ]),
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
@@ -419,7 +440,7 @@ export function makeWorld(U) {
   const swarmMat = new THREE.ShaderMaterial({
     vertexShader: SWARM_VERT,
     fragmentShader: SWARM_FRAG,
-    uniforms: pick(U, ['uTime', 'uHeightScale', 'uLightK', 'uBillMono', 'uWorldCurve', 'uPlanetR']),
+    uniforms: pick(U, ['uTime', 'uHeightScale', 'uLightK', 'uBillMono', 'uTint', 'uWorldCurve', 'uPlanetR']),
   });
 
   return {
@@ -437,7 +458,7 @@ export function makeLandmarkMaterial(U, hex = '#4a5568', role = 0) {
       uCol: { value: col(hex) },
       uRole: { value: role },
       ...pick(U, [
-        'uSunDir', 'uSunCol', 'uSunK', 'uAmb', 'uAmbG', 'uWinDensity', 'uWinGlow',
+        'uSunDir', 'uSunCol', 'uSunK', 'uAmb', 'uAmbG', 'uTint', 'uWinDensity', 'uWinGlow',
         'uWinA', 'uWinB', 'uWinC', 'uEdge', 'uEdgeCol', 'uBandGlow', 'uToon', 'uFlat',
         'uPoolCol', 'uLightK',
         'uFogCol', 'uSunFogCol', 'uFogDensity', 'uFogHeight', 'uHazeSun', 'uTime', 'uDayPhase', 'uSat',
@@ -487,6 +508,8 @@ export function syncCityEnvironmentUniforms(U, city) {
   if (U.uCitySpan) U.uCitySpan.value = (city.radius || 5) * CELL;
   if (U.uSuburbSpan) U.uSuburbSpan.value = city.suburbSpan || 5200;
   if (U.uWaterMode) U.uWaterMode.value = city.waterMode ?? 0;
+  if (U.uWaterAmt) U.uWaterAmt.value = city.waterAmount ?? 1;
+  if (U.uShoreDist) U.uShoreDist.value = city.shoreDist ?? 1;
   if (U.uTerrainMode) U.uTerrainMode.value = city.terrainMode ?? 0;
   if (U.uTerrainScale) U.uTerrainScale.value = city.terrainScale ?? 1;
   if (U.uCoastAngle) U.uCoastAngle.value = city.coastAngle ?? 0.7;
@@ -504,8 +527,17 @@ export function growCity(
       radius,
       suburbReach,
       waterMode: envOpts.waterMode ?? 0,
+      waterAmount: envOpts.waterAmount ?? 1.0,
+      shoreDist: envOpts.shoreDist ?? 1.0,
       terrainMode: envOpts.terrainMode ?? 0,
       terrainScale: envOpts.terrainScale ?? 1.0,
+      vegCover: envOpts.vegCover ?? 1.0,
+      vegScale: envOpts.vegScale ?? 1.0,
+      transitAmt: envOpts.transitAmt ?? 1.0,
+      maritimeAmt: envOpts.maritimeAmt ?? 1.0,
+      airAmt: envOpts.airAmt ?? 1.0,
+      signAmt: envOpts.signAmt ?? 1.0,
+      megaWrap: envOpts.megaWrap ?? 1.0,
     })
     : generateCity(seed, radius, suburbReach);
   if (envOpts && envOpts.U) syncCityEnvironmentUniforms(envOpts.U, city);
@@ -1103,13 +1135,40 @@ export function buildPlaces(city, U, initialLook = null) {
       // Sculpted botanical/cyber sanctuary: stepped lawn berms, elevated canopy
       // boardwalk ring, glowing reflecting pond, lantern pergolas & conservatory dome
       // (multi-branching procedural trees & sky-connections are populated by buildTrees!)
-      const pond = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.23, r * 0.25, 0.7, 22), galleryMat);
-      pond.position.set(r * 0.18, 1.95, -r * 0.10);
+      const isShowcase = !!pl.showcase;
+      const pondR = r * (isShowcase ? 0.30 : 0.23);
+      const pondX = r * 0.18;
+      const pondZ = -r * 0.10;
+      const pond = new THREE.Mesh(new THREE.CylinderGeometry(pondR, pondR * 1.08, 0.7, 26), galleryMat);
+      pond.position.set(pondX, 1.95, pondZ);
       m.add(pond);
-      const pondRim = new THREE.Mesh(new THREE.TorusGeometry(r * 0.24, 0.85, 6, 26), trimMat);
+      const pondRim = new THREE.Mesh(new THREE.TorusGeometry(pondR * 1.03, 0.95, 6, 30), trimMat);
       pondRim.rotation.x = Math.PI / 2;
-      pondRim.position.set(r * 0.18, 2.25, -r * 0.10);
+      pondRim.position.set(pondX, 2.25, pondZ);
       m.add(pondRim);
+
+      if (isShowcase) {
+        // Grand Conservatory Park: arched Japanese/futurist lagoon footbridge + fountain + twin biodomes + high skywalk!
+        for (let b = 0; b < 9; b++) {
+          const f = (b / 8) * 2 - 1;
+          const bx = pondX + f * pondR * 0.92;
+          const by = 2.6 + (1 - f * f) * 5.2;
+          const deckSeg = new THREE.Mesh(new THREE.BoxGeometry(pondR * 0.25, 0.55, 6.2), secondaryMat);
+          deckSeg.position.set(bx, by, pondZ);
+          deckSeg.rotation.z = -f * 0.24;
+          m.add(deckSeg);
+        }
+        const ftnSpire = new THREE.Mesh(new THREE.ConeGeometry(3.2, 11, 8), trimMat);
+        ftnSpire.position.set(pondX, 7.2, pondZ - pondR * 0.38);
+        m.add(ftnSpire);
+        const dome2 = new THREE.Mesh(new THREE.SphereGeometry(r * 0.14, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), galleryMat);
+        dome2.position.set(-r * 0.36, 1.9, r * 0.24);
+        m.add(dome2);
+        const highWalk = new THREE.Mesh(new THREE.TorusGeometry(r * 0.52, 1.35, 6, 44), trimMat);
+        highWalk.rotation.x = Math.PI / 2;
+        highWalk.position.y = 14.5;
+        m.add(highWalk);
+      }
 
       // Elevated circular canopy skywalk promenade + supporting piers
       const walkRing = new THREE.Mesh(new THREE.TorusGeometry(r * 0.56, 1.65, 6, 36), secondaryMat);
@@ -1128,17 +1187,17 @@ export function buildPlaces(city, U, initialLook = null) {
       }
 
       // Botanical geodesic conservatory dome + radial garden paths
-      const dome = new THREE.Mesh(new THREE.SphereGeometry(r * 0.20, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), galleryMat);
-      dome.position.set(-r * 0.22, 1.9, -r * 0.18);
+      const dome = new THREE.Mesh(new THREE.SphereGeometry(r * (isShowcase ? 0.24 : 0.20), 18, 12, 0, Math.PI * 2, 0, Math.PI / 2), galleryMat);
+      dome.position.set(-r * 0.24, 1.9, -r * 0.20);
       m.add(dome);
-      const domeHalo = new THREE.Mesh(new THREE.TorusGeometry(r * 0.205, 0.48, 6, 24), trimMat);
+      const domeHalo = new THREE.Mesh(new THREE.TorusGeometry(r * (isShowcase ? 0.245 : 0.205), 0.55, 6, 28), trimMat);
       domeHalo.rotation.x = Math.PI / 2;
-      domeHalo.position.set(-r * 0.22, 2.15, -r * 0.18);
+      domeHalo.position.set(-r * 0.24, 2.15, -r * 0.20);
       m.add(domeHalo);
-      for (let i = 0; i < 5; i++) {
-        const slab = new THREE.Mesh(new THREE.BoxGeometry(r * 0.56, 0.75, 4.2), primaryMat);
-        const a = i * 1.256 + seed * 6;
-        slab.position.set(Math.cos(a) * r * 0.36, 1.9, Math.sin(a) * r * 0.36);
+      for (let i = 0; i < 6; i++) {
+        const slab = new THREE.Mesh(new THREE.BoxGeometry(r * 0.62, 0.75, 4.6), primaryMat);
+        const a = i * (Math.PI / 3) + seed * 6;
+        slab.position.set(Math.cos(a) * r * 0.38, 1.9, Math.sin(a) * r * 0.38);
         slab.rotation.y = -a;
         m.add(slab);
       }
@@ -1699,16 +1758,22 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     return ((x ^ (x >>> 16)) >>> 0) / 4294967296;
   };
 
-  // Realistic fleet density weights: ~92.4% sci-fi cars (DeLoreans, Fifth Element cabs, Cyber-Wedges,
-  // Hover-Limos, Spinners), ~4.8% 5-car Maglev Sky-Train chains, ~1.8% patrol helicopters, ~1.0% giant blimps.
-  const weights = [0.30, 0.24, 0.048, 0.16, 0.018, 0.010, 0.10, 0.124];
+  let curTransitAmt = Math.max(0, opts.transitAmt ?? city.transitAmt ?? 1.0);
+  const hasRailCorridors = lanes.some((L) => L.railLoop);
+  // Lower default train share (~1.0% vs previous 4.8%) so cross-city transit feels spaced & purposeful!
+  const trainW = hasRailCorridors && curTransitAmt > 0.01 ? Math.min(0.10, 0.010 * curTransitAmt) : 0;
+  const carScale = (1 - trainW - 0.028) / (0.30 + 0.24 + 0.16 + 0.10 + 0.124);
+  const weights = [
+    0.30 * carScale, 0.24 * carScale, trainW, 0.16 * carScale,
+    0.018, 0.010, 0.10 * carScale, 0.124 * carScale,
+  ];
   const classOf = new Int32Array(total);
   const local = new Int32Array(total);
   const classCount = new Array(nCls).fill(0);
   for (let i = 0; i < total; i++) {
     let cc = 0;
     if (i === 0) cc = 0; // instance 0 is always a DeLorean so veh.mesh[0] is active
-    else if (i < nCls && total >= nCls * 2) cc = i;
+    else if (i < nCls && total >= nCls * 2 && (i !== 2 || trainW > 0)) cc = i;
     else {
       const r = h01(i, 11);
       let acc = 0;
@@ -1716,18 +1781,21 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
         acc += weights[k];
         if (r <= acc) { cc = k; break; }
       }
+      if (cc === 2 && trainW <= 0) cc = 0;
     }
     classOf[i] = cc;
     local[i] = classCount[cc]++;
   }
 
   const curveU = trailMat && trailMat.uniforms ? trailMat.uniforms : null;
+  const uTintRef = (opts.U && opts.U.uTint) || (curveU && curveU.uTint) || { value: 0.72 };
   const bodyMat = new THREE.ShaderMaterial({
     vertexShader: VEHICLE_VERT,
     fragmentShader: VEHICLE_FRAG,
     uniforms: {
       uLightK: (curveU && curveU.uLightK) || { value: 1 },
       uBillMono: { value: 0 },
+      uTint: uTintRef,
       uWorldCurve: (curveU && curveU.uWorldCurve) || { value: 0 },
       uPlanetR: (curveU && curveU.uPlanetR) || { value: 2100 },
     },
@@ -2267,17 +2335,19 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     const tx = tmp.dx * sign;
     const tz = tmp.dz * sign;
     const isDeck0 = (L.nominalLayer || L.layer) === 'ground';
-    // Gentle micro-drift on air lanes; practically zero on directed street corridors so turns stay crisp!
-    const wAmp = L.directed ? (isDeck0 ? 0.08 : 0.35) : (isDeck0 ? 0.22 : Math.min(4.5, V.weaveA * 0.22));
+    // Gentle micro-drift on air lanes; zero lateral weave on rail tracks!
+    const wAmp = L.railLoop ? 0 : (L.directed ? (isDeck0 ? 0.08 : 0.35) : (isDeck0 ? 0.22 : Math.min(4.5, V.weaveA * 0.22)));
     const wArg = elTime * 0.26 + phase[i];
     const weave = Math.sin(wArg) * wAmp;
     const nx = -tz;
     const nz = tx;
-    out.x = tmp.x + nx * (weave + latOf[i]);
-    out.z = tmp.z + nz * (weave + latOf[i]);
-    out.y = isDeck0
-      ? Math.max(5.2, laneY(L, tt))
-      : (laneY(L, tt) + vOf[i]) * curHeightScale + bobOff;
+    out.x = tmp.x + nx * (weave + (L.railLoop ? 0 : latOf[i]));
+    out.z = tmp.z + nz * (weave + (L.railLoop ? 0 : latOf[i]));
+    out.y = L.railLoop
+      ? (laneY(L, tt) + 2.2)
+      : (isDeck0
+        ? Math.max(5.2, laneY(L, tt))
+        : (laneY(L, tt) + vOf[i]) * curHeightScale + bobOff);
     out.len = tmp.len;
     out.tt = tt;
     out.closed = (L.nextIdx !== undefined) || (nextLane[i] >= 0) || (prevLane[i] >= 0);
@@ -2397,9 +2467,9 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     const tz = tmp.dz * sign;
     const nx = -tz;
     const nz = tx;
-    const px = tmp.x + nx * latOf[i];
-    const pz = tmp.z + nz * latOf[i];
-    const py = (laneY(curL, curT) + vOf[i]) * curHeightScale;
+    const px = tmp.x + nx * (curL.railLoop ? 0 : latOf[i]);
+    const pz = tmp.z + nz * (curL.railLoop ? 0 : latOf[i]);
+    const py = curL.railLoop ? (laneY(curL, curT) + 2.2) : (laneY(curL, curT) + vOf[i]) * curHeightScale;
     const yaw = Math.atan2(-tz, tx);
     p.set(px, py, pz);
     e.set(0, yaw, 0, 'YXZ');
@@ -2484,6 +2554,8 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     if (collision && dt > 0) applyCollision(n);
     for (let i = 0; i < n; i++) {
       const cc = classOf[i];
+      if (cc === 2 && curTransitAmt <= 0.01) continue;
+      if (cc === 2 && curTransitAmt < 1.0 && local[i] >= Math.max(1, Math.ceil(classCount[2] * curTransitAmt))) continue;
       const V = VEHICLE_CLASSES[cc];
       const L = lanes[laneIdx[i]];
       const ph = phase[i];
@@ -2641,6 +2713,7 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     get activeCount() { return lastActiveCount; },
     update,
     setPalette,
+    setTransitAmt(amt) { curTransitAmt = Math.max(0, Number(amt) || 0); },
     get collision() { return collision; },
     setCollision(on) { collision = !!on; },
   };
@@ -2777,9 +2850,14 @@ export function makeLightPools(city, poolMat) {
 export function buildWater(city, waterMat) {
   const group = new THREE.Group();
   const rings = 6;
+  const tagAnalytical = (geo, val) => {
+    const vCount = geo.getAttribute('position').count;
+    const arr = new Float32Array(vCount).fill(val);
+    geo.setAttribute('aAnalytical', new THREE.BufferAttribute(arr, 1));
+  };
   for (const w of city.water) {
     if (w.analytical && w.kind === 'ocean') {
-      // Subdivided polar sea sector at y = 0.25m (GROUND_VERT carves smooth beaches, coves & islands)
+      // Subdivided polar sea sector at y = -0.22m (strictly below y=0 streets + WATER_FRAG discards cDist > 0 so land NEVER floods!)
       const radRings = 44;
       const angSegs = 76;
       const maxR = w.r || 13500;
@@ -2801,7 +2879,7 @@ export function buildWater(city, waterMat) {
           x = ca * uMin - sa * v;
           z = sa * uMin + ca * v;
         }
-        return [x, 0.25, z];
+        return [x, -0.22, z];
       };
       for (let ri = 0; ri < radRings; ri++) {
         const r0 = ri / radRings;
@@ -2821,6 +2899,7 @@ export function buildWater(city, waterMat) {
       }
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+      tagAnalytical(geo, 1.0);
       geo.computeVertexNormals();
       const mesh = new THREE.Mesh(geo, waterMat);
       mesh.frustumCulled = false;
@@ -2829,7 +2908,7 @@ export function buildWater(city, waterMat) {
     }
 
     if (w.analytical && w.kind === 'lake') {
-      // Subdivided elliptical Great Crater Lake sheet at y = 0.25m
+      // Subdivided elliptical Great Crater Lake sheet at y = -0.22m (discarded on cDist > 0 land!)
       const radRings = 24;
       const angSegs = 48;
       const rad = (w.r || 1800) * 1.18;
@@ -2845,17 +2924,18 @@ export function buildWater(city, waterMat) {
           const ax1 = w.x + Math.cos(a0) * r1, az1 = w.z + Math.sin(a0) * r1 * 1.25;
           const bx1 = w.x + Math.cos(a1) * r1, bz1 = w.z + Math.sin(a1) * r1 * 1.25;
           if (ri === 0) {
-            pos.push(ax1, 0.25, az1, bx1, 0.25, bz1, w.x, 0.25, w.z);
+            pos.push(ax1, -0.22, az1, bx1, -0.22, bz1, w.x, -0.22, w.z);
           } else {
             pos.push(
-              ax1, 0.25, az1, bx1, 0.25, bz1, ax0, 0.25, az0,
-              bx1, 0.25, bz1, bx0, 0.25, bz0, ax0, 0.25, az0
+              ax1, -0.22, az1, bx1, -0.22, bz1, ax0, -0.22, az0,
+              bx1, -0.22, bz1, bx0, -0.22, bz0, ax0, -0.22, az0
             );
           }
         }
       }
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+      tagAnalytical(geo, 1.0);
       geo.computeVertexNormals();
       const mesh = new THREE.Mesh(geo, waterMat);
       mesh.frustumCulled = false;
@@ -2867,7 +2947,7 @@ export function buildWater(city, waterMat) {
       // Winding river ribbon: quad-strip between leftBank[0..half-1] and rightBank[half-1..0]
       const halfN = w.pts.length / 2;
       const pos = [];
-      const wy = 1.6;
+      const wy = 1.15;
       for (let i = 0; i < halfN - 1; i++) {
         const [lx0, lz0] = w.pts[i];
         const [lx1, lz1] = w.pts[i + 1];
@@ -2884,6 +2964,7 @@ export function buildWater(city, waterMat) {
       }
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+      tagAnalytical(geo, 0.0);
       geo.computeVertexNormals();
       const mesh = new THREE.Mesh(geo, waterMat);
       mesh.frustumCulled = false;
@@ -2903,17 +2984,18 @@ export function buildWater(city, waterMat) {
         const ax1 = w.x + (x1 - w.x) * t1, az1 = w.z + (z1 - w.z) * t1;
         const bx1 = w.x + (x2 - w.x) * t1, bz1 = w.z + (z2 - w.z) * t1;
         if (rIdx === 0) {
-          pos.push(ax1, 2.2, az1, bx1, 2.2, bz1, w.x, 2.2, w.z);
+          pos.push(ax1, 1.35, az1, bx1, 1.35, bz1, w.x, 1.35, w.z);
         } else {
           pos.push(
-            ax1, 2.2, az1, bx1, 2.2, bz1, ax0, 2.2, az0,
-            bx1, 2.2, bz1, bx0, 2.2, bz0, ax0, 2.2, az0
+            ax1, 1.35, az1, bx1, 1.35, bz1, ax0, 1.35, az0,
+            bx1, 1.35, bz1, bx0, 1.35, bz0, ax0, 1.35, az0
           );
         }
       }
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+    tagAnalytical(geo, 0.0);
     geo.computeVertexNormals();
     const mesh = new THREE.Mesh(geo, waterMat);
     mesh.frustumCulled = false;
@@ -3537,7 +3619,42 @@ export function buildTrees(city, U = null) {
     applyVisibilityAndColors();
   }
 
-  return { group, organic, cyber, linkCount: links.length, setNature, setTreeMode };
+  let curVegScale = Math.max(0.25, Math.min(5.0, city.vegScale ?? 1.0));
+  function setScale(vegScale = 1.0) {
+    curVegScale = Math.max(0.25, Math.min(5.0, Number(vegScale) || 1.0));
+    const initScale = Math.max(0.25, city.vegScale ?? 1.0);
+    for (let i = 0; i < treeList.length; i++) {
+      const tr = treeList[i];
+      const baseY = tr.y || 0;
+      const isHero = tr.role === 'park-hero';
+      // Avenue & park trees scale smoothly from saplings (0.4x) up to giant bio-arcology supertrees (4.5x)!
+      const effMul = isHero
+        ? (curVegScale / initScale)
+        : curVegScale;
+      const hScaled = tr.h * effMul;
+      const spread = hScaled * (isHero ? 1.16 : 0.96);
+      const yaw = tr.seed * Math.PI * 2;
+      const sway = (tr.seed - 0.5) * 0.08;
+      e.set(sway, yaw, sway * 0.7);
+      q.setFromEuler(e);
+      p.set(tr.x, baseY, tr.z);
+      s.set(spread, hScaled, spread);
+      m.compose(p, q, s);
+      trunkO.setMatrixAt(i, m);
+      canopyO.setMatrixAt(i, m);
+      trunkC.setMatrixAt(i, m);
+      canopyC.setMatrixAt(i, m);
+      glowC.setMatrixAt(i, m);
+    }
+    trunkO.instanceMatrix.needsUpdate = true;
+    canopyO.instanceMatrix.needsUpdate = true;
+    trunkC.instanceMatrix.needsUpdate = true;
+    canopyC.instanceMatrix.needsUpdate = true;
+    glowC.instanceMatrix.needsUpdate = true;
+  }
+  if (Math.abs(curVegScale - 1.0) > 0.02) setScale(curVegScale);
+
+  return { group, organic, cyber, linkCount: links.length, setNature, setTreeMode, setScale };
 }
 
 /**
@@ -3832,8 +3949,21 @@ export function applyLook(U, look, tune = { win: 1, glow: 1, fog: 1 }) {
   set(U.uBeaconCol.value, sig.beacon || (look.tower.winC === '#000000' ? look.accent : look.tower.winC));
   set(U.uWaterDeep.value, sig.waterDeep || look.sky.zen);
   set(U.uWaterShallow.value, sig.waterShallow || look.sky.hor);
+  if (U.uTint) U.uTint.value = tune.tint ?? look.defTint ?? 0.72;
   if (tune.cloudStyle !== undefined) U.uCloudStyle.value = tune.cloudStyle;
   if (tune.cloudType !== undefined && U.uCloudType) U.uCloudType.value = tune.cloudType;
+  if (tune.cloudSeed !== undefined && U.uCloudSeed) U.uCloudSeed.value = tune.cloudSeed;
+  if (tune.cloudEvol !== undefined && U.uCloudEvol) U.uCloudEvol.value = tune.cloudEvol;
+  if (tune.cloudLac !== undefined && U.uCloudLac) U.uCloudLac.value = tune.cloudLac;
+  if (tune.signAmt !== undefined && U.uSignAmt) U.uSignAmt.value = tune.signAmt;
+  if (tune.megaWrap !== undefined && U.uMegaWrap) U.uMegaWrap.value = tune.megaWrap;
+  if (tune.glyphStyle !== undefined && U.uGlyphStyle) U.uGlyphStyle.value = tune.glyphStyle;
+  if (tune.signAnim !== undefined && U.uSignAnim) U.uSignAnim.value = tune.signAnim;
+  if (tune.clouds !== undefined) {
+    const clTune = Math.max(0, tune.clouds);
+    const baseCloud = (look.sky.cloud === 0 && clTune > 1.02) ? 0.34 : look.sky.cloud;
+    U.uCloud.value = clTune <= 0.001 ? 0 : baseCloud * clTune;
+  }
 
   return { accent: look.accent, post: look.post, grade: look.grade };
 }
@@ -3967,12 +4097,20 @@ export function applyTime(U, look, hours = 12, tune = { lights: 1, glow: 1 }) {
   stars *= 1 - 0.8 * clamp01(starRef - starBoost);
   U.uStars.value = stars;
 
-  // parametric atmosphere & cloud cover / cloud type knobs
-  // Ensure even looks authored with `look.sky.cloud === 0` (e.g. Tron / Abstract) can show clouds when user raises cover > 1!
-  const baseCloud = Math.max(look.sky.cloud, (tune.clouds ?? 1) > 1.05 ? 0.32 : look.sky.cloud);
-  U.uCloud.value = baseCloud * (tune.clouds ?? 1);
+  // parametric atmosphere & cloud cover / cloud type / 4D cloud evolution knobs
+  const clTune = Math.max(0, tune.clouds ?? 1);
+  const baseCloud = (look.sky.cloud === 0 && clTune > 1.02) ? 0.34 : look.sky.cloud;
+  U.uCloud.value = clTune <= 0.001 ? 0 : baseCloud * clTune;
   if (tune.cloudType !== undefined && U.uCloudType) U.uCloudType.value = tune.cloudType;
   if (tune.cloudStyle !== undefined) U.uCloudStyle.value = tune.cloudStyle;
+  if (tune.cloudSeed !== undefined && U.uCloudSeed) U.uCloudSeed.value = tune.cloudSeed;
+  if (tune.cloudEvol !== undefined && U.uCloudEvol) U.uCloudEvol.value = tune.cloudEvol;
+  if (tune.cloudLac !== undefined && U.uCloudLac) U.uCloudLac.value = tune.cloudLac;
+  if (tune.tint !== undefined && U.uTint) U.uTint.value = tune.tint;
+  if (tune.signAmt !== undefined && U.uSignAmt) U.uSignAmt.value = tune.signAmt;
+  if (tune.megaWrap !== undefined && U.uMegaWrap) U.uMegaWrap.value = tune.megaWrap;
+  if (tune.glyphStyle !== undefined && U.uGlyphStyle) U.uGlyphStyle.value = tune.glyphStyle;
+  if (tune.signAnim !== undefined && U.uSignAnim) U.uSignAnim.value = tune.signAnim;
   U.uHaze.value = look.sky.haze * (tune.haze ?? 1);
   U.uSunGlow.value = 0.65 * (tune.sun ?? 1) * Math.max(0.08, 0.6 + cur.warm * 0.8 + cur.night * 0.1 - cur.deep * 0.15);
   U.uSat.value = (tune.sat ?? 1) * (1 + cur.warm * 0.12);
@@ -3991,3 +4129,880 @@ export function applyTime(U, look, hours = 12, tune = { lights: 1, glow: 1 }) {
     deep: cur.deep,
   };
 }
+
+export const GLYPH_STYLE_NAMES = [
+  'Hybrid Linear-Synth',
+  'Minoan Linear A/B',
+  'Cyber-Synth Sigils',
+];
+
+/* =====================================================================
+ * Phase 12 3D World Infrastructure Builders:
+ *   1. Elevated Multi-Line Public Transit Viaducts & Stations
+ *   2. Architectural River Bridges (Cable-Stayed, Tied-Arch, Suspension)
+ *   3. Deepwater Harbor, Piers, Cranes, Cruise Liners & Container Ships
+ *   4. Air / Orbital Spaceport Megacomplex + Animated Flights & Rockets
+ * ===================================================================== */
+
+export function buildTransitInfrastructure(city, U, lampMat = null) {
+  const group = new THREE.Group();
+  const transit = city.transit;
+  if (!transit || !transit.active || !Array.isArray(transit.lines) || !transit.lines.length) {
+    group.setLook = () => {};
+    return group;
+  }
+
+  const guideMat = makeLandmarkMaterial(U, '#2c3546', 1);
+  const pierMat = makeLandmarkMaterial(U, '#3b4456', 0);
+  const stationMat = makeLandmarkMaterial(U, '#506078', 2);
+  const lineGlowMats = transit.lines.map((ln) => makeCurvedBasicMaterial(U, ln.color || '#53d9ff'));
+
+  const beamBoxes = [];
+  const pierBoxes = [];
+  const lampPts = [];
+  const lampPhases = [];
+  const lampSizes = [];
+
+  for (let lIdx = 0; lIdx < transit.lines.length; lIdx++) {
+    const ln = transit.lines[lIdx];
+    const yG = ln.y;
+    const glowMat = lineGlowMats[lIdx];
+
+    for (let s = 0; s < ln.segments.length; s++) {
+      const sg = ln.segments[s];
+      const steps = sg.straight ? Math.max(4, Math.ceil(Math.hypot(sg.x2 - sg.x1, sg.z2 - sg.z1) / 96)) : 6;
+      for (let k = 0; k < steps; k++) {
+        const t0 = k / steps;
+        const t1 = (k + 1) / steps;
+        const u0 = 1 - t0, u1 = 1 - t1;
+        const x0 = u0 * u0 * sg.x1 + 2 * u0 * t0 * sg.cx + t0 * t0 * sg.x2;
+        const z0 = u0 * u0 * sg.z1 + 2 * u0 * t0 * sg.cz + t0 * t0 * sg.z2;
+        const x1 = u1 * u1 * sg.x1 + 2 * u1 * t1 * sg.cx + t1 * t1 * sg.x2;
+        const z1 = u1 * u1 * sg.z1 + 2 * u1 * t1 * sg.cz + t1 * t1 * sg.z2;
+        const segLen = Math.hypot(x1 - x0, z1 - z0) || 1;
+        const mx = (x0 + x1) * 0.5;
+        const mz = (z0 + z1) * 0.5;
+        const rot = Math.atan2(x1 - x0, z1 - z0);
+        beamBoxes.push({ x: mx, y: yG - 0.7, z: mz, w: 5.6, h: 1.35, d: segLen + 0.6, rot });
+
+        const strip = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.36, segLen + 0.4), glowMat);
+        strip.position.set(mx, yG - 0.15, mz);
+        strip.rotation.y = rot;
+        strip.frustumCulled = false;
+        group.add(strip);
+
+        if (sg.straight && yG < 90 && k > 0) {
+          pierBoxes.push({ x: x0, y: yG * 0.5, z: z0, w: 2.3, h: yG - 0.8, d: 2.3, rot });
+        }
+      }
+    }
+  }
+
+  const mkInst = (list, mat) => {
+    if (!list.length) return;
+    const geo = new THREE.BoxGeometry(1, 1, 1);
+    const mesh = new THREE.InstancedMesh(geo, mat, list.length);
+    mesh.frustumCulled = false;
+    const m = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const p = new THREE.Vector3();
+    const s = new THREE.Vector3();
+    const yAx = new THREE.Vector3(0, 1, 0);
+    for (let i = 0; i < list.length; i++) {
+      const b = list[i];
+      p.set(b.x, b.y, b.z);
+      q.setFromAxisAngle(yAx, b.rot || 0);
+      s.set(b.w, b.h, b.d);
+      m.compose(p, q, s);
+      mesh.setMatrixAt(i, m);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    group.add(mesh);
+  };
+  mkInst(beamBoxes, guideMat);
+  mkInst(pierBoxes, pierMat);
+
+  // Elevated glass-canopy Transit Stations
+  for (let i = 0; i < (transit.stations || []).length; i++) {
+    const st = transit.stations[i];
+    const stGroup = new THREE.Group();
+    stGroup.position.set(st.x, st.y, st.z);
+    stGroup.rotation.y = st.rot;
+
+    const platform = new THREE.Mesh(new THREE.BoxGeometry(16.5, 1.5, st.len), pierMat);
+    platform.position.y = -0.3;
+    stGroup.add(platform);
+
+    const canopy = new THREE.Mesh(new THREE.CylinderGeometry(8.6, 9.2, st.len * 0.92, 12, 1, false, 0, Math.PI), stationMat);
+    canopy.rotation.z = Math.PI * 0.5;
+    canopy.rotation.y = Math.PI * 0.5;
+    canopy.position.y = 4.6;
+    stGroup.add(canopy);
+
+    const glowMat = lineGlowMats[st.lineId % lineGlowMats.length] || lineGlowMats[0];
+    for (const sx of [-1, 1]) {
+      const fascia = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.7, st.len * 0.94), glowMat);
+      fascia.position.set(sx * 8.4, 3.2, 0);
+      stGroup.add(fascia);
+    }
+    stGroup.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
+    group.add(stGroup);
+
+    const sn = Math.sin(st.rot), cs = Math.cos(st.rot);
+    for (let k = -2; k <= 2; k++) {
+      const offZ = k * 9.0;
+      lampPts.push(st.x + sn * offZ, st.y + 4.2, st.z + cs * offZ);
+      lampPhases.push((i * 0.23 + k * 0.11 + 1) % 1);
+      lampSizes.push(3.2);
+    }
+  }
+
+  if (lampMat && lampPts.length) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(lampPts), 3));
+    g.setAttribute('aPhase', new THREE.BufferAttribute(new Float32Array(lampPhases), 1));
+    g.setAttribute('aSize', new THREE.BufferAttribute(new Float32Array(lampSizes), 1));
+    const pts = new THREE.Points(g, lampMat);
+    pts.frustumCulled = false;
+    group.add(pts);
+  }
+
+  group.setLook = (look) => {
+    const pal = computeSpecialPalette(look, U, 0.37);
+    guideMat.uniforms.uCol.value.copy(pal.secondary);
+    pierMat.uniforms.uCol.value.copy(pal.pad);
+    stationMat.uniforms.uCol.value.copy(pal.gallery);
+  };
+  return group;
+}
+
+export function buildBridges(city, U, beaconMat = null, lampMat = null) {
+  const group = new THREE.Group();
+  const bridges = city.bridges || [];
+  if (!bridges.length) {
+    group.setLook = () => {};
+    return group;
+  }
+
+  const deckMat = makeLandmarkMaterial(U, '#384152', 0);
+  const towerMat = makeLandmarkMaterial(U, '#bfc8d6', 1);
+  const cableMat = makeCurvedBasicMaterial(U, '#dce6f4');
+  const trimMat = makeCurvedBasicMaterial(U, '#ffb35c');
+
+  const beaconPos = [];
+  const beaconPh = [];
+  const beaconSz = [];
+  const lampPos = [];
+  const lampPh = [];
+  const lampSz = [];
+
+  const addCableSeg = (parent, x0, y0, z0, x1, y1, z1, r = 0.24) => {
+    const g = makeBranchSegmentGeo(x0, y0, z0, x1, y1, z1, r, r, 4);
+    const mesh = new THREE.Mesh(g, cableMat);
+    mesh.frustumCulled = false;
+    parent.add(mesh);
+  };
+
+  for (let bIdx = 0; bIdx < bridges.length; bIdx++) {
+    const br = bridges[bIdx];
+    const bg = new THREE.Group();
+    bg.position.set(br.cx, 0, br.cz);
+    bg.rotation.y = br.rot;
+
+    const halfSpan = br.span * 0.5;
+    const hw = br.deckW * 0.5;
+    const yD = br.yDeck;
+    const tH = br.towerH;
+
+    // Main roadway deck + glowing edge strips + approach ramps sloping gently to dry banks
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(br.deckW, 1.8, br.span), deckMat);
+    deck.position.y = yD;
+    bg.add(deck);
+    for (const sx of [-1, 1]) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.9, br.span), trimMat);
+      rail.position.set(sx * (hw - 0.4), yD + 1.1, 0);
+      bg.add(rail);
+    }
+    const rampLen = 44;
+    const dropY = Math.max(2, yD - (br.bankY || 0));
+    const rampPitch = Math.atan2(dropY, rampLen);
+    const rampHyp = Math.hypot(rampLen, dropY);
+    for (const sz of [-1, 1]) {
+      const ramp = new THREE.Mesh(new THREE.BoxGeometry(br.deckW, 1.6, rampHyp), deckMat);
+      ramp.position.set(0, yD - dropY * 0.5, sz * (halfSpan + rampLen * 0.5 - 1));
+      ramp.rotation.x = sz * rampPitch;
+      bg.add(ramp);
+    }
+
+    if (br.kind === 'tied-arch') {
+      // Twin sweeping parabolic steel arches + vertical hanger cables
+      const archSegs = 14;
+      const archSpan = br.span * 0.78;
+      const archRise = tH - yD;
+      for (const sx of [-1, 1]) {
+        const ax = sx * (hw - 0.8);
+        for (let s = 0; s < archSegs; s++) {
+          const f0 = (s / archSegs) * 2 - 1;
+          const f1 = ((s + 1) / archSegs) * 2 - 1;
+          const z0 = f0 * archSpan * 0.5;
+          const z1 = f1 * archSpan * 0.5;
+          const y0 = yD + archRise * (1 - f0 * f0);
+          const y1 = yD + archRise * (1 - f1 * f1);
+          const segG = makeBranchSegmentGeo(ax, y0, z0, ax, y1, z1, 1.15, 1.15, 6);
+          bg.add(new THREE.Mesh(segG, towerMat));
+          if (s > 0) addCableSeg(bg, ax, yD + 0.8, z0, ax, y0, z0, 0.20);
+        }
+      }
+    } else if (br.kind === 'suspension') {
+      // Twin portal suspension towers + catenary main cables + vertical suspenders
+      const tz = halfSpan * 0.46;
+      for (const sz of [-1, 1]) {
+        for (const sx of [-1, 1]) {
+          const leg = new THREE.Mesh(new THREE.BoxGeometry(2.6, tH + 8, 3.0), towerMat);
+          leg.position.set(sx * (hw + 0.6), (tH - 8) * 0.5, sz * tz);
+          bg.add(leg);
+        }
+        const strut1 = new THREE.Mesh(new THREE.BoxGeometry(br.deckW + 3.2, 2.4, 2.6), towerMat);
+        strut1.position.set(0, tH - 3, sz * tz);
+        bg.add(strut1);
+        const strut2 = new THREE.Mesh(new THREE.BoxGeometry(br.deckW + 3.2, 2.0, 2.4), towerMat);
+        strut2.position.set(0, yD + (tH - yD) * 0.52, sz * tz);
+        bg.add(strut2);
+      }
+      const cSegs = 16;
+      for (const sx of [-1, 1]) {
+        const cxCab = sx * (hw + 0.6);
+        for (let s = 0; s < cSegs; s++) {
+          const f0 = (s / cSegs) * 2 - 1;
+          const f1 = ((s + 1) / cSegs) * 2 - 1;
+          const z0 = f0 * tz;
+          const z1 = f1 * tz;
+          const y0 = yD + 3.5 + (tH - yD - 4.5) * f0 * f0;
+          const y1 = yD + 3.5 + (tH - yD - 4.5) * f1 * f1;
+          addCableSeg(bg, cxCab, y0, z0, cxCab, y1, z1, 0.42);
+          if (s > 0) addCableSeg(bg, cxCab, yD + 0.8, z0, cxCab, y0, z0, 0.18);
+        }
+        // Backstays from tower tops to riverbank anchorages
+        addCableSeg(bg, cxCab, tH - 1, -tz, cxCab, yD + 1, -halfSpan, 0.42);
+        addCableSeg(bg, cxCab, tH - 1, tz, cxCab, yD + 1, halfSpan, 0.42);
+      }
+    } else {
+      // Iconic Cable-Stayed Bridge: twin H-pylons + harp fan of stay cables!
+      const tz = halfSpan * 0.42;
+      for (const sz of [-1, 1]) {
+        for (const sx of [-1, 1]) {
+          const leg = new THREE.Mesh(new THREE.BoxGeometry(2.8, tH + 8, 3.4), towerMat);
+          leg.position.set(sx * (hw + 0.7), (tH - 8) * 0.5, sz * tz);
+          bg.add(leg);
+          for (let c = 1; c <= 5; c++) {
+            const anchorY = yD + (tH - yD) * (0.48 + c * 0.095);
+            const deckOff = (c / 5) * tz * 0.92;
+            addCableSeg(bg, sx * (hw + 0.7), anchorY, sz * tz, sx * (hw - 0.3), yD + 0.9, sz * tz - sz * deckOff, 0.20);
+            addCableSeg(bg, sx * (hw + 0.7), anchorY, sz * tz, sx * (hw - 0.3), yD + 0.9, sz * tz + sz * deckOff * 0.95, 0.20);
+          }
+        }
+        const cross = new THREE.Mesh(new THREE.BoxGeometry(br.deckW + 3.6, 2.5, 2.8), towerMat);
+        cross.position.set(0, tH - 5, sz * tz);
+        bg.add(cross);
+      }
+    }
+
+    bg.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
+    group.add(bg);
+
+    // World-space pylon aviation beacons & bridge deck streetlamps
+    const sn = Math.sin(br.rot), cs = Math.cos(br.rot);
+    if (br.kind !== 'tied-arch') {
+      const tz = halfSpan * (br.kind === 'suspension' ? 0.46 : 0.42);
+      for (const sz of [-1, 1]) {
+        beaconPos.push(br.cx + sn * (sz * tz), tH + 1.5, br.cz + cs * (sz * tz));
+        beaconPh.push((bIdx * 0.31 + (sz > 0 ? 0.5 : 0)) % 1);
+        beaconSz.push(4.5);
+      }
+    }
+    const nLamps = Math.max(6, Math.round(br.span / 28));
+    for (let l = 0; l <= nLamps; l++) {
+      const lz = -halfSpan + (l / nLamps) * br.span;
+      lampPos.push(br.cx + sn * lz, yD + 3.4, br.cz + cs * lz);
+      lampPh.push((l * 0.17 + br.seed) % 1);
+      lampSz.push(2.8);
+    }
+  }
+
+  if (beaconMat && beaconPos.length) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(beaconPos), 3));
+    g.setAttribute('aPhase', new THREE.BufferAttribute(new Float32Array(beaconPh), 1));
+    g.setAttribute('aSize', new THREE.BufferAttribute(new Float32Array(beaconSz), 1));
+    const pts = new THREE.Points(g, beaconMat);
+    pts.frustumCulled = false;
+    group.add(pts);
+  }
+  if (lampMat && lampPos.length) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(lampPos), 3));
+    g.setAttribute('aPhase', new THREE.BufferAttribute(new Float32Array(lampPh), 1));
+    g.setAttribute('aSize', new THREE.BufferAttribute(new Float32Array(lampSz), 1));
+    const pts = new THREE.Points(g, lampMat);
+    pts.frustumCulled = false;
+    group.add(pts);
+  }
+
+  group.setLook = (look) => {
+    const pal = computeSpecialPalette(look, U, 0.61);
+    deckMat.uniforms.uCol.value.copy(pal.secondary);
+    towerMat.uniforms.uCol.value.copy(pal.primary).lerp(col('#eef3fa'), 0.35);
+    cableMat.color.copy(pal.primary).lerp(col('#ffffff'), 0.55);
+    trimMat.color.copy(pal.trim);
+  };
+  return group;
+}
+
+export function buildHarbor(city, U, beaconMat = null, lampMat = null) {
+  const group = new THREE.Group();
+  const H = city.harbor;
+  if (!H) {
+    return { group, ships: [], update() {}, setLook() {} };
+  }
+
+  const quayMat = makeLandmarkMaterial(U, '#3e4654', 0);
+  const craneMat = makeLandmarkMaterial(U, '#d95c38', 1);
+  const hullDarkMat = makeLandmarkMaterial(U, '#1e2b3c', 1);
+  const hullRedMat = makeLandmarkMaterial(U, '#8e2d28', 0);
+  const cruiseWhiteMat = makeLandmarkMaterial(U, '#eef2f8', 2);
+  const deckGlowMat = makeCurvedBasicMaterial(U, '#ffe1a6');
+  const glassPoolMat = makeCurvedBasicMaterial(U, '#4ad8ff');
+  const cargoPalette = ['#c94a38', '#2d6fa3', '#d69a2b', '#2f855a', '#6b778d', '#b84b6b'].map(
+    (hex) => makeLandmarkMaterial(U, hex, 0)
+  );
+
+  // 1. Waterfront Seawall Quay Apron + Finger Piers
+  const quay = new THREE.Mesh(new THREE.BoxGeometry(H.quayLen, H.y + 4, 42), quayMat);
+  quay.position.set(H.x - H.outX * 18, (H.y - 2) * 0.5, H.z - H.outZ * 18);
+  quay.rotation.y = H.rot;
+  group.add(quay);
+
+  const lampPos = [];
+  const lampPh = [];
+  const lampSz = [];
+  const beaconPos = [];
+  const beaconPh = [];
+  const beaconSz = [];
+
+  for (let i = 0; i < H.piers.length; i++) {
+    const pr = H.piers[i];
+    const pier = new THREE.Mesh(new THREE.BoxGeometry(pr.wid, pr.y + 3.5, pr.len), quayMat);
+    pier.position.set(pr.x, (pr.y - 1.5) * 0.5, pr.z);
+    pier.rotation.y = pr.rot;
+    group.add(pier);
+
+    if (pr.kind === 'cruise') {
+      // Glass-vaulted Cruise Terminal Concourse on pier root
+      const term = new THREE.Mesh(new THREE.BoxGeometry(pr.wid * 0.86, 12, pr.len * 0.46), cruiseWhiteMat);
+      term.position.set(pr.x - H.outX * pr.len * 0.2, pr.y + 6, pr.z - H.outZ * pr.len * 0.2);
+      term.rotation.y = pr.rot;
+      group.add(term);
+    }
+
+    for (let l = 0; l < 4; l++) {
+      const f = (l / 3) - 0.45;
+      lampPos.push(pr.x + H.outX * pr.len * f, pr.y + 7.5, pr.z + H.outZ * pr.len * f);
+      lampPh.push((i * 0.29 + l * 0.17) % 1);
+      lampSz.push(3.2);
+    }
+  }
+
+  // 2. Portainer Straddle Gantry Cranes
+  for (let i = 0; i < H.cranes.length; i++) {
+    const cr = H.cranes[i];
+    const cg = new THREE.Group();
+    cg.position.set(cr.x, cr.y, cr.z);
+    cg.rotation.y = cr.rot;
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(1.5, cr.h, 1.5), craneMat);
+        leg.position.set(sx * 7.5, cr.h * 0.5, sz * 6.5);
+        cg.add(leg);
+      }
+    }
+    // Horizontal cantileveredwaterside boom extending across ship beam!
+    const boom = new THREE.Mesh(new THREE.BoxGeometry(cr.boom * 1.45, 2.4, 4.2), craneMat);
+    boom.position.set(-cr.boom * 0.28, cr.h * 0.78, 0);
+    cg.add(boom);
+    const apex = new THREE.Mesh(new THREE.BoxGeometry(4.0, cr.h * 0.24, 4.0), craneMat);
+    apex.position.set(0, cr.h * 0.90, 0);
+    cg.add(apex);
+    group.add(cg);
+
+    beaconPos.push(cr.x, cr.y + cr.h + 1.5, cr.z);
+    beaconPh.push((i * 0.37) % 1);
+    beaconSz.push(3.6);
+  }
+
+  // 3. Quay TEU Container Stacks
+  for (let i = 0; i < H.containers.length; i++) {
+    const ct = H.containers[i];
+    for (let t = 0; t < ct.tiers; t++) {
+      const cMat = cargoPalette[Math.floor(((ct.seed * 17 + t * 3) % 1) * cargoPalette.length)];
+      const box = new THREE.Mesh(new THREE.BoxGeometry(5.2, 2.9, 12.6), cMat);
+      box.position.set(ct.x, ct.y + 1.45 + t * 2.95, ct.z);
+      box.rotation.y = ct.rot;
+      group.add(box);
+    }
+  }
+
+  // 4. Marina Pleasure Boats / Yachts
+  const boatMeshes = [];
+  for (let i = 0; i < H.boats.length; i++) {
+    const bt = H.boats[i];
+    const bg = new THREE.Group();
+    const hull = new THREE.Mesh(new THREE.BoxGeometry(bt.len * 0.30, 1.8, bt.len), cruiseWhiteMat);
+    hull.position.y = 0.8;
+    bg.add(hull);
+    const cabin = new THREE.Mesh(new THREE.BoxGeometry(bt.len * 0.22, 1.5, bt.len * 0.42), glassPoolMat);
+    cabin.position.set(0, 2.1, -bt.len * 0.06);
+    bg.add(cabin);
+    bg.position.set(bt.x, bt.y, bt.z);
+    bg.rotation.y = bt.rot;
+    group.add(bg);
+    boatMeshes.push({ mesh: bg, baseY: bt.y, phase: bt.seed * 6.28 });
+  }
+
+  // 5. Heavy Container Ships & Illuminated Luxury Cruise Liners!
+  const buildShipMesh = (sh) => {
+    const sg = new THREE.Group();
+    const L = sh.len;
+    const W = sh.wid;
+
+    if (sh.kind === 'cruise') {
+      // Sleek Ocean Cruise Liner: dark lower hull + 6 illuminated terraced white balcony decks + funnel + pool!
+      const waterline = new THREE.Mesh(new THREE.BoxGeometry(W * 0.96, 4.5, L * 0.88), hullDarkMat);
+      waterline.position.y = 2.0;
+      sg.add(waterline);
+      const bow = new THREE.Mesh(new THREE.ConeGeometry(W * 0.50, L * 0.22, 4), cruiseWhiteMat);
+      bow.rotation.x = Math.PI * 0.5;
+      bow.rotation.y = Math.PI * 0.25;
+      bow.position.set(0, 6.5, L * 0.48);
+      sg.add(bow);
+
+      const mainHull = new THREE.Mesh(new THREE.BoxGeometry(W, 9.0, L * 0.86), cruiseWhiteMat);
+      mainHull.position.y = 8.5;
+      sg.add(mainHull);
+
+      for (let d = 0; d < 5; d++) {
+        const dW = W * (0.94 - d * 0.045);
+        const dL = L * (0.78 - d * 0.055);
+        const dy = 14.2 + d * 3.6;
+        const deckSlab = new THREE.Mesh(new THREE.BoxGeometry(dW, 2.2, dL), cruiseWhiteMat);
+        deckSlab.position.set(0, dy, -L * 0.02);
+        sg.add(deckSlab);
+        // Warm illuminated balcony promenade strip wrapping each cruise deck!
+        const winRibbon = new THREE.Mesh(new THREE.BoxGeometry(dW + 0.35, 1.15, dL * 0.96), deckGlowMat);
+        winRibbon.position.set(0, dy + 1.45, -L * 0.02);
+        sg.add(winRibbon);
+      }
+      // Panoramic forward bridge wings + azure rooftop Lido pool + raked cruise funnel
+      const bridgeWing = new THREE.Mesh(new THREE.BoxGeometry(W * 1.16, 2.8, 7.5), cruiseWhiteMat);
+      bridgeWing.position.set(0, 26.5, L * 0.26);
+      sg.add(bridgeWing);
+      const pool = new THREE.Mesh(new THREE.BoxGeometry(W * 0.38, 0.6, L * 0.16), glassPoolMat);
+      pool.position.set(0, 31.8, L * 0.05);
+      sg.add(pool);
+      const funnel = new THREE.Mesh(new THREE.BoxGeometry(W * 0.26, 13.5, 16), craneMat);
+      funnel.position.set(0, 36.5, -L * 0.14);
+      funnel.rotation.x = -0.22;
+      sg.add(funnel);
+    } else {
+      // Heavy Deepwater Container Ship: anti-fouling red lower hull + dark topsides + colorful TEU cargo bays + aft white bridge!
+      const redBoot = new THREE.Mesh(new THREE.BoxGeometry(W * 0.96, 4.2, L * 0.90), hullRedMat);
+      redBoot.position.y = 1.8;
+      sg.add(redBoot);
+      const darkHull = new THREE.Mesh(new THREE.BoxGeometry(W, 8.6, L * 0.90), hullDarkMat);
+      darkHull.position.y = 7.8;
+      sg.add(darkHull);
+      const bow = new THREE.Mesh(new THREE.ConeGeometry(W * 0.52, L * 0.18, 4), hullDarkMat);
+      bow.rotation.x = Math.PI * 0.5;
+      bow.rotation.y = Math.PI * 0.25;
+      bow.position.set(0, 7.5, L * 0.50);
+      sg.add(bow);
+
+      // 6 cargo bays of multi-colored stacked containers along the main deck
+      const bays = 6;
+      for (let b = 0; b < bays; b++) {
+        const bz = -L * 0.18 + (b / (bays - 1)) * (L * 0.54);
+        const tiers = 3 + ((b + Math.floor(sh.seed * 7)) % 3);
+        for (let colIdx = -1; colIdx <= 1; colIdx++) {
+          const cMat = cargoPalette[(b * 3 + colIdx + 5) % cargoPalette.length];
+          const stackH = tiers * 2.85;
+          const stack = new THREE.Mesh(new THREE.BoxGeometry(W * 0.27, stackH, L * 0.075), cMat);
+          stack.position.set(colIdx * W * 0.29, 12.1 + stackH * 0.5, bz);
+          sg.add(stack);
+        }
+      }
+      // Tall white aft accommodation & navigation bridge tower + funnel
+      const house = new THREE.Mesh(new THREE.BoxGeometry(W * 0.84, 21, 16), cruiseWhiteMat);
+      house.position.set(0, 22.0, -L * 0.30);
+      sg.add(house);
+      const bridgeGlass = new THREE.Mesh(new THREE.BoxGeometry(W * 0.92, 2.6, 8), deckGlowMat);
+      bridgeGlass.position.set(0, 31.2, -L * 0.28);
+      sg.add(bridgeGlass);
+      const stack = new THREE.Mesh(new THREE.BoxGeometry(5.5, 9.5, 8.5), craneMat);
+      stack.position.set(0, 35.0, -L * 0.33);
+      sg.add(stack);
+    }
+    return sg;
+  };
+
+  const activeShips = [];
+  for (let i = 0; i < H.ships.length; i++) {
+    const sh = H.ships[i];
+    const mesh = buildShipMesh(sh);
+    if (sh.docked) {
+      mesh.position.set(sh.x, sh.y, sh.z);
+      mesh.rotation.y = sh.rot;
+    } else {
+      mesh.position.set(sh.cx, sh.y, sh.cz);
+      mesh.rotation.y = Math.atan2(sh.tanX, sh.tanZ);
+    }
+    group.add(mesh);
+    activeShips.push({ spec: sh, mesh });
+  }
+
+  if (beaconMat && beaconPos.length) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(beaconPos), 3));
+    g.setAttribute('aPhase', new THREE.BufferAttribute(new Float32Array(beaconPh), 1));
+    g.setAttribute('aSize', new THREE.BufferAttribute(new Float32Array(beaconSz), 1));
+    const pts = new THREE.Points(g, beaconMat);
+    pts.frustumCulled = false;
+    group.add(pts);
+  }
+  if (lampMat && lampPos.length) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(lampPos), 3));
+    g.setAttribute('aPhase', new THREE.BufferAttribute(new Float32Array(lampPh), 1));
+    g.setAttribute('aSize', new THREE.BufferAttribute(new Float32Array(lampSz), 1));
+    const pts = new THREE.Points(g, lampMat);
+    pts.frustumCulled = false;
+    group.add(pts);
+  }
+
+  group.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
+
+  let elapsed = 0;
+  function update(dt) {
+    elapsed += dt;
+    for (let i = 0; i < boatMeshes.length; i++) {
+      const b = boatMeshes[i];
+      b.mesh.position.y = b.baseY + Math.sin(elapsed * 1.4 + b.phase) * 0.22;
+      b.mesh.rotation.z = Math.sin(elapsed * 1.1 + b.phase) * 0.035;
+    }
+    for (let i = 0; i < activeShips.length; i++) {
+      const { spec, mesh } = activeShips[i];
+      if (spec.docked) {
+        mesh.position.y = spec.y + Math.sin(elapsed * 0.65 + spec.seed * 6) * 0.25;
+        mesh.rotation.z = Math.sin(elapsed * 0.52 + spec.seed * 6) * 0.014;
+      } else {
+        // Smooth oval offshore sea-lane cruise!
+        const omega = spec.speed / Math.max(300, spec.sweepSpan);
+        const ang = elapsed * omega + spec.phase * Math.PI * 2;
+        const along = Math.sin(ang) * spec.sweepSpan;
+        const cross = Math.cos(ang) * 145;
+        const vx = spec.tanX * Math.cos(ang) * spec.sweepSpan - spec.outX * Math.sin(ang) * 145;
+        const vz = spec.tanZ * Math.cos(ang) * spec.sweepSpan - spec.outZ * Math.sin(ang) * 145;
+        const dirSign = spec.speed >= 0 ? 1 : -1;
+        mesh.position.set(
+          spec.cx + spec.tanX * along + spec.outX * cross,
+          spec.y + Math.sin(elapsed * 0.8 + spec.phase * 6) * 0.45,
+          spec.cz + spec.tanZ * along + spec.outZ * cross
+        );
+        mesh.rotation.y = Math.atan2(vx * dirSign, vz * dirSign);
+        mesh.rotation.z = Math.sin(elapsed * 0.6 + spec.phase * 5) * 0.022;
+      }
+    }
+  }
+
+  function setLook(look) {
+    const pal = computeSpecialPalette(look, U, 0.48);
+    quayMat.uniforms.uCol.value.copy(pal.pad).lerp(col('#454f5e'), 0.45);
+    deckGlowMat.color.set((look && look.signals && look.signals.lamp) || '#ffe1a6');
+    glassPoolMat.color.set((look && look.accent) || '#4ad8ff');
+  }
+
+  return { group, ships: activeShips, update, setLook };
+}
+
+export function buildSpaceport(city, U, beaconMat = null, lampMat = null, beamMat = null) {
+  const group = new THREE.Group();
+  const SP = city.spaceport;
+  if (!SP) {
+    return { group, update() {}, setLook() {} };
+  }
+
+  const apronMat = makeLandmarkMaterial(U, '#1c212b', 0);
+  const runwayMat = makeLandmarkMaterial(U, '#12161e', 0);
+  const termMat = makeLandmarkMaterial(U, '#cfd8e6', 2);
+  const metalMat = makeLandmarkMaterial(U, '#8a96a8', 1);
+  const rocketMat = makeLandmarkMaterial(U, '#eef3fa', 1);
+  const markMat = makeCurvedBasicMaterial(U, '#f4f7fb');
+  const edgeGlowMat = makeCurvedBasicMaterial(U, '#53d9ff');
+  const plumeMat = makeCurvedBasicMaterial(U, '#ffb347');
+
+  // 1. Leveled Spaceport Apron Pad
+  const apron = new THREE.Mesh(new THREE.BoxGeometry(SP.halfLen * 1.92, 2.4, SP.halfWid * 1.85), apronMat);
+  apron.position.set(SP.x, SP.y + 0.3, SP.z);
+  apron.rotation.y = SP.rot + Math.PI * 0.5;
+  group.add(apron);
+
+  const beaconPos = [];
+  const beaconPh = [];
+  const beaconSz = [];
+  const lampPos = [];
+  const lampPh = [];
+  const lampSz = [];
+
+  // 2. Twin Illuminated Runways + Centerline Stripes + Approach Strobe Lights
+  for (let rIdx = 0; rIdx < SP.runways.length; rIdx++) {
+    const rw = SP.runways[rIdx];
+    const rg = new THREE.Group();
+    rg.position.set(rw.x, SP.y + 1.65, rw.z);
+    rg.rotation.y = rw.rot + Math.PI * 0.5;
+
+    const strip = new THREE.Mesh(new THREE.BoxGeometry(rw.len, 0.35, rw.wid), runwayMat);
+    rg.add(strip);
+    for (let d = -8; d <= 8; d++) {
+      const dash = new THREE.Mesh(new THREE.BoxGeometry(20, 0.45, 1.4), markMat);
+      dash.position.set(d * 40, 0.08, 0);
+      rg.add(dash);
+    }
+    for (const endSgn of [-1, 1]) {
+      for (let k = -3; k <= 3; k++) {
+        const piano = new THREE.Mesh(new THREE.BoxGeometry(22, 0.48, 2.0), edgeGlowMat);
+        piano.position.set(endSgn * (rw.len * 0.46), 0.1, k * 3.8);
+        rg.add(piano);
+      }
+    }
+    group.add(rg);
+
+    const cs = Math.cos(rw.rot), sn = Math.sin(rw.rot);
+    for (let s = -12; s <= 12; s++) {
+      const lx = s * 30;
+      for (const side of [-1, 1]) {
+        const lz = side * (rw.wid * 0.54);
+        lampPos.push(rw.x + lx * cs - lz * sn, SP.y + 2.4, rw.z + lx * sn + lz * cs);
+        lampPh.push(((s + 12) / 25 + rIdx * 0.5) % 1);
+        lampSz.push(2.8);
+      }
+    }
+  }
+
+  // 3. Swept-Wing Glass Spaceport Terminal + Air-Traffic Control Tower
+  const tm = SP.terminal;
+  const tg = new THREE.Group();
+  tg.position.set(tm.x, SP.y + 1.5, tm.z);
+  tg.rotation.y = tm.rot + Math.PI * 0.5;
+  const concourse = new THREE.Mesh(new THREE.BoxGeometry(tm.w, tm.h, tm.d), termMat);
+  concourse.position.y = tm.h * 0.5;
+  tg.add(concourse);
+  const wingRoof = new THREE.Mesh(new THREE.CylinderGeometry(tm.d * 0.62, tm.d * 0.68, tm.w * 1.08, 12, 1, false, 0, Math.PI), metalMat);
+  wingRoof.rotation.z = Math.PI * 0.5;
+  wingRoof.position.y = tm.h;
+  tg.add(wingRoof);
+  group.add(tg);
+
+  const tw = SP.tower;
+  const atc = new THREE.Group();
+  atc.position.set(tw.x, SP.y + 1.5, tw.z);
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(4.5, 7.2, tw.h, 10), metalMat);
+  shaft.position.y = tw.h * 0.5;
+  atc.add(shaft);
+  const cab = new THREE.Mesh(new THREE.CylinderGeometry(13.5, 9.5, 11, 12), termMat);
+  cab.position.y = tw.h - 3;
+  atc.add(cab);
+  const radarDish = new THREE.Mesh(new THREE.BoxGeometry(14, 3.2, 1.8), edgeGlowMat);
+  radarDish.position.y = tw.h + 6.5;
+  atc.add(radarDish);
+  if (beamMat) {
+    const atcBeam = new THREE.Mesh(beamGeometry(520, 68), beamMat);
+    atcBeam.position.y = tw.h + 7;
+    atcBeam.rotation.z = 1.25;
+    radarDish.add(atcBeam);
+  }
+  group.add(atc);
+  beaconPos.push(tw.x, SP.y + tw.h + 11, tw.z);
+  beaconPh.push(0.15);
+  beaconSz.push(5.5);
+
+  // Helper: sleek futuristic Suborbital Delta-Shuttle mesh
+  const makeShuttleMesh = (scale = 1) => {
+    const sg = new THREE.Group();
+    const fuselage = new THREE.Mesh(new THREE.ConeGeometry(3.2, 34, 8), rocketMat);
+    fuselage.rotation.x = Math.PI * 0.5;
+    sg.add(fuselage);
+    const deltaWing = new THREE.Mesh(new THREE.BoxGeometry(26, 0.7, 14), metalMat);
+    deltaWing.position.set(0, -0.4, -4);
+    sg.add(deltaWing);
+    const vTail = new THREE.Mesh(new THREE.BoxGeometry(0.8, 7.5, 8.5), metalMat);
+    vTail.position.set(0, 3.8, -11);
+    sg.add(vTail);
+    const burner = new THREE.Mesh(new THREE.CylinderGeometry(1.8, 2.6, 3.5, 8), plumeMat);
+    burner.rotation.x = Math.PI * 0.5;
+    burner.position.set(0, 0, -18.2);
+    sg.add(burner);
+    sg.scale.setScalar(scale);
+    return sg;
+  };
+
+  for (const pk of SP.parked) {
+    const sm = makeShuttleMesh(pk.scale);
+    sm.position.set(pk.x, pk.y + 2.6, pk.z);
+    sm.rotation.y = pk.rot;
+    group.add(sm);
+  }
+
+  // 4. Orbital Launch Pads + Umbilical Gantries + Two-Stage Orbital Rockets!
+  let launchRocket = null;
+  let launchPlume = null;
+  let launchBaseY = SP.y + 5.5;
+  for (let pIdx = 0; pIdx < SP.pads.length; pIdx++) {
+    const pd = SP.pads[pIdx];
+    const pg = new THREE.Group();
+    pg.position.set(pd.x, SP.y + 1.5, pd.z);
+    const padBase = new THREE.Mesh(new THREE.CylinderGeometry(pd.r * 0.78, pd.r, 5.5, 16), metalMat);
+    padBase.position.y = 2.75;
+    pg.add(padBase);
+    const gantry = new THREE.Mesh(new THREE.BoxGeometry(11, pd.gantryH, 11), metalMat);
+    gantry.position.set(16, pd.gantryH * 0.5 + 3, 0);
+    pg.add(gantry);
+    for (let arm = 0; arm < 3; arm++) {
+      const umbilical = new THREE.Mesh(new THREE.BoxGeometry(14, 2.0, 2.6), metalMat);
+      umbilical.position.set(8, 32 + arm * 24, 0);
+      pg.add(umbilical);
+    }
+    group.add(pg);
+
+    // 94m Orbital Starship + Super-Heavy Booster
+    const rg = new THREE.Group();
+    const booster = new THREE.Mesh(new THREE.CylinderGeometry(4.6, 4.8, pd.rocketH * 0.56, 14), metalMat);
+    booster.position.y = pd.rocketH * 0.28;
+    rg.add(booster);
+    const shipBody = new THREE.Mesh(new THREE.CylinderGeometry(4.5, 4.6, pd.rocketH * 0.30, 14), rocketMat);
+    shipBody.position.y = pd.rocketH * 0.71;
+    rg.add(shipBody);
+    const nose = new THREE.Mesh(new THREE.ConeGeometry(4.5, pd.rocketH * 0.16, 14), rocketMat);
+    nose.position.y = pd.rocketH * 0.94;
+    rg.add(nose);
+    for (let f = 0; f < 4; f++) {
+      const fa = (f / 4) * Math.PI * 2 + Math.PI * 0.25;
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(1.1, 12, 5.5), apronMat);
+      fin.position.set(Math.cos(fa) * 5.2, 6, Math.sin(fa) * 5.2);
+      fin.rotation.y = -fa;
+      rg.add(fin);
+    }
+    rg.position.set(pd.x, SP.y + 6.5, pd.z);
+    group.add(rg);
+
+    if (pd.activeLaunch && !launchRocket) {
+      launchRocket = rg;
+      launchBaseY = SP.y + 6.5;
+      const plume = new THREE.Mesh(new THREE.ConeGeometry(7.5, 46, 12), plumeMat);
+      plume.rotation.x = Math.PI;
+      plume.position.y = -22;
+      plume.visible = false;
+      rg.add(plume);
+      launchPlume = plume;
+    }
+
+    beaconPos.push(pd.x + 16, SP.y + pd.gantryH + 6, pd.z);
+    beaconPh.push(0.5 + pIdx * 0.3);
+    beaconSz.push(5.0);
+  }
+
+  // 5. Active Flight Shuttles (Approach -> Touchdown -> Rollout -> Takeoff Climbout!)
+  const flightItems = SP.flights.map((fl) => {
+    const mesh = makeShuttleMesh(fl.scale);
+    group.add(mesh);
+    return { spec: fl, mesh };
+  });
+
+  if (beaconMat && beaconPos.length) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(beaconPos), 3));
+    g.setAttribute('aPhase', new THREE.BufferAttribute(new Float32Array(beaconPh), 1));
+    g.setAttribute('aSize', new THREE.BufferAttribute(new Float32Array(beaconSz), 1));
+    const pts = new THREE.Points(g, beaconMat);
+    pts.frustumCulled = false;
+    group.add(pts);
+  }
+  if (lampMat && lampPos.length) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(lampPos), 3));
+    g.setAttribute('aPhase', new THREE.BufferAttribute(new Float32Array(lampPh), 1));
+    g.setAttribute('aSize', new THREE.BufferAttribute(new Float32Array(lampSz), 1));
+    const pts = new THREE.Points(g, lampMat);
+    pts.frustumCulled = false;
+    group.add(pts);
+  }
+
+  group.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
+
+  let elapsed = 0;
+  function update(dt) {
+    elapsed += dt;
+    radarDish.rotation.y = elapsed * 0.85;
+
+    // Suborbital shuttle runway traffic cycle
+    for (let i = 0; i < flightItems.length; i++) {
+      const { spec, mesh } = flightItems[i];
+      const rw = SP.runways[spec.rwyIdx % SP.runways.length];
+      const cyc = (elapsed * spec.speed + spec.phase) % 1;
+      // uAlong travels from -1100m (final approach) -> 0m (mid-runway) -> +1400m (steep climbout!)
+      const uAlong = -1150 + cyc * 2550;
+      let alt = 4.2;
+      let pitch = 0;
+      if (uAlong < -280) {
+        const f = (-280 - uAlong) / 870;
+        alt = 4.2 + f * f * 240;
+        pitch = 0.14 * f;
+      } else if (uAlong > 260) {
+        const f = (uAlong - 260) / 1140;
+        alt = 4.2 + Math.pow(f, 1.55) * 460;
+        pitch = -0.32 * Math.min(1, f * 1.8);
+      }
+      const cs = Math.cos(rw.rot), sn = Math.sin(rw.rot);
+      mesh.position.set(rw.x + uAlong * cs, SP.y + alt, rw.z + uAlong * sn);
+      mesh.rotation.set(pitch, Math.atan2(cs, sn), 0, 'YXZ');
+    }
+
+    // Periodic Orbital Rocket Launch & Precision Landing Cycle (90s period)
+    if (launchRocket && launchPlume) {
+      const rCyc = (elapsed % 90) / 90;
+      if (rCyc > 0.18 && rCyc < 0.56) {
+        // Liftoff & accelerating orbital ascent!
+        const f = (rCyc - 0.18) / 0.38;
+        launchRocket.position.y = launchBaseY + Math.pow(f, 2.3) * 2600;
+        launchPlume.visible = true;
+        launchPlume.scale.set(1 + Math.sin(elapsed * 28) * 0.12, 0.9 + f * 1.4, 1 + Math.cos(elapsed * 24) * 0.12);
+      } else if (rCyc >= 0.72 && rCyc < 0.92) {
+        // Retro-propulsive vertical landing burn back onto Pad 1!
+        const f = 1 - (rCyc - 0.72) / 0.20;
+        launchRocket.position.y = launchBaseY + Math.pow(f, 1.8) * 900;
+        launchPlume.visible = f > 0.02;
+        launchPlume.scale.set(0.75, 0.65 + f * 0.5, 0.75);
+      } else {
+        launchRocket.position.y = launchBaseY;
+        launchPlume.visible = false;
+      }
+    }
+  }
+
+  function setLook(look) {
+    const pal = computeSpecialPalette(look, U, 0.73);
+    termMat.uniforms.uCol.value.copy(pal.gallery);
+    metalMat.uniforms.uCol.value.copy(pal.secondary).lerp(col('#9aa6b8'), 0.45);
+    edgeGlowMat.color.set((look && look.accent) || '#53d9ff');
+  }
+
+  return { group, update, setLook };
+}
+

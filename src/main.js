@@ -13,9 +13,10 @@ import {
   buildLandmarks, buildBeacons, buildPlaces, makeLamps,
   makeVehicles, makeSearchlights, makeLightPools,
   buildWater, buildBoulevards, buildBillboards, buildTrees, buildSculptures,
-  makeWeather, WEATHER_NAMES, CLOUD_TYPE_NAMES,
+  makeWeather, WEATHER_NAMES, CLOUD_TYPE_NAMES, GLYPH_STYLE_NAMES,
   WATER_MODE_NAMES, TERRAIN_MODE_NAMES, TREE_MODE_NAMES, describeMoonPhase,
   buildSigns, buildHolos,
+  buildTransitInfrastructure, buildBridges, buildHarbor, buildSpaceport,
 } from './scene.js';
 import { makePostProcessor, ART_STYLE_NAMES } from './post.js';
 import { FlyControls } from './controls.js';
@@ -136,6 +137,12 @@ let suburbReach = initialExact
 let waterMode = initialExact
   ? initialExact.waterMode
   : clampInt(params.get('wm'), 0, 4, 1);
+let waterAmount = initialExact
+  ? (initialExact.waterAmount ?? 1)
+  : (params.get('wa') !== null ? clampFloat(params.get('wa'), 0, 2, 1) : 1);
+let shoreDist = initialExact
+  ? (initialExact.shoreDist ?? 1)
+  : (params.get('sd') !== null ? clampFloat(params.get('sd'), 0.35, 2.5, 1) : 1);
 let terrainMode = initialExact
   ? initialExact.terrainMode
   : clampInt(params.get('tm'), 0, 4, 0);
@@ -145,6 +152,27 @@ let terrainScale = initialExact
 let treeMode = initialExact
   ? initialExact.treeMode
   : clampInt(params.get('tr'), 0, 3, 0);
+let vegCover = initialExact
+  ? (initialExact.vegCover ?? 1)
+  : (params.get('vc') !== null ? clampFloat(params.get('vc'), 0, 2.4, 1) : 1);
+let vegScale = initialExact
+  ? (initialExact.vegScale ?? 1)
+  : (params.get('vs') !== null ? clampFloat(params.get('vs'), 0.4, 4.5, 1) : 1);
+let transitAmt = initialExact
+  ? (initialExact.transitAmt ?? 1)
+  : (params.get('pt') !== null ? clampFloat(params.get('pt'), 0, 2.5, 1) : 1);
+let maritimeAmt = initialExact
+  ? (initialExact.maritimeAmt ?? 1)
+  : (params.get('hr') !== null ? clampFloat(params.get('hr'), 0, 2.5, 1) : 1);
+let airAmt = initialExact
+  ? (initialExact.airAmt ?? 1)
+  : (params.get('ap') !== null ? clampFloat(params.get('ap'), 0, 2.5, 1) : 1);
+let signAmt = initialExact
+  ? (initialExact.signAmt ?? 1)
+  : (params.get('sg') !== null ? clampFloat(params.get('sg'), 0, 2.5, 1) : 1);
+let megaWrap = initialExact
+  ? (initialExact.megaWrap ?? 1)
+  : (params.get('mw') !== null ? clampFloat(params.get('mw'), 0, 2.2, 1) : 1);
 let worldCurve = initialExact
   ? initialExact.worldCurve
   : (params.get('curve') !== null ? clampFloat(params.get('curve'), 0, 1, 0) : 0);
@@ -155,12 +183,20 @@ let timeOfDay = initialExact
     : LOOK_BY_ID[lookId].defTime);
 let heightScale = initialExact ? initialExact.heightScale : 1;
 
+const initLookDefTint = LOOK_BY_ID[lookId].defTint ?? 0.72;
 const tune = initialExact
-  ? { ...initialExact.tune }
+  ? { tint: initLookDefTint, cloudSeed: 0, cloudEvol: 0.35, cloudLac: 2.08, glyphStyle: 0, signAnim: 1, ...initialExact.tune }
   : {
+      tint: params.get('tn') !== null ? clampFloat(params.get('tn'), 0, 1, initLookDefTint) : initLookDefTint,
       win: 1, glow: 1, fog: 1, lights: 1, traffic: 1,
-      clouds: 1, cloudType: clampInt(params.get('ct'), 0, 5, 0),
+      clouds: params.get('cl') !== null ? clampFloat(params.get('cl'), 0, 2.4, 1) : 1,
+      cloudType: clampInt(params.get('ct'), 0, 5, 0),
       cloudStyle: clampInt(params.get('cs'), 0, 6, 0),
+      cloudSeed: params.get('cseed') !== null ? clampFloat(params.get('cseed'), 0, 100, 0) : 0,
+      cloudEvol: params.get('cevol') !== null ? clampFloat(params.get('cevol'), 0, 2.5, 0.35) : 0.35,
+      cloudLac: params.get('clac') !== null ? clampFloat(params.get('clac'), 1.4, 3.2, 2.08) : 2.08,
+      glyphStyle: clampInt(params.get('gl'), 0, 2, 0),
+      signAnim: params.get('sa') !== null ? clampFloat(params.get('sa'), 0, 2.5, 1) : 1,
       haze: 1, sun: 1, vib: 1,
       moon: 1, moonsz: 1, moonph: 0.85,
     };
@@ -282,6 +318,10 @@ function boot() {
   let holoGroup = null;
   let trees = null;
   let sculptures = null;
+  let transitGroup = null;
+  let bridgeGroup = null;
+  let harborObj = null;
+  let spaceportObj = null;
   let city = null;
   let cityCollider = null;
   let poiList = [];
@@ -310,8 +350,17 @@ function boot() {
   function rebuild() {
     const grown = growCity(seed, cityRadius, world.towerMat, suburbReach, {
       waterMode,
+      waterAmount,
+      shoreDist,
       terrainMode,
       terrainScale,
+      vegCover,
+      vegScale,
+      transitAmt,
+      maritimeAmt,
+      airAmt,
+      signAmt,
+      megaWrap,
       U,
     });
     city = grown.city;
@@ -338,6 +387,8 @@ function boot() {
     vehicles = makeVehicles(city, world.trailMat, 1400, cityCollider, {
       swarmMat: world.swarmMat,
       swarmCount: 18600,
+      transitAmt,
+      U,
     });
     vehicles.setCollision(collideOn);
     vehicles.setPalette(look);
@@ -348,7 +399,16 @@ function boot() {
     holoGroup = buildHolos(city, world.holoMat, world.beamMat);
     trees = buildTrees(city, U);
     sculptures = buildSculptures(city, world.beaconMat, world.lampMat);
+    transitGroup = buildTransitInfrastructure(city, U, world.lampMat);
+    bridgeGroup = buildBridges(city, U, world.beaconMat, world.lampMat);
+    harborObj = buildHarbor(city, U, world.beaconMat, world.lampMat);
+    spaceportObj = buildSpaceport(city, U, world.beaconMat, world.lampMat, world.beamMat);
     trees.setNature(look, treeMode);
+    trees.setScale(vegScale);
+    transitGroup.setLook(look);
+    bridgeGroup.setLook(look);
+    harborObj.setLook(look);
+    spaceportObj.setLook(look);
     weather.setTint(look);
     if (boulevardGroup && boulevardGroup.userData.lineMat) {
       boulevardGroup.userData.lineMat.color.set(look.ground.line);
@@ -368,6 +428,10 @@ function boot() {
     cityGroup.add(holoGroup);
     cityGroup.add(trees.group);
     cityGroup.add(sculptures);
+    cityGroup.add(transitGroup);
+    cityGroup.add(bridgeGroup);
+    cityGroup.add(harborObj.group);
+    cityGroup.add(spaceportObj.group);
     applyHeight();
 
     $('#stat-towers').textContent = city.towers.toLocaleString('en-US');
@@ -432,23 +496,54 @@ function boot() {
     el.title = `Lunar phase: ${info.name}`;
   }
 
+  function syncFeatureLabels() {
+    $('#tint-label').textContent = `Tint ${Math.round((tune.tint ?? 0.72) * 100)}%`;
+    $('#water-amt-label').textContent = (waterMode === 4 || waterAmount <= 0.005) ? 'Off' : `${Math.round(waterAmount * 100)}%`;
+    $('#shoredist-label').textContent = `${shoreDist.toFixed(1)}\u00D7`;
+    $('#cloud-label').textContent = tune.clouds <= 0.005 ? 'Off' : `${Math.round(tune.clouds * 100)}%`;
+    $('#cloud-lac-label').textContent = `Lac ${(tune.cloudLac ?? 2.08).toFixed(2)}`;
+    $('#transit-label').textContent = transitAmt <= 0.01 ? 'Off' : `${Math.round(transitAmt * 100)}%`;
+    $('#maritime-label').textContent = maritimeAmt <= 0.01 ? 'Off' : `${Math.round(maritimeAmt * 100)}%`;
+    $('#air-label').textContent = airAmt <= 0.01 ? 'Off' : `${Math.round(airAmt * 100)}%`;
+    $('#signs-label').textContent = signAmt <= 0.01 ? 'Off' : `${Math.round(signAmt * 100)}%`;
+    $('#megawrap-label').textContent = megaWrap <= 0.01 ? 'Off' : `${Math.round(megaWrap * 100)}%`;
+    $('#sign-anim-label').textContent = (tune.signAnim ?? 1) <= 0.01 ? 'Static' : `${(tune.signAnim ?? 1).toFixed(1)}\u00D7`;
+    $('#veg-cover-label').textContent = vegCover <= 0.01 ? 'Off' : `${Math.round(vegCover * 100)}%`;
+    $('#veg-scale-label').textContent = `${vegScale.toFixed(1)}\u00D7`;
+  }
+
   function syncAllSliders() {
     $('#seed-input').value = String(seed);
     $('#sel-look').value = lookId;
+    $('#sl-tint').value = String(tune.tint ?? 0.72);
     $('#sl-curve').value = String(worldCurve);
     $('#sl-radius').value = String(cityRadius);
     $('#sl-suburbs').value = String(suburbReach);
     $('#sel-water').value = String(waterMode);
+    $('#sl-water-amt').value = String(waterAmount);
+    $('#sl-shoredist').value = String(shoreDist);
     $('#sel-terrain').value = String(terrainMode);
     $('#sl-relief').value = String(terrainScale);
     $('#sel-trees').value = String(treeMode);
+    $('#sl-veg-cover').value = String(vegCover);
+    $('#sl-veg-scale').value = String(vegScale);
     $('#sl-height').value = String(heightScale);
     $('#sl-traffic').value = String(trafficToSlider(tune.traffic));
+    $('#sl-transit').value = String(transitAmt);
+    $('#sl-maritime').value = String(maritimeAmt);
+    $('#sl-air').value = String(airAmt);
+    $('#sl-signs').value = String(signAmt);
+    $('#sl-megawrap').value = String(megaWrap);
+    $('#sel-glyph').value = String(tune.glyphStyle ?? 0);
+    $('#sl-sign-anim').value = String(tune.signAnim ?? 1);
     $('#sl-win').value = String(tune.win);
     $('#sl-glow').value = String(tune.glow);
     $('#sl-fog').value = String(tune.fog);
     $('#sl-lights').value = String(tune.lights);
     $('#sl-clouds').value = String(tune.clouds);
+    $('#sl-cloud-seed').value = String(tune.cloudSeed ?? 0);
+    $('#sl-cloud-evol').value = String(tune.cloudEvol ?? 0.35);
+    $('#sl-cloud-lac').value = String(tune.cloudLac ?? 2.08);
     $('#sl-haze').value = String(tune.haze);
     $('#sl-sun').value = String(tune.sun);
     $('#sl-vib').value = String(tune.vib);
@@ -466,6 +561,7 @@ function boot() {
     syncMoonLabel();
     syncWorldGeometry();
     syncTrafficLabel();
+    syncFeatureLabels();
   }
 
   function syncPostUniforms(look) {
@@ -506,13 +602,31 @@ function boot() {
       postState.film = look.grade.film;
       syncPostSliders();
     }
-    const effClouds = weatherMode === 2 || weatherMode === 6 ? Math.max(tune.clouds, 1.35) : tune.clouds;
+    const effClouds = tune.clouds <= 0.005
+      ? 0
+      : (weatherMode === 2 || weatherMode === 6 ? Math.max(tune.clouds, 1.35) : tune.clouds);
     const effType = weatherMode === 2 && (tune.cloudType ?? 0) === 0 ? 1 : (tune.cloudType ?? 0);
     const effStyle = weatherMode === 6 && tune.cloudStyle === 0 ? 1 : tune.cloudStyle;
-    applyLook(U, look, { ...tune, cloudType: effType, cloudStyle: effStyle });
-    applyTime(U, look, timeOfDay, { ...tune, clouds: effClouds, cloudType: effType, cloudStyle: effStyle, sat: tune.vib });
+    const lookTune = {
+      ...tune,
+      clouds: effClouds,
+      cloudType: effType,
+      cloudStyle: effStyle,
+      signAmt,
+      megaWrap,
+    };
+    applyLook(U, look, lookTune);
+    applyTime(U, look, timeOfDay, { ...lookTune, sat: tune.vib });
+    if (world.clouds) world.clouds.visible = U.uCloud.value > 0.008;
+    if (billboards) billboards.visible = signAmt > 0.01;
+    if (signGroup) signGroup.visible = signAmt > 0.01;
+    if (holoGroup) holoGroup.visible = signAmt > 0.01;
     if (landmarkGroup && landmarkGroup.setLook) landmarkGroup.setLook(look);
     if (placeGroup && placeGroup.setLook) placeGroup.setLook(look);
+    if (transitGroup && transitGroup.setLook) transitGroup.setLook(look);
+    if (bridgeGroup && bridgeGroup.setLook) bridgeGroup.setLook(look);
+    if (harborObj && harborObj.setLook) harborObj.setLook(look);
+    if (spaceportObj && spaceportObj.setLook) spaceportObj.setLook(look);
     if (trees) trees.setNature(look, treeMode);
     if (vehicles) vehicles.setPalette(look);
     if (weather) weather.setTint(look);
@@ -529,6 +643,7 @@ function boot() {
     $('#look-blurb').textContent = look.blurb;
     syncTimeLabel();
     syncMoonLabel();
+    syncFeatureLabels();
     syncPostUniforms(look);
     if (!skipURL) syncURL();
   }
@@ -541,9 +656,20 @@ function boot() {
     p.set('t', timeOfDay.toFixed(1));
     if (Math.abs(suburbReach - 1) > 0.01) p.set('sub', suburbReach.toFixed(2));
     if (waterMode !== 1) p.set('wm', String(waterMode));
+    if (Math.abs(waterAmount - 1) > 0.02) p.set('wa', waterAmount.toFixed(2));
+    if (Math.abs(shoreDist - 1) > 0.02) p.set('sd', shoreDist.toFixed(2));
     if (terrainMode !== 0) p.set('tm', String(terrainMode));
     if (Math.abs(terrainScale - 1) > 0.02) p.set('ts', terrainScale.toFixed(2));
     if (treeMode > 0) p.set('tr', String(treeMode));
+    if (Math.abs(vegCover - 1) > 0.02) p.set('vc', vegCover.toFixed(2));
+    if (Math.abs(vegScale - 1) > 0.02) p.set('vs', vegScale.toFixed(2));
+    if (Math.abs(transitAmt - 1) > 0.02) p.set('pt', transitAmt.toFixed(2));
+    if (Math.abs(maritimeAmt - 1) > 0.02) p.set('hr', maritimeAmt.toFixed(2));
+    if (Math.abs(airAmt - 1) > 0.02) p.set('ap', airAmt.toFixed(2));
+    if (Math.abs(signAmt - 1) > 0.02) p.set('sg', signAmt.toFixed(2));
+    if (Math.abs(megaWrap - 1) > 0.02) p.set('mw', megaWrap.toFixed(2));
+    if (Math.abs((tune.clouds ?? 1) - 1) > 0.02) p.set('cl', (tune.clouds ?? 1).toFixed(2));
+    if ((tune.glyphStyle ?? 0) > 0) p.set('gl', String(tune.glyphStyle));
     if (worldCurve > 0.005) p.set('curve', worldCurve.toFixed(2));
     if (weatherMode > 0) p.set('w', String(weatherMode));
     if ((tune.cloudType ?? 0) > 0) p.set('ct', String(tune.cloudType));
@@ -574,9 +700,18 @@ function boot() {
       cityRadius,
       suburbReach,
       waterMode,
+      waterAmount,
+      shoreDist,
       terrainMode,
       terrainScale,
       treeMode,
+      vegCover,
+      vegScale,
+      transitAmt,
+      maritimeAmt,
+      airAmt,
+      signAmt,
+      megaWrap,
       worldCurve,
       heightScale,
       timeOfDay,
@@ -601,8 +736,17 @@ function boot() {
       st.cityRadius !== cityRadius ||
       Math.abs(st.suburbReach - suburbReach) > 1e-3 ||
       st.waterMode !== waterMode ||
+      Math.abs(st.waterAmount - waterAmount) > 1e-2 ||
+      Math.abs(st.shoreDist - shoreDist) > 1e-2 ||
       st.terrainMode !== terrainMode ||
-      Math.abs(st.terrainScale - terrainScale) > 1e-2
+      Math.abs(st.terrainScale - terrainScale) > 1e-2 ||
+      Math.abs(st.vegCover - vegCover) > 1e-2 ||
+      Math.abs(st.vegScale - vegScale) > 1e-2 ||
+      Math.abs(st.transitAmt - transitAmt) > 1e-2 ||
+      Math.abs(st.maritimeAmt - maritimeAmt) > 1e-2 ||
+      Math.abs(st.airAmt - airAmt) > 1e-2 ||
+      Math.abs(st.signAmt - signAmt) > 1e-2 ||
+      Math.abs(st.megaWrap - megaWrap) > 1e-2
     );
     seed = st.seed;
     lookId = st.lookId;
@@ -610,9 +754,18 @@ function boot() {
     cityRadius = st.cityRadius;
     suburbReach = st.suburbReach;
     waterMode = st.waterMode;
+    waterAmount = st.waterAmount;
+    shoreDist = st.shoreDist;
     terrainMode = st.terrainMode;
     terrainScale = st.terrainScale;
     treeMode = st.treeMode;
+    vegCover = st.vegCover;
+    vegScale = st.vegScale;
+    transitAmt = st.transitAmt;
+    maritimeAmt = st.maritimeAmt;
+    airAmt = st.airAmt;
+    signAmt = st.signAmt;
+    megaWrap = st.megaWrap;
     worldCurve = st.worldCurve;
     heightScale = st.heightScale;
     timeOfDay = st.timeOfDay;
@@ -769,7 +922,9 @@ function boot() {
     if (lookId !== 'custom') prevPresetLookId = lookId;
     lookId = nextId;
     timeOfDay = LOOK_BY_ID[lookId].defTime;
+    tune.tint = LOOK_BY_ID[lookId].defTint ?? 0.72;
     $('#sl-time').value = String(timeOfDay);
+    $('#sl-tint').value = String(tune.tint);
     refreshLook(true);
   };
 
@@ -926,6 +1081,13 @@ function boot() {
     b.title = (off ? 'Show' : 'Hide') + ' interface (H)';
   };
   $('#b-ui').onclick = toggleUI;
+  $('#b-fold-all').onclick = () => {
+    const panels = Array.from(document.querySelectorAll('details.subpanel'));
+    const anyOpen = panels.some((d) => d.open);
+    panels.forEach((d) => { d.open = !anyOpen; });
+    $('#b-fold-all').textContent = anyOpen ? '\u229E' : '\u229F';
+    flash(anyOpen ? 'Collapsed subpanels' : 'Expanded all subpanels');
+  };
   const toggleTimeCycle = () => {
     timeCycleOn = !timeCycleOn;
     syncTimeLabel();
@@ -964,6 +1126,10 @@ function boot() {
   function bindSlider(el, fn) {
     el.oninput = () => fn(parseFloat(el.value));
   }
+  bindSlider($('#sl-tint'), (v) => {
+    tune.tint = clampFloat(v, 0, 1, 0.72);
+    refreshLook();
+  });
   bindSlider($('#sl-curve'), (v) => {
     worldCurve = clampFloat(v, 0, 1, 0);
     syncWorldGeometry();
@@ -976,7 +1142,27 @@ function boot() {
   $('#sel-water').onchange = (ev) => {
     waterMode = clampInt(ev.target.value, 0, 4, 1);
     rebuild();
+    syncFeatureLabels();
     flash(`Water · ${WATER_MODE_NAMES[waterMode] || 'Shoreline'}`);
+  };
+  bindSlider($('#sl-water-amt'), (v) => {
+    waterAmount = clampFloat(v, 0, 2, 1);
+    U.uWaterAmt.value = waterAmount;
+    if (waterGroup) waterGroup.visible = waterMode !== 4 && waterAmount > 0.005;
+    syncFeatureLabels();
+  });
+  $('#sl-water-amt').onchange = () => {
+    waterAmount = clampFloat($('#sl-water-amt').value, 0, 2, 1);
+    rebuild();
+  };
+  bindSlider($('#sl-shoredist'), (v) => {
+    shoreDist = clampFloat(v, 0.35, 2.5, 1);
+    U.uShoreDist.value = shoreDist;
+    syncFeatureLabels();
+  });
+  $('#sl-shoredist').onchange = () => {
+    shoreDist = clampFloat($('#sl-shoredist').value, 0.35, 2.5, 1);
+    rebuild();
   };
   $('#sel-terrain').value = String(terrainMode);
   $('#sel-terrain').onchange = (ev) => {
@@ -999,17 +1185,97 @@ function boot() {
     syncURL();
     flash(`Parks · ${TREE_MODE_NAMES[treeMode] || 'Auto'}`);
   };
+  bindSlider($('#sl-veg-cover'), (v) => {
+    vegCover = clampFloat(v, 0, 2.4, 1);
+    if (trees && trees.group) trees.group.visible = vegCover > 0.008;
+    syncFeatureLabels();
+  });
+  $('#sl-veg-cover').onchange = () => {
+    vegCover = clampFloat($('#sl-veg-cover').value, 0, 2.4, 1);
+    rebuild();
+  };
+  bindSlider($('#sl-veg-scale'), (v) => {
+    vegScale = clampFloat(v, 0.4, 4.5, 1);
+    if (trees && trees.setScale) trees.setScale(vegScale);
+    syncFeatureLabels();
+  });
+  $('#sl-veg-scale').onchange = () => {
+    vegScale = clampFloat($('#sl-veg-scale').value, 0.4, 4.5, 1);
+    rebuild();
+  };
   bindSlider($('#sl-height'), (v) => { heightScale = v; applyHeight(); });
   bindSlider($('#sl-traffic'), (v) => {
     tune.traffic = sliderToTraffic(v);
     if (vehicles) vehicles.update(0, tune.traffic, heightScale);
     syncTrafficLabel();
   });
+  bindSlider($('#sl-transit'), (v) => {
+    transitAmt = clampFloat(v, 0, 2.5, 1);
+    if (vehicles && vehicles.setTransitAmt) vehicles.setTransitAmt(transitAmt);
+    if (transitGroup) transitGroup.visible = transitAmt > 0.01;
+    syncFeatureLabels();
+  });
+  $('#sl-transit').onchange = () => {
+    transitAmt = clampFloat($('#sl-transit').value, 0, 2.5, 1);
+    rebuild();
+  };
+  bindSlider($('#sl-maritime'), (v) => {
+    maritimeAmt = clampFloat(v, 0, 2.5, 1);
+    if (harborObj && harborObj.group) harborObj.group.visible = maritimeAmt > 0.01 && waterMode !== 4 && waterAmount > 0.005;
+    syncFeatureLabels();
+  });
+  $('#sl-maritime').onchange = () => {
+    maritimeAmt = clampFloat($('#sl-maritime').value, 0, 2.5, 1);
+    rebuild();
+  };
+  bindSlider($('#sl-air'), (v) => {
+    airAmt = clampFloat(v, 0, 2.5, 1);
+    if (spaceportObj && spaceportObj.group) spaceportObj.group.visible = airAmt > 0.01;
+    syncFeatureLabels();
+  });
+  $('#sl-air').onchange = () => {
+    airAmt = clampFloat($('#sl-air').value, 0, 2.5, 1);
+    rebuild();
+  };
+  bindSlider($('#sl-signs'), (v) => {
+    signAmt = clampFloat(v, 0, 2.5, 1);
+    U.uSignAmt.value = signAmt;
+    if (billboards) billboards.visible = signAmt > 0.01;
+    if (signGroup) signGroup.visible = signAmt > 0.01;
+    if (holoGroup) holoGroup.visible = signAmt > 0.01;
+    syncFeatureLabels();
+  });
+  $('#sl-signs').onchange = () => {
+    signAmt = clampFloat($('#sl-signs').value, 0, 2.5, 1);
+    rebuild();
+  };
+  bindSlider($('#sl-megawrap'), (v) => {
+    megaWrap = clampFloat(v, 0, 2.2, 1);
+    U.uMegaWrap.value = megaWrap;
+    syncFeatureLabels();
+  });
+  $('#sl-megawrap').onchange = () => {
+    megaWrap = clampFloat($('#sl-megawrap').value, 0, 2.2, 1);
+    rebuild();
+  };
+  $('#sel-glyph').value = String(tune.glyphStyle ?? 0);
+  $('#sel-glyph').onchange = (ev) => {
+    tune.glyphStyle = clampInt(ev.target.value, 0, 2, 0);
+    refreshLook();
+    flash(`Script · ${GLYPH_STYLE_NAMES[tune.glyphStyle] || 'Linear-Synth'}`);
+  };
+  bindSlider($('#sl-sign-anim'), (v) => {
+    tune.signAnim = clampFloat(v, 0, 2.5, 1);
+    refreshLook();
+  });
   bindSlider($('#sl-win'), (v) => { tune.win = v; refreshLook(); });
   bindSlider($('#sl-glow'), (v) => { tune.glow = v; refreshLook(); });
   bindSlider($('#sl-fog'), (v) => { tune.fog = v; refreshLook(); });
   bindSlider($('#sl-lights'), (v) => { tune.lights = v; refreshLook(); });
   bindSlider($('#sl-clouds'), (v) => { tune.clouds = v; refreshLook(); });
+  bindSlider($('#sl-cloud-seed'), (v) => { tune.cloudSeed = v; refreshLook(); });
+  bindSlider($('#sl-cloud-evol'), (v) => { tune.cloudEvol = v; refreshLook(); });
+  bindSlider($('#sl-cloud-lac'), (v) => { tune.cloudLac = v; refreshLook(); });
   bindSlider($('#sl-haze'), (v) => { tune.haze = v; refreshLook(); });
   bindSlider($('#sl-sun'), (v) => { tune.sun = v; refreshLook(); });
   bindSlider($('#sl-vib'), (v) => { tune.vib = v; refreshLook(); });
@@ -1425,6 +1691,8 @@ function boot() {
     farm: '\u25A6',
     shore: '\u2248',
     lighthouse: '\u26EF',
+    harbor: '\u2693\uFE0E',
+    spaceport: '\u2708\uFE0E',
   };
 
   function buildPois() {
@@ -1438,12 +1706,56 @@ function boot() {
       r: 45,
       h: 28,
     };
+    const infraSpots = [];
+    if (city.harbor) {
+      infraSpots.push({
+        kind: 'harbor',
+        name: 'Deepwater Harbor & Cruise Pier',
+        x: city.harbor.x + city.harbor.outX * 85,
+        z: city.harbor.z + city.harbor.outZ * 85,
+        r: 72,
+        h: 48,
+      });
+    }
+    if (city.bridges && city.bridges.length) {
+      const b0 = city.bridges[0];
+      infraSpots.push({
+        kind: 'bridge',
+        name: b0.name || 'Grand Estuary Bridge',
+        x: b0.cx,
+        z: b0.cz,
+        r: 55,
+        h: b0.towerH || 54,
+      });
+    }
+    if (city.spaceport) {
+      infraSpots.push({
+        kind: 'spaceport',
+        name: 'Orbital Air & Spaceport',
+        x: city.spaceport.x,
+        z: city.spaceport.z,
+        r: 110,
+        h: 72,
+      });
+    }
+    if (city.transit && city.transit.stations && city.transit.stations.length) {
+      const st0 = city.transit.stations[0];
+      infraSpots.push({
+        kind: 'station',
+        name: st0.name || 'Central Grand Hub',
+        x: st0.x,
+        z: st0.z,
+        r: 36,
+        h: st0.y + 18,
+      });
+    }
     poiList = [
+      ...infraSpots,
       ...(city.mediaZone ? [city.mediaZone] : []),
       ...city.landmarks,
       ...city.places.map((p) => ({
         ...p,
-        h: p.kind === 'arena' || p.kind === 'stadium' || p.kind === 'theatre' ? 58 : (p.kind === 'park' ? 38 : 42),
+        h: p.kind === 'arena' || p.kind === 'stadium' || p.kind === 'theatre' ? 58 : (p.kind === 'park' ? 46 : 42),
       })),
       ...(city.suburbPOIs || []),
       ...(suburbReach > 0.05 ? [subSpot] : []),
@@ -1612,6 +1924,8 @@ function boot() {
         syncPathUI();
       }
       if (vehicles) vehicles.update(dt, tune.traffic, heightScale);
+      if (harborObj) harborObj.update(dt);
+      if (spaceportObj) spaceportObj.update(dt);
       if (searchlights) searchlights.update(dt);
       if (weather) weather.update(dt, camera.position);
       world.sky.position.copy(camera.position);

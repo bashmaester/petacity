@@ -108,7 +108,9 @@ body.ui-off .panel {
 body.ui-off .panel-body,
 body.ui-off .brand,
 body.ui-off #b-glide,
+body.ui-off #b-avoid,
 body.ui-off #b-collide,
+body.ui-off #b-fold-all,
 body.ui-off #b-export {
   display: none;
 }
@@ -130,6 +132,44 @@ body.ui-off #keys {
   display: block; margin: 9px 2px 4px;
   font-size: 9px; font-weight: 700; letter-spacing: 0.16em;
   text-transform: uppercase; color: var(--mute);
+}
+
+details.subpanel {
+  margin-top: 7px;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.032);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+details.subpanel > summary {
+  list-style: none;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 9px;
+  font-size: 9.5px; font-weight: 700; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--mute);
+  cursor: pointer; user-select: none;
+  transition: color 0.15s, background 0.15s;
+}
+details.subpanel > summary::-webkit-details-marker { display: none; }
+details.subpanel > summary:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+}
+details.subpanel > summary::after {
+  content: "\25B8";
+  font-size: 10px;
+  color: var(--accent);
+  transition: transform 0.18s ease;
+}
+details.subpanel[open] > summary {
+  color: var(--text);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+}
+details.subpanel[open] > summary::after {
+  transform: rotate(90deg);
+}
+.subpanel-body {
+  padding: 7px 8px 8px;
 }
 
 .drop-row {
@@ -369,6 +409,7 @@ button.icon-btn.rec-on, button.action.rec-on {
       <button id="b-glide" class="icon-btn" type="button" aria-pressed="false" aria-label="Glide mode" title="Start Glide mode — drag to steer, wheel for speed (G)">&#x2708;&#xFE0E;</button>
       <button id="b-avoid" class="icon-btn on" type="button" aria-pressed="true" aria-label="Anticipatory obstacle avoidance" title="Anticipatory shallow-angle obstacle &amp; terrain avoidance: on (V)">&#x2934;</button>
       <button id="b-collide" class="icon-btn on" type="button" aria-pressed="true" aria-label="Toggle collision detection" title="Collision: on — toggle noclip (C)">&#x2B21;</button>
+      <button id="b-fold-all" class="icon-btn" type="button" aria-label="Collapse or expand all subpanels" title="Collapse / expand all control subpanels">&#x229F;</button>
       <button id="b-export" class="icon-btn" type="button" aria-pressed="false" aria-label="Export or share exact state" title="Export / share exact state (URL &amp; JSON)">&#x2912;</button>
       <button id="b-ui" class="icon-btn" type="button" aria-pressed="true" aria-label="Toggle interface" title="Hide interface (H)">&#x25E7;</button>
     </div>
@@ -384,215 +425,362 @@ button.icon-btn.rec-on, button.action.rec-on {
       </div>
     </div>
 
-    <span class="lab">World Preset</span>
-    <div class="drop-row">
-      <select id="sel-preset" aria-label="Whole configuration preset" title="Load a full-world configuration preset"></select>
-      <button id="b-preset-save" type="button" class="icon-btn" aria-label="Save current configuration as preset" title="Save whole configuration as preset">&#xFF0B;</button>
-      <button id="b-preset-del" type="button" class="icon-btn" aria-label="Delete saved preset" title="Delete selected custom preset" disabled>&#x2715;</button>
-    </div>
-    <div id="preset-save-row" class="mini-drawer">
-      <input id="preset-name" type="text" maxlength="40" placeholder="Name this configuration…" aria-label="New preset name">
-      <button id="b-preset-ok" type="button" class="action" aria-label="Confirm save preset" title="Save preset">&#x2713;</button>
-    </div>
+    <!-- 1. Look, Tint & Presets -->
+    <details class="subpanel" open>
+      <summary>Look, Tint &amp; Presets</summary>
+      <div class="subpanel-body">
+        <div class="drop-row" title="Whole-world configuration presets">
+          <select id="sel-preset" aria-label="Whole configuration preset" title="Load a full-world configuration preset"></select>
+          <button id="b-preset-save" type="button" class="icon-btn" aria-label="Save current configuration as preset" title="Save whole configuration as preset">&#xFF0B;</button>
+          <button id="b-preset-del" type="button" class="icon-btn" aria-label="Delete saved preset" title="Delete selected custom preset" disabled>&#x2715;</button>
+        </div>
+        <div id="preset-save-row" class="mini-drawer">
+          <input id="preset-name" type="text" maxlength="40" placeholder="Name this configuration…" aria-label="New preset name">
+          <button id="b-preset-ok" type="button" class="action" aria-label="Confirm save preset" title="Save preset">&#x2713;</button>
+        </div>
 
-    <span class="lab">Look</span>
-    <div class="drop-row">
-      <i id="look-dot" class="swatch-dot" aria-hidden="true"></i>
-      <select id="sel-look" aria-label="Visual look" title="Choose visual look style"></select>
-    </div>
-    <p id="look-blurb"></p>
+        <div class="drop-row" style="margin-top: 6px;">
+          <i id="look-dot" class="swatch-dot" aria-hidden="true"></i>
+          <select id="sel-look" aria-label="Visual look" title="Choose visual look style"></select>
+        </div>
+        <p id="look-blurb"></p>
 
-    <div id="custom-box" aria-label="Custom palette editor">
-      <div class="pal-grid">
-        <label class="pal-cell" title="Sky zenith"><input id="cp-zen" type="color" value="#091326" aria-label="Sky zenith colour"><span>&#x2601;&#xFE0E;</span></label>
-        <label class="pal-cell" title="Horizon"><input id="cp-hor" type="color" value="#d95b43" aria-label="Horizon colour"><span>&#x25D3;</span></label>
-        <label class="pal-cell" title="Tower facade"><input id="cp-base" type="color" value="#182438" aria-label="Tower facade colour"><span>&#x25AE;</span></label>
-        <label class="pal-cell" title="Window lights"><input id="cp-win" type="color" value="#ffd166" aria-label="Window lights colour"><span>&#x229E;</span></label>
-        <label class="pal-cell" title="Signs &amp; accent"><input id="cp-accent" type="color" value="#06d6a0" aria-label="Signs and accent colour"><span>&#x25C8;</span></label>
-        <label class="pal-cell" title="Holo &amp; secondary"><input id="cp-sec" type="color" value="#4cc9f0" aria-label="Holo secondary colour"><span>&#x25CE;</span></label>
-      </div>
-      <div class="pal-opts">
-        <select id="cp-style" aria-label="Custom shading style" title="Surface shading mode">
-          <option value="lit">Lit</option>
-          <option value="toon">Cel-toon</option>
-          <option value="flat">Flat</option>
-        </select>
-        <label title="Monochrome signs &amp; billboards"><input id="cp-mono" type="checkbox" aria-label="Monochrome signs">&#x25D0;</label>
-        <button id="b-seed-pal" type="button" class="action ghost" aria-label="Copy colours from preset" title="Copy colours from previous preset">&#x2913;</button>
-      </div>
-    </div>
+        <div class="slider-grid" style="margin-top: 5px;">
+          <div class="slider-row wide" title="Look Tint Amount (0% = diverse natural stone/glass/paint per building &amp; car · 100% = full stylized look tint)">
+            <span>&#x25D2;</span>
+            <input id="sl-tint" type="range" min="0" max="1" step="0.01" value="0.78" aria-label="Look tint amount">
+            <em id="tint-label">Tint 78%</em>
+          </div>
+        </div>
 
-    <span class="lab">World Geometry &amp; Scale</span>
-    <div class="slider-grid">
-      <div class="slider-row wide" title="World geometry curvature (Plane ↔ Sphere)">
-        <span>&#x25D4;</span>
-        <input id="sl-curve" type="range" min="0" max="1" step="0.01" value="0" aria-label="World curvature plane to sphere">
-        <em id="curve-label">Plane</em>
+        <div id="custom-box" aria-label="Custom palette editor">
+          <div class="pal-grid">
+            <label class="pal-cell" title="Sky zenith"><input id="cp-zen" type="color" value="#091326" aria-label="Sky zenith colour"><span>&#x2601;&#xFE0E;</span></label>
+            <label class="pal-cell" title="Horizon"><input id="cp-hor" type="color" value="#d95b43" aria-label="Horizon colour"><span>&#x25D3;</span></label>
+            <label class="pal-cell" title="Tower facade"><input id="cp-base" type="color" value="#182438" aria-label="Tower facade colour"><span>&#x25AE;</span></label>
+            <label class="pal-cell" title="Window lights"><input id="cp-win" type="color" value="#ffd166" aria-label="Window lights colour"><span>&#x229E;</span></label>
+            <label class="pal-cell" title="Signs &amp; accent"><input id="cp-accent" type="color" value="#06d6a0" aria-label="Signs and accent colour"><span>&#x25C8;</span></label>
+            <label class="pal-cell" title="Holo &amp; secondary"><input id="cp-sec" type="color" value="#4cc9f0" aria-label="Holo secondary colour"><span>&#x25CE;</span></label>
+          </div>
+          <div class="pal-opts">
+            <select id="cp-style" aria-label="Custom shading style" title="Surface shading mode">
+              <option value="lit">Lit</option>
+              <option value="toon">Cel-toon</option>
+              <option value="flat">Flat</option>
+            </select>
+            <label title="Monochrome signs &amp; billboards"><input id="cp-mono" type="checkbox" aria-label="Monochrome signs">&#x25D0;</label>
+            <button id="b-seed-pal" type="button" class="action ghost" aria-label="Copy colours from preset" title="Copy colours from previous preset">&#x2913;</button>
+          </div>
+        </div>
       </div>
-      <div class="slider-row" title="City core size (radius)"><span>&#x2B1A;</span><input id="sl-radius" type="range" min="1" max="15" step="1" value="5" aria-label="City size"></div>
-      <div class="slider-row" title="Horizon suburbs reach"><span>&#x2302;</span><input id="sl-suburbs" type="range" min="0" max="1.6" step="0.05" value="1" aria-label="Horizon suburbs reach"></div>
-      <div class="slider-row" title="Building height scale"><span>&#x2195;</span><input id="sl-height" type="range" min="0.5" max="2" step="0.02" value="1" aria-label="Height scale"></div>
-      <div class="slider-row wide" title="Multi-strata traffic density (0 to 20,000 vehicles)">
-        <span>&#x21C4;</span>
-        <input id="sl-traffic" type="range" min="0" max="1" step="0.005" value="0.25" aria-label="Multi-strata traffic density">
-        <em id="traffic-label">320</em>
-      </div>
-      <div class="slider-row wide" title="Large water bodies, shoreline &amp; lake layout">
-        <span>&#x2248;</span>
-        <select id="sel-water" aria-label="Water body and shoreline mode">
-          <option value="0">Water · Harbor &amp; Winding River</option>
-          <option value="1" selected>Water · Coastal Ocean &amp; Bay</option>
-          <option value="2">Water · Archipelago &amp; Peninsula</option>
-          <option value="3">Water · Great Crater Lake</option>
-          <option value="4">Water · Dry Arid Basin</option>
-        </select>
-      </div>
-      <div class="slider-row wide" title="Distant mountains, deserts, hills &amp; caldera relief">
-        <span>&#x25B2;</span>
-        <select id="sel-terrain" aria-label="Distant terrain and relief mode">
-          <option value="0" selected>Terrain · Distant Mountains</option>
-          <option value="1">Terrain · Desert Dunes &amp; Mesas</option>
-          <option value="2">Terrain · Rolling Farmland Hills</option>
-          <option value="3">Terrain · Volcanic Caldera Rim</option>
-          <option value="4">Terrain · Flat Horizon Plain</option>
-        </select>
-      </div>
-      <div class="slider-row" title="Distant mountain &amp; dune elevation scale">
-        <span>&#x22F0;</span>
-        <input id="sl-relief" type="range" min="0" max="2" step="0.05" value="1" aria-label="Distant terrain elevation scale">
-      </div>
-      <div class="slider-row" title="Park trees &amp; canopy network style">
-        <span>&#x2740;</span>
-        <select id="sel-trees" aria-label="Park tree and canopy architecture">
-          <option value="0">Trees · Auto</option>
-          <option value="1">Trees · Botanical</option>
-          <option value="2">Trees · Cyber</option>
-          <option value="3">Trees · Bio-Cyber</option>
-        </select>
-      </div>
-    </div>
+    </details>
 
-    <span class="lab">Places &amp; Bookmarks</span>
-    <div class="drop-row" title="Procedural city landmarks &amp; districts">
-      <select id="sel-poi" aria-label="Places of interest" title="Select a procedural place to visit"></select>
-      <button id="b-poi-go" type="button" class="icon-btn" aria-label="Fly to selected place" title="Fly to selected place">&#x27A4;</button>
-    </div>
-    <div class="drop-row" style="margin-top: 5px;" title="Saved camera viewpoint bookmarks">
-      <select id="sel-bookmark" aria-label="Saved place bookmarks" title="Saved camera bookmarks"></select>
-      <button id="b-bm-go" type="button" class="icon-btn" aria-label="Fly to selected bookmark" title="Fly to selected bookmark">&#x27A4;</button>
-      <button id="b-bm-add" type="button" class="icon-btn" aria-label="Bookmark current camera viewpoint" title="Bookmark current camera viewpoint">&#x2606;</button>
-      <button id="b-bm-del" type="button" class="icon-btn" aria-label="Delete selected bookmark" title="Delete selected bookmark">&#x2715;</button>
-    </div>
-    <div id="bm-save-row" class="mini-drawer">
-      <input id="bm-name" type="text" maxlength="40" placeholder="Bookmark viewpoint name…" aria-label="New bookmark name">
-      <button id="b-bm-ok" type="button" class="action" aria-label="Confirm save bookmark" title="Save bookmark">&#x2713;</button>
-    </div>
+    <!-- 2. Places & Bookmarks -->
+    <details class="subpanel" open>
+      <summary>Places, Landmarks &amp; Bookmarks</summary>
+      <div class="subpanel-body">
+        <div class="drop-row" title="Fly to Park, Harbor, Bridges, Spaceport, Transit Hub or Landmarks">
+          <select id="sel-poi" aria-label="Places of interest" title="Select a procedural place to visit"></select>
+          <button id="b-poi-go" type="button" class="icon-btn" aria-label="Fly to selected place" title="Fly to selected place">&#x27A4;</button>
+        </div>
+        <div class="drop-row" style="margin-top: 5px;" title="Saved camera viewpoint bookmarks">
+          <select id="sel-bookmark" aria-label="Saved place bookmarks" title="Saved camera bookmarks"></select>
+          <button id="b-bm-go" type="button" class="icon-btn" aria-label="Fly to selected bookmark" title="Fly to selected bookmark">&#x27A4;</button>
+          <button id="b-bm-add" type="button" class="icon-btn" aria-label="Bookmark current camera viewpoint" title="Bookmark current camera viewpoint">&#x2606;</button>
+          <button id="b-bm-del" type="button" class="icon-btn" aria-label="Delete selected bookmark" title="Delete selected bookmark">&#x2715;</button>
+        </div>
+        <div id="bm-save-row" class="mini-drawer">
+          <input id="bm-name" type="text" maxlength="40" placeholder="Bookmark viewpoint name…" aria-label="New bookmark name">
+          <button id="b-bm-ok" type="button" class="action" aria-label="Confirm save bookmark" title="Save bookmark">&#x2713;</button>
+        </div>
+      </div>
+    </details>
 
-    <span class="lab">Tuning &amp; Atmosphere</span>
-    <div class="slider-grid">
-      <div class="slider-row" title="Window density"><span>&#x229E;</span><input id="sl-win" type="range" min="0" max="2" step="0.02" value="1" aria-label="Window density"></div>
-      <div class="slider-row" title="Window &amp; sign glow"><span>&#x273A;</span><input id="sl-glow" type="range" min="0" max="2.5" step="0.02" value="1" aria-label="Window glow"></div>
-      <div class="slider-row" title="Atmospheric fog"><span>&#x224B;</span><input id="sl-fog" type="range" min="0" max="2.5" step="0.02" value="1" aria-label="Fog"></div>
-      <div class="slider-row" title="Street, beacon &amp; searchlight intensity"><span>&#x2726;</span><input id="sl-lights" type="range" min="0" max="2" step="0.02" value="1" aria-label="Atmospheric lights"></div>
-      <div class="slider-row" title="3D Cloud cover (0 = clear sky … 2.4 = solid overcast)"><span>&#x2601;&#xFE0E;</span><input id="sl-clouds" type="range" min="0" max="2.4" step="0.02" value="1" aria-label="Cloud cover"></div>
-      <div class="slider-row" title="Horizon haze"><span>&#x2261;</span><input id="sl-haze" type="range" min="0" max="2" step="0.02" value="1" aria-label="Horizon haze"></div>
-      <div class="slider-row" title="Sun glow"><span>&#x263C;</span><input id="sl-sun" type="range" min="0" max="2" step="0.02" value="1" aria-label="Sun glow"></div>
-      <div class="slider-row" title="Colour vibrance"><span>&#x25C8;</span><input id="sl-vib" type="range" min="0.4" max="1.6" step="0.02" value="1" aria-label="Colour vibrance"></div>
-    </div>
+    <!-- 3. Water, Rivers & Shoreline -->
+    <details class="subpanel" open>
+      <summary>Water, Rivers &amp; Shoreline</summary>
+      <div class="subpanel-body">
+        <div class="slider-grid">
+          <div class="slider-row wide" title="Water layout (including No Shoreline / Zero Water)">
+            <span>&#x2248;</span>
+            <select id="sel-water" aria-label="Water body and shoreline mode">
+              <option value="0">Water · Harbor &amp; Winding River</option>
+              <option value="1" selected>Water · Coastal Ocean, Harbor &amp; River</option>
+              <option value="2">Water · Archipelago &amp; Peninsula</option>
+              <option value="3">Water · Great Crater Lake</option>
+              <option value="4">Water · None (No Shoreline / Dry Basin)</option>
+            </select>
+          </div>
+          <div class="slider-row wide" title="Water Amount (0 = completely dry / off · 1 = normal · 2 = wide seas &amp; rivers)">
+            <span>&#x25CF;</span>
+            <input id="sl-water-amt" type="range" min="0" max="2" step="0.02" value="1" aria-label="Water amount">
+            <em id="water-amt-label">100%</em>
+          </div>
+          <div class="slider-row wide" title="Distance to Shoreline (0.35 = right at city edge · 2.5 = far offshore)">
+            <span>&#x21A6;</span>
+            <input id="sl-shoredist" type="range" min="0.35" max="2.5" step="0.02" value="1" aria-label="Distance to shoreline">
+            <em id="shoredist-label">1.0×</em>
+          </div>
+        </div>
+      </div>
+    </details>
 
-    <span class="lab">Environment &amp; Weather</span>
-    <div class="slider-grid">
-      <div class="slider-row wide" title="Time of day (0–24h) — Sun, Moon &amp; Stars follow spherical sky orbits (press T to run live cycle)">
-        <span>&#x2600;&#xFE0E;</span>
-        <input id="sl-time" type="range" min="0" max="24" step="0.05" value="18.2" aria-label="Time of day">
-        <em id="time-label">18:12</em>
-        <button id="b-time-play" type="button" class="mini-btn" aria-pressed="false" aria-label="Play or pause 24-hour time cycle" title="Play / pause continuous 24h celestial &amp; lunar cycle (T)">&#x25B6;</button>
+    <!-- 4. Clouds & 4D Sky -->
+    <details class="subpanel" open>
+      <summary>Clouds &amp; 4D Sky</summary>
+      <div class="subpanel-body">
+        <div class="slider-grid">
+          <div class="slider-row wide" title="3D Cloud cover (0 = completely clear sky … 2.4 = solid overcast)">
+            <span>&#x2601;&#xFE0E;</span>
+            <input id="sl-clouds" type="range" min="0" max="2.4" step="0.02" value="1" aria-label="Cloud cover">
+            <em id="cloud-label">100%</em>
+          </div>
+          <div class="slider-row wide" title="Volumetric cloud formation type">
+            <span>&#x2601;&#xFE0E;</span>
+            <select id="sel-cloudtype" aria-label="Volumetric cloud formation type">
+              <option value="0">Clouds · Fair-weather Cumulus</option>
+              <option value="1">Clouds · Thunderheads (Cumulonimbus)</option>
+              <option value="2">Clouds · Stratocumulus deck</option>
+              <option value="3">Clouds · High ice Cirrus wisps</option>
+              <option value="4">Clouds · Multi-layer Altocumulus + Cirrus</option>
+              <option value="5">Clouds · Low Sea-of-Clouds blanket</option>
+            </select>
+          </div>
+          <div class="slider-row wide" title="StormyClouds 3D sky &amp; cloud rendering style">
+            <span>&#x270E;</span>
+            <select id="sel-cloudstyle" aria-label="StormyClouds sky rendering style">
+              <option value="0">Volumetric painted (3D)</option>
+              <option value="1">StormyClouds · Film grain</option>
+              <option value="2">StormyClouds · Spray &amp; drips</option>
+              <option value="3">StormyClouds · Mezzotint</option>
+              <option value="4">StormyClouds · Dry brush</option>
+              <option value="5">StormyClouds · Flow streaks</option>
+              <option value="6">StormyClouds · Line boil</option>
+            </select>
+          </div>
+          <div class="slider-row" title="Cloud Seed (shifts 3D/4D cloud formations across the sky)">
+            <span>#</span>
+            <input id="sl-cloud-seed" type="range" min="0" max="100" step="0.5" value="0" aria-label="Cloud seed">
+          </div>
+          <div class="slider-row" title="4D Cloud Shape Evolution over time (0 = frozen shape · 2.5 = rapid boiling)">
+            <span>&#x29BF;</span>
+            <input id="sl-cloud-evol" type="range" min="0" max="2.5" step="0.02" value="0.35" aria-label="Cloud 4D shape evolution speed">
+          </div>
+          <div class="slider-row wide" title="Cloud Fractal Lacunarity (1.4 = soft billowy domes · 3.2 = crisp turbulent wisps)">
+            <span>&#x2733;</span>
+            <input id="sl-cloud-lac" type="range" min="1.4" max="3.2" step="0.02" value="2.08" aria-label="Cloud noise lacunarity">
+            <em id="cloud-lac-label">Lac 2.08</em>
+          </div>
+        </div>
       </div>
-      <div class="slider-row" title="Ambient dust motes"><span>&#x2726;</span><input id="sl-dust" type="range" min="0" max="1.8" step="0.02" value="0.6" aria-label="Ambient dust motes"></div>
-      <div class="slider-row" title="Moon size"><span>&#x25EF;</span><input id="sl-moonsz" type="range" min="0.3" max="2.5" step="0.02" value="1" aria-label="Moon size"></div>
-      <div class="slider-row wide" title="Weather mode"><span>&#x2602;&#xFE0E;</span><input id="sl-weather" type="range" min="0" max="6" step="1" value="0" aria-label="Weather mode"><em id="weather-label">&#x2600;&#xFE0E; Clear</em></div>
-      <div class="slider-row wide" title="Volumetric cloud formation type">
-        <span>&#x2601;&#xFE0E;</span>
-        <select id="sel-cloudtype" aria-label="Volumetric cloud formation type">
-          <option value="0">Clouds · Fair-weather Cumulus</option>
-          <option value="1">Clouds · Thunderheads (Cumulonimbus)</option>
-          <option value="2">Clouds · Stratocumulus deck</option>
-          <option value="3">Clouds · High ice Cirrus wisps</option>
-          <option value="4">Clouds · Multi-layer Altocumulus + Cirrus</option>
-          <option value="5">Clouds · Low Sea-of-Clouds blanket</option>
-        </select>
-      </div>
-      <div class="slider-row wide" title="StormyClouds 3D sky &amp; cloud rendering style">
-        <span>&#x270E;</span>
-        <select id="sel-cloudstyle" aria-label="StormyClouds sky rendering style">
-          <option value="0">Volumetric painted (3D)</option>
-          <option value="1">StormyClouds · Film grain</option>
-          <option value="2">StormyClouds · Spray &amp; drips</option>
-          <option value="3">StormyClouds · Mezzotint</option>
-          <option value="4">StormyClouds · Dry brush</option>
-          <option value="5">StormyClouds · Flow streaks</option>
-          <option value="6">StormyClouds · Line boil</option>
-        </select>
-      </div>
-      <div class="slider-row wide" title="Moon glow intensity"><span>&#x263E;</span><input id="sl-moon" type="range" min="0" max="2" step="0.02" value="1" aria-label="Moon glow"></div>
-      <div class="slider-row wide" title="Full synodic lunar phase cycle (New → Waxing → Full → Waning → New)">
-        <span>&#x25D0;</span>
-        <input id="sl-moonph" type="range" min="0" max="2" step="0.01" value="0.85" aria-label="Moon phase">
-        <em id="moon-label">&#x1F314; Waxing</em>
-      </div>
-    </div>
+    </details>
 
-    <span class="lab">Post, Film &amp; Art Styles</span>
-    <div class="slider-grid">
-      <div class="slider-row wide" title="Artistic &amp; diagnostic render style (X-Ray, Sketch, Charcoal, Painterly, Impressionist)">
-        <span>&#x270F;&#xFE0E;</span>
-        <select id="sel-art" aria-label="Artistic and X-ray render style">
-          <option value="0" selected>Style · Cinema (Default)</option>
-          <option value="1">Style · X-Ray Structural</option>
-          <option value="2">Style · Architectural Ink Sketch</option>
-          <option value="3">Style · Charcoal &amp; Chalk</option>
-          <option value="4">Style · Painterly Impasto</option>
-          <option value="5">Style · Impressionist Nocturne</option>
-        </select>
+    <!-- 5. Traffic, Transit, Harbor & Spaceport -->
+    <details class="subpanel" open>
+      <summary>Traffic, Transit, Harbor &amp; Spaceport</summary>
+      <div class="subpanel-body">
+        <div class="slider-grid">
+          <div class="slider-row wide" title="Multi-strata car &amp; air traffic density (0 = off … 20,000 vehicles)">
+            <span>&#x21C4;</span>
+            <input id="sl-traffic" type="range" min="0" max="1" step="0.005" value="0.25" aria-label="Multi-strata traffic density">
+            <em id="traffic-label">320</em>
+          </div>
+          <div class="slider-row wide" title="Cross-City Public Transit Network &amp; Stations (0 = off … 2.5 = high-frequency express)">
+            <span>&#x2317;</span>
+            <input id="sl-transit" type="range" min="0" max="2.5" step="0.05" value="1" aria-label="Public transportation network amount">
+            <em id="transit-label">100%</em>
+          </div>
+          <div class="slider-row wide" title="Deepwater Harbor, Piers, Cruise Liners &amp; Container Ships (0 = off … 2.5 = busy port)">
+            <span>&#x2693;&#xFE0E;</span>
+            <input id="sl-maritime" type="range" min="0" max="2.5" step="0.05" value="1" aria-label="Harbor and ships amount">
+            <em id="maritime-label">100%</em>
+          </div>
+          <div class="slider-row wide" title="Air &amp; Orbital Spaceport — Runways, Shuttles &amp; Rockets (0 = off … 2.5 = heavy flight ops)">
+            <span>&#x2708;&#xFE0E;</span>
+            <input id="sl-air" type="range" min="0" max="2.5" step="0.05" value="1" aria-label="Air and spaceport amount">
+            <em id="air-label">100%</em>
+          </div>
+        </div>
       </div>
-      <div class="slider-row wide" title="Artistic / X-Ray filter blend &amp; intensity">
-        <span>&#x25D2;</span>
-        <input id="sl-artstr" type="range" min="0" max="1.4" step="0.02" value="1" aria-label="Artistic filter intensity">
-      </div>
-      <div class="slider-row" title="Bloom intensity"><span>&#x263C;</span><input id="sl-bloom" type="range" min="0" max="2" step="0.02" value="0.95" aria-label="Bloom intensity"></div>
-      <div class="slider-row" title="Lens optics &amp; chromatic dispersion"><span>&#x25CE;</span><input id="sl-lens" type="range" min="0" max="1.5" step="0.02" value="0.55" aria-label="Chromatic aberration and lens halation"></div>
-      <div class="slider-row" title="Color grading contrast"><span>&#x25D1;</span><input id="sl-contrast" type="range" min="0.65" max="1.5" step="0.01" value="1.08" aria-label="Color grading contrast"></div>
-      <div class="slider-row" title="Color temperature (cool ↔ warm)"><span>&#x00B1;</span><input id="sl-temp" type="range" min="-1" max="1" step="0.02" value="0.14" aria-label="Color grading temperature"></div>
-      <div class="slider-row wide" title="Old-film grain, specks &amp; scratches"><span>&#x2338;</span><input id="sl-film" type="range" min="0" max="1.5" step="0.02" value="0.16" aria-label="Old film grain, dust specks and scratches"></div>
-    </div>
+    </details>
 
-    <span class="lab">Capture &amp; Camera Path</span>
-    <div class="cap-row" title="Clean HUD-free scene render export (PNG still or WebM/MP4 video)">
-      <select id="sel-res" aria-label="Render export resolution" title="Still PNG render resolution">
-        <option value="view">Viewport</option>
-        <option value="1080p" selected>1080p HD</option>
-        <option value="2x">2× Super</option>
-        <option value="4k">4K UHD</option>
-      </select>
-      <button id="b-snap" type="button" class="action" aria-label="Export clean PNG render" title="Export clean PNG still render">&#x2316; PNG</button>
-      <button id="b-vid" type="button" class="action ghost" aria-pressed="false" aria-label="Record live scene video" title="Start / stop live WebM video capture">&#x25CF; Vid</button>
-      <button id="b-path-render" type="button" class="icon-btn" aria-label="Render camera path to video" title="Play recorded camera path &amp; export video" disabled>&#x23FA;</button>
-    </div>
-    <div class="cap-row" title="Camera path recorder — record live flight (R), add keyframe (K), replay smoothly (P)">
-      <button id="b-rec" type="button" class="icon-btn" aria-pressed="false" aria-label="Record camera path" title="Record live camera flight path (R)">&#x25CF;</button>
-      <button id="b-kf-add" type="button" class="icon-btn" aria-label="Add camera keyframe" title="Add camera keyframe at current pose (K)">&#x25C7;</button>
-      <button id="b-play" type="button" class="icon-btn" aria-pressed="false" aria-label="Play or pause camera path" title="Play / pause smooth camera path (P)" disabled>&#x25B6;</button>
-      <button id="b-loop" type="button" class="icon-btn on" aria-pressed="true" aria-label="Loop camera path playback" title="Loop camera path playback">&#x21BB;</button>
-      <button id="b-path-exp" type="button" class="icon-btn" aria-label="Export camera path JSON" title="Download recorded camera path JSON" disabled>&#x2913;</button>
-      <button id="b-path-clear" type="button" class="icon-btn" aria-label="Clear recorded camera path" title="Clear recorded camera path" disabled>&#x2715;</button>
-    </div>
-    <div class="slider-grid" style="margin-top: 5px;">
-      <div class="slider-row wide" title="Scrub along recorded camera path">
-        <span>&#x29BF;</span>
-        <input id="sl-scrub" type="range" min="0" max="1" step="0.001" value="0" aria-label="Camera path timeline scrubber" disabled>
-        <em id="path-label">0 kf</em>
+    <!-- 6. Signage, Mega-Wraps & Glyph Script -->
+    <details class="subpanel">
+      <summary>Signage, Mega-Wraps &amp; Glyphs</summary>
+      <div class="subpanel-body">
+        <div class="slider-grid">
+          <div class="slider-row wide" title="Billboards, Holograms &amp; Street Signage Amount (0 = completely off … 2.5 = neon saturation)">
+            <span>&#x25AE;</span>
+            <input id="sl-signs" type="range" min="0" max="2.5" step="0.05" value="1" aria-label="Billboards and signage amount">
+            <em id="signs-label">100%</em>
+          </div>
+          <div class="slider-row wide" title="Mega-Facade Building-Covering Signage Wraps (0 = off … 2.2 = monumental skyscraper wraps)">
+            <span>&#x25A3;</span>
+            <input id="sl-megawrap" type="range" min="0" max="2.2" step="0.05" value="1" aria-label="Mega facade signage wrap coverage">
+            <em id="megawrap-label">100%</em>
+          </div>
+          <div class="slider-row wide" title="Synthetic Procedural Glyph Script (Linear A/B &amp; Cyber-Synth Sigils — no real-world language)">
+            <span>&#x232C;</span>
+            <select id="sel-glyph" aria-label="Synthetic signage glyph script">
+              <option value="0" selected>Glyphs · Hybrid Linear-Synth</option>
+              <option value="1">Glyphs · Minoan Linear A/B</option>
+              <option value="2">Glyphs · Cyber-Synth Sigils</option>
+            </select>
+          </div>
+          <div class="slider-row wide" title="Signage Glyph Animation Speed (0 = static signs … 2.5 = rapid kinetic telemetry)">
+            <span>&#x27F3;</span>
+            <input id="sl-sign-anim" type="range" min="0" max="2.5" step="0.05" value="1" aria-label="Signage animation speed">
+            <em id="sign-anim-label">1.0×</em>
+          </div>
+          <div class="slider-row" title="Window density"><span>&#x229E;</span><input id="sl-win" type="range" min="0" max="2" step="0.02" value="1" aria-label="Window density"></div>
+          <div class="slider-row" title="Window &amp; sign glow"><span>&#x273A;</span><input id="sl-glow" type="range" min="0" max="2.5" step="0.02" value="1" aria-label="Window glow"></div>
+        </div>
       </div>
-    </div>
+    </details>
+
+    <!-- 7. Parks & Mega-Vegetation -->
+    <details class="subpanel">
+      <summary>Parks &amp; Mega-Vegetation</summary>
+      <div class="subpanel-body">
+        <div class="slider-grid">
+          <div class="slider-row wide" title="Park trees &amp; canopy network style">
+            <span>&#x2740;</span>
+            <select id="sel-trees" aria-label="Park tree and canopy architecture">
+              <option value="0">Trees · Auto (Follow Theme)</option>
+              <option value="1">Trees · Real Botanical</option>
+              <option value="2">Trees · Artificial Cyber</option>
+              <option value="3">Trees · Hybrid Bio-Cyber</option>
+            </select>
+          </div>
+          <div class="slider-row wide" title="Vegetation Cover Amount (0 = barren concrete … 2.4 = lush urban forest)">
+            <span>&#x2618;&#xFE0E;</span>
+            <input id="sl-veg-cover" type="range" min="0" max="2.4" step="0.05" value="1" aria-label="Vegetation cover amount">
+            <em id="veg-cover-label">100%</em>
+          </div>
+          <div class="slider-row wide" title="Vegetation Scale (0.4× saplings … 4.5× monumental 120m+ Supertree Bio-Arcologies)">
+            <span>&#x2195;</span>
+            <input id="sl-veg-scale" type="range" min="0.4" max="4.5" step="0.05" value="1" aria-label="Vegetation and supertree scale">
+            <em id="veg-scale-label">1.0×</em>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <!-- 8. World Scale, Suburbs & Terrain -->
+    <details class="subpanel">
+      <summary>City Scale, Suburbs &amp; Terrain</summary>
+      <div class="subpanel-body">
+        <div class="slider-grid">
+          <div class="slider-row wide" title="World geometry curvature (Plane ↔ Sphere)">
+            <span>&#x25D4;</span>
+            <input id="sl-curve" type="range" min="0" max="1" step="0.01" value="0" aria-label="World curvature plane to sphere">
+            <em id="curve-label">Plane</em>
+          </div>
+          <div class="slider-row" title="City core size (radius)"><span>&#x2B1A;</span><input id="sl-radius" type="range" min="1" max="15" step="1" value="5" aria-label="City size"></div>
+          <div class="slider-row" title="Horizon suburbs reach (0 = no suburbs)"><span>&#x2302;</span><input id="sl-suburbs" type="range" min="0" max="1.6" step="0.05" value="1" aria-label="Horizon suburbs reach"></div>
+          <div class="slider-row" title="Building height scale"><span>&#x2195;</span><input id="sl-height" type="range" min="0.5" max="2" step="0.02" value="1" aria-label="Height scale"></div>
+          <div class="slider-row" title="Terrain relief amount (0 = flat)">
+            <span>&#x22F0;</span>
+            <input id="sl-relief" type="range" min="0" max="2" step="0.05" value="1" aria-label="Distant terrain elevation scale">
+          </div>
+          <div class="slider-row wide" title="Distant mountains, deserts, hills &amp; caldera relief">
+            <span>&#x25B2;</span>
+            <select id="sel-terrain" aria-label="Distant terrain and relief mode">
+              <option value="0" selected>Terrain · Distant Mountains</option>
+              <option value="1">Terrain · Desert Dunes &amp; Mesas</option>
+              <option value="2">Terrain · Rolling Farmland Hills</option>
+              <option value="3">Terrain · Volcanic Caldera Rim</option>
+              <option value="4">Terrain · Flat Horizon Plain</option>
+            </select>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <!-- 9. Time, Moon, Atmosphere & Weather -->
+    <details class="subpanel">
+      <summary>Time, Moon, Atmosphere &amp; Weather</summary>
+      <div class="subpanel-body">
+        <div class="slider-grid">
+          <div class="slider-row wide" title="Time of day (0–24h) — Sun, Moon &amp; Stars follow spherical sky orbits (press T to run live cycle)">
+            <span>&#x2600;&#xFE0E;</span>
+            <input id="sl-time" type="range" min="0" max="24" step="0.05" value="18.2" aria-label="Time of day">
+            <em id="time-label">18:12</em>
+            <button id="b-time-play" type="button" class="mini-btn" aria-pressed="false" aria-label="Play or pause 24-hour time cycle" title="Play / pause continuous 24h celestial &amp; lunar cycle (T)">&#x25B6;</button>
+          </div>
+          <div class="slider-row wide" title="Weather mode"><span>&#x2602;&#xFE0E;</span><input id="sl-weather" type="range" min="0" max="6" step="1" value="0" aria-label="Weather mode"><em id="weather-label">&#x2600;&#xFE0E; Clear</em></div>
+          <div class="slider-row wide" title="Full synodic lunar phase cycle (New → Waxing → Full → Waning → New)">
+            <span>&#x25D0;</span>
+            <input id="sl-moonph" type="range" min="0" max="2" step="0.01" value="0.85" aria-label="Moon phase">
+            <em id="moon-label">&#x1F314; Waxing</em>
+          </div>
+          <div class="slider-row" title="Moon glow intensity"><span>&#x263E;</span><input id="sl-moon" type="range" min="0" max="2" step="0.02" value="1" aria-label="Moon glow"></div>
+          <div class="slider-row" title="Moon size"><span>&#x25EF;</span><input id="sl-moonsz" type="range" min="0.3" max="2.5" step="0.02" value="1" aria-label="Moon size"></div>
+          <div class="slider-row" title="Atmospheric fog"><span>&#x224B;</span><input id="sl-fog" type="range" min="0" max="2.5" step="0.02" value="1" aria-label="Fog"></div>
+          <div class="slider-row" title="Street, beacon &amp; searchlight intensity"><span>&#x2726;</span><input id="sl-lights" type="range" min="0" max="2" step="0.02" value="1" aria-label="Atmospheric lights"></div>
+          <div class="slider-row" title="Horizon haze"><span>&#x2261;</span><input id="sl-haze" type="range" min="0" max="2" step="0.02" value="1" aria-label="Horizon haze"></div>
+          <div class="slider-row" title="Sun glow"><span>&#x263C;</span><input id="sl-sun" type="range" min="0" max="2" step="0.02" value="1" aria-label="Sun glow"></div>
+          <div class="slider-row" title="Colour vibrance"><span>&#x25C8;</span><input id="sl-vib" type="range" min="0.4" max="1.6" step="0.02" value="1" aria-label="Colour vibrance"></div>
+          <div class="slider-row" title="Ambient dust motes"><span>&#x2726;</span><input id="sl-dust" type="range" min="0" max="1.8" step="0.02" value="0.6" aria-label="Ambient dust motes"></div>
+        </div>
+      </div>
+    </details>
+
+    <!-- 10. Post, Art Styles & Capture -->
+    <details class="subpanel">
+      <summary>Post, Art Styles &amp; Capture</summary>
+      <div class="subpanel-body">
+        <div class="slider-grid">
+          <div class="slider-row wide" title="Artistic &amp; diagnostic render style (X-Ray, Sketch, Charcoal, Painterly, Impressionist)">
+            <span>&#x270F;&#xFE0E;</span>
+            <select id="sel-art" aria-label="Artistic and X-ray render style">
+              <option value="0" selected>Style · Cinema (Default)</option>
+              <option value="1">Style · X-Ray Structural</option>
+              <option value="2">Style · Architectural Ink Sketch</option>
+              <option value="3">Style · Charcoal &amp; Chalk</option>
+              <option value="4">Style · Painterly Impasto</option>
+              <option value="5">Style · Impressionist Nocturne</option>
+            </select>
+          </div>
+          <div class="slider-row wide" title="Artistic / X-Ray filter blend &amp; intensity">
+            <span>&#x25D2;</span>
+            <input id="sl-artstr" type="range" min="0" max="1.4" step="0.02" value="1" aria-label="Artistic filter intensity">
+          </div>
+          <div class="slider-row" title="Bloom intensity"><span>&#x263C;</span><input id="sl-bloom" type="range" min="0" max="2" step="0.02" value="0.95" aria-label="Bloom intensity"></div>
+          <div class="slider-row" title="Lens optics &amp; chromatic dispersion"><span>&#x25CE;</span><input id="sl-lens" type="range" min="0" max="1.5" step="0.02" value="0.55" aria-label="Chromatic aberration and lens halation"></div>
+          <div class="slider-row" title="Color grading contrast"><span>&#x25D1;</span><input id="sl-contrast" type="range" min="0.65" max="1.5" step="0.01" value="1.08" aria-label="Color grading contrast"></div>
+          <div class="slider-row" title="Color temperature (cool ↔ warm)"><span>&#x00B1;</span><input id="sl-temp" type="range" min="-1" max="1" step="0.02" value="0.14" aria-label="Color grading temperature"></div>
+          <div class="slider-row wide" title="Old-film grain, specks &amp; scratches"><span>&#x2338;</span><input id="sl-film" type="range" min="0" max="1.5" step="0.02" value="0.16" aria-label="Old film grain, dust specks and scratches"></div>
+        </div>
+
+        <div class="cap-row" style="margin-top: 7px;" title="Clean HUD-free scene render export (PNG still or WebM/MP4 video)">
+          <select id="sel-res" aria-label="Render export resolution" title="Still PNG render resolution">
+            <option value="view">Viewport</option>
+            <option value="1080p" selected>1080p HD</option>
+            <option value="2x">2× Super</option>
+            <option value="4k">4K UHD</option>
+          </select>
+          <button id="b-snap" type="button" class="action" aria-label="Export clean PNG render" title="Export clean PNG still render">&#x2316; PNG</button>
+          <button id="b-vid" type="button" class="action ghost" aria-pressed="false" aria-label="Record live scene video" title="Start / stop live WebM video capture">&#x25CF; Vid</button>
+          <button id="b-path-render" type="button" class="icon-btn" aria-label="Render camera path to video" title="Play recorded camera path &amp; export video" disabled>&#x23FA;</button>
+        </div>
+        <div class="cap-row" title="Camera path recorder — record live flight (R), add keyframe (K), replay smoothly (P)">
+          <button id="b-rec" type="button" class="icon-btn" aria-pressed="false" aria-label="Record camera path" title="Record live camera flight path (R)">&#x25CF;</button>
+          <button id="b-kf-add" type="button" class="icon-btn" aria-label="Add camera keyframe" title="Add camera keyframe at current pose (K)">&#x25C7;</button>
+          <button id="b-play" type="button" class="icon-btn" aria-pressed="false" aria-label="Play or pause camera path" title="Play / pause smooth camera path (P)" disabled>&#x25B6;</button>
+          <button id="b-loop" type="button" class="icon-btn on" aria-pressed="true" aria-label="Loop camera path playback" title="Loop camera path playback">&#x21BB;</button>
+          <button id="b-path-exp" type="button" class="icon-btn" aria-label="Export camera path JSON" title="Download recorded camera path JSON" disabled>&#x2913;</button>
+          <button id="b-path-clear" type="button" class="icon-btn" aria-label="Clear recorded camera path" title="Clear recorded camera path" disabled>&#x2715;</button>
+        </div>
+        <div class="slider-grid" style="margin-top: 5px;">
+          <div class="slider-row wide" title="Scrub along recorded camera path">
+            <span>&#x29BF;</span>
+            <input id="sl-scrub" type="range" min="0" max="1" step="0.001" value="0" aria-label="Camera path timeline scrubber" disabled>
+            <em id="path-label">0 kf</em>
+          </div>
+        </div>
+      </div>
+    </details>
 
     <div class="seed-row">
       <input id="seed-input" type="number" min="1" max="999999999" aria-label="City seed" title="City seed">

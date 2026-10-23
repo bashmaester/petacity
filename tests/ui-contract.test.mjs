@@ -144,4 +144,23 @@ test('Phase-10 landscape, park tree modes, anticipatory steering & artistic/X-ra
   assert.ok(main.includes("e.key === 'v'"), 'V key shortcut wired for anticipatory obstacle avoidance');
 });
 
+test('Phase-12 collapsible subpanels, water/cloud/signage/glyph subpanels & feature amount dials exist', () => {
+  const subpanelMatches = html.match(/<details\s+class="subpanel"/g) || [];
+  assert.ok(subpanelMatches.length >= 8, `expected >=8 minimizable <details class="subpanel"> sections, got ${subpanelMatches.length}`);
+  for (const id of [
+    'b-fold-all', 'sl-tint', 'tint-label',
+    'sl-water-amt', 'water-amt-label', 'sl-shoredist', 'shoredist-label',
+    'sl-cloud-seed', 'sl-cloud-evol', 'sl-cloud-lac', 'cloud-label', 'cloud-lac-label',
+    'sl-transit', 'transit-label', 'sl-maritime', 'maritime-label', 'sl-air', 'air-label',
+    'sl-signs', 'signs-label', 'sl-megawrap', 'megawrap-label', 'sel-glyph', 'sl-sign-anim', 'sign-anim-label',
+    'sl-veg-cover', 'veg-cover-label', 'sl-veg-scale', 'veg-scale-label',
+  ]) {
+    assert.ok(html.includes(`id="${id}"`), `#${id} present in index.html`);
+  }
+  assert.match(html, /id="sl-clouds"[^>]*min="0"/, 'Cloud cover slider reaches 0 (completely clear sky)');
+  assert.match(html, /id="sl-veg-scale"[^>]*max="4\.5"/, 'Vegetation scale slider reaches 4.5x for giant supertrees');
+  assert.match(html, /<select[^>]*id="sel-glyph"/, 'Synthetic glyph script selector is a <select> dropdown');
+});
+
+
 

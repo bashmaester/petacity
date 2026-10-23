@@ -582,5 +582,87 @@ test('Phase-11: strict water-body exclusion, road-web trapezoid subdivision, den
   assert.ok(railLoops.length >= 16, `expected >=16 closed railLoop segments, got ${railLoops.length}`);
 });
 
+test('Phase-12: feature amount dials (0=off .. cranked), shoreline distance, showcase park, river bridges, harbor ships, transit network & spaceport', () => {
+  // 1) Zero-amount dials completely turn off each major feature
+  const bare = generateCity({
+    seed: 4417,
+    radius: 5,
+    suburbReach: 0,
+    waterMode: 1,
+    waterAmount: 0,
+    terrainMode: 4,
+    terrainScale: 0,
+    vegCover: 0,
+    transitAmt: 0,
+    maritimeAmt: 0,
+    airAmt: 0,
+    signAmt: 0,
+    megaWrap: 0,
+  });
+  assert.equal(bare.water.length, 0, 'waterAmount=0 turns off all water bodies');
+  assert.equal(bare.trees.length, 0, 'vegCover=0 turns off all vegetation');
+  assert.equal(bare.suburbCount, 0, 'suburbReach=0 turns off suburbs');
+  assert.equal(bare.transit.active, false, 'transitAmt=0 disables public transit network');
+  assert.equal(bare.transit.stations.length, 0, 'transitAmt=0 builds 0 transit stations');
+  assert.equal(bare.harbor, null, 'maritimeAmt=0 disables harbor & ships');
+  assert.equal(bare.spaceport, null, 'airAmt=0 disables spaceport');
+  assert.equal(bare.bills.length, 0, 'signAmt=0 turns off all billboards');
+  assert.equal(bare.signs.length, 0, 'signAmt=0 turns off all street signs');
+  assert.equal(bare.holos.length, 0, 'signAmt=0 turns off all holograms');
+
+  // 2) Full rich world: Showcase Park, River + Bridges, Harbor + Cruise/Container Ships, Spaceport & Transit Network
+  const rich = generateCity({
+    seed: 4417,
+    radius: 5,
+    suburbReach: 1.0,
+    waterMode: 1,
+    waterAmount: 1.2,
+    shoreDist: 1.0,
+    vegCover: 1.4,
+    vegScale: 2.6,
+    transitAmt: 1.4,
+    maritimeAmt: 1.5,
+    airAmt: 1.4,
+    signAmt: 1.8,
+    megaWrap: 1.6,
+  });
+
+  const showcasePark = rich.places.find((p) => p.kind === 'park' && p.showcase);
+  assert.ok(showcasePark && showcasePark.r >= 85, 'Grand Conservatory Showcase Park exists on 2x2 superblock');
+  assert.ok(rich.trees.some((t) => t.h > 45), 'elevated vegScale grows monumental supertree bio-structures');
+
+  assert.ok(rich.bridges.length >= 3, `expected >=3 architectural river bridges, got ${rich.bridges.length}`);
+  assert.ok(rich.harbor && rich.harbor.piers.length >= 3, 'harbor builds multiple finger piers');
+  assert.ok(rich.harbor.cranes.length >= 2, 'harbor builds straddle gantry cranes');
+  assert.ok(rich.harbor.ships.some((s) => s.kind === 'cruise'), 'harbor features Luxury Cruise Liners');
+  assert.ok(rich.harbor.ships.some((s) => s.kind === 'container'), 'harbor features Heavy Container Ships');
+
+  assert.ok(rich.spaceport && rich.spaceport.runways.length === 2, 'spaceport builds twin illuminated runways');
+  assert.ok(rich.spaceport.pads.length >= 1 && rich.spaceport.flights.length >= 2, 'spaceport has orbital launch pads & active flights');
+  // Verify zero core/suburb building boxes intrude onto the spaceport runway plateau
+  const sp = rich.spaceport;
+  for (let i = 0; i < rich.count; i++) {
+    const dx = rich.x[i] - sp.x;
+    const dz = rich.z[i] - sp.z;
+    const lx = dx * sp.cos + dz * sp.sin;
+    const lz = -dx * sp.sin + dz * sp.cos;
+    assert.ok(
+      Math.abs(lx) >= sp.halfLen || Math.abs(lz) >= sp.halfWid,
+      `building box ${i} must not intrude onto spaceport runway apron`
+    );
+  }
+
+  assert.ok(rich.transit.active && rich.transit.lines.length === 3, '3-line cross-city public transit network active');
+  assert.ok(rich.transit.stations.length >= 4, `expected >=4 elevated transit stations, got ${rich.transit.stations.length}`);
+  assert.ok(rich.bills.length > 60 && rich.bills.some((b) => b.mega), 'elevated signAmt & megaWrap produce abundant billboards + mega-facade wraps');
+
+  // 3) Shoreline distance shifts coastal water boundary monotonically outward
+  const cSpan = 5 * CELL;
+  const dNear = evalCoastSignedDist(cSpan * 1.1, 0, cSpan, 0, 1, 0, 0, 0.5, 1.0);
+  const dFar = evalCoastSignedDist(cSpan * 1.1, 0, cSpan, 0, 1, 0, 0, 2.0, 1.0);
+  assert.ok(dFar > dNear + 400, `larger shoreDist pushes shoreline further offshore (dNear=${dNear.toFixed(0)}, dFar=${dFar.toFixed(0)})`);
+});
+
+
 
 

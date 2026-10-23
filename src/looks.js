@@ -139,6 +139,7 @@ export function buildCustomLookFields(cfg = {}) {
 export const LOOKS = [
   {
     id: 'bladerunner',
+    defTint: 0.78,
     nature: 'cyber',
     trees: { trunk: '#1a1220', canopy: '#2a1a3c', glow: '#ff4f8f' },
     defTime: 18.2,
@@ -169,6 +170,42 @@ export const LOOKS = [
     },
     grade: { bloom: 0.95, lens: 0.55, contrast: 1.08, temp: 0.14, film: 0.16 },
     post: { grain: 0.22, scan: 0, vignette: 0.85 },
+  },
+  {
+    id: 'realistic',
+    defTint: 0.44,
+    nature: 'organic',
+    trees: { trunk: '#5c4430', canopy: '#3d7f4b', glow: '#ffdf9e' },
+    defTime: 17.3,
+    label: 'Unreal Cinema',
+    blurb: 'modern cinema & game realism · varied glass, stone & steel · golden coastal sun',
+    accent: '#56b4e9',
+    sky: {
+      zen: '#16325c', hor: '#df8c59', sun: '#fff1d6', sunDir: [0.64, 0.26, -0.72],
+      stars: 0.12, cloud: 0.46, cloudCol: '#dce5f2', haze: 0.46,
+    },
+    fog: { color: '#394f6e', density: 0.00038, height: 0.00024 },
+    light: {
+      sun: '#ffe8c2', sunK: 1.32, amb: '#526f96', ambG: '#2a2622',
+      toon: 0, flat: 0,
+    },
+    tower: {
+      baseA: '#353e4a', baseB: '#6d7785',
+      palette: ['#8a7f71', '#4c5c6e', '#696259', '#3d444d', '#7b5848', '#788390'],
+      usePalette: 1,
+      winDensity: 0.46, winGlow: 0.95,
+      winA: '#ffd28e', winB: '#b5dcff', winC: '#ffe9c4',
+      edge: 0.12, edgeCol: '#95adc9', bandGlow: 0.55,
+    },
+    ground: { street: '#1f242c', block: '#2c323b', line: '#e6c57a', lineGlow: 0.32 },
+    signals: {
+      billA: '#ff8c42', billB: '#48cae4', billK: 0.92, billMono: 0,
+      beam: '#fff3dc', lamp: '#ffd599', pool: '#ffbe78', beacon: '#ff4242',
+      waterDeep: '#092438', waterShallow: '#1f6f84',
+      vehicles: ['#d8dee6', '#f2b705', '#2b4560', '#c1292e', '#eef2f6', '#4a5562'],
+    },
+    grade: { bloom: 0.62, lens: 0.28, contrast: 1.09, temp: 0.05, film: 0.08 },
+    post: { grain: 0.08, scan: 0, vignette: 0.52 },
   },
   {
     id: 'anime',

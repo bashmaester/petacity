@@ -4,13 +4,50 @@
 
 export const WORLD_PRESETS = [
   {
+    id: 'unreal-harbor',
+    label: 'Unreal Harbor & Spaceport',
+    state: {
+      seed: 4417, lookId: 'realistic', cityRadius: 5, suburbReach: 1.25,
+      waterMode: 1, waterAmount: 1.15, shoreDist: 0.92,
+      terrainMode: 0, terrainScale: 1.15, treeMode: 1, vegCover: 1.35, vegScale: 1.45,
+      transitAmt: 0.85, maritimeAmt: 1.35, airAmt: 1.25, signAmt: 1.15, megaWrap: 0.85,
+      worldCurve: 0.0, heightScale: 1.0, timeOfDay: 17.3, weatherMode: 0, dustLevel: 0.45,
+      tune: {
+        tint: 0.45, win: 1.0, glow: 0.95, fog: 0.85, lights: 1.05, traffic: 1.0,
+        clouds: 1.15, cloudType: 0, cloudStyle: 0, cloudSeed: 24, cloudEvol: 1.1, cloudLac: 2.15,
+        glyphStyle: 0, signAnim: 1.0,
+        haze: 0.85, sun: 1.2, vib: 1.06, moon: 0.85, moonsz: 1.0, moonph: 0.72,
+      },
+      post: { bloom: 0.62, lens: 0.28, contrast: 1.09, temp: 0.05, film: 0.08, artStyle: 0, artStrength: 1.0 },
+    },
+  },
+  {
     id: 'deckard-rain',
     label: "Deckard's Rain",
     state: {
       seed: 4417, lookId: 'bladerunner', cityRadius: 5, suburbReach: 1.15,
       worldCurve: 0.0, heightScale: 1.05, timeOfDay: 22.2, weatherMode: 1, dustLevel: 0.55,
-      tune: { win: 1.15, glow: 1.25, fog: 1.15, lights: 1.2, traffic: 1.1, clouds: 1.35, cloudType: 2, cloudStyle: 2, haze: 1.1, sun: 0.9, vib: 1.08, moon: 1.1, moonsz: 1.1, moonph: 0.82 },
+      signAmt: 1.65, megaWrap: 1.45,
+      tune: { tint: 0.78, win: 1.15, glow: 1.25, fog: 1.15, lights: 1.2, traffic: 1.1, clouds: 1.35, cloudType: 2, cloudStyle: 2, haze: 1.1, sun: 0.9, vib: 1.08, moon: 1.1, moonsz: 1.1, moonph: 0.82, glyphStyle: 0, signAnim: 1.25 },
       post: { bloom: 1.05, lens: 0.68, contrast: 1.10, temp: 0.14, film: 0.22 },
+    },
+  },
+  {
+    id: 'supertree-ecopolis',
+    label: 'Mega-Canopy Eco-Harbor',
+    state: {
+      seed: 6204, lookId: 'realistic', cityRadius: 5, suburbReach: 1.3,
+      waterMode: 0, waterAmount: 1.25, shoreDist: 1.0,
+      terrainMode: 2, terrainScale: 1.1, treeMode: 3, vegCover: 2.1, vegScale: 3.1,
+      transitAmt: 1.15, maritimeAmt: 1.5, airAmt: 1.35, signAmt: 1.1, megaWrap: 0.9,
+      worldCurve: 0.0, heightScale: 1.0, timeOfDay: 18.0, weatherMode: 0, dustLevel: 0.55,
+      tune: {
+        tint: 0.42, win: 1.05, glow: 1.1, fog: 0.78, lights: 1.15, traffic: 0.95,
+        clouds: 1.2, cloudType: 4, cloudStyle: 0, cloudSeed: 41, cloudEvol: 1.25, cloudLac: 2.25,
+        glyphStyle: 1, signAnim: 1.0,
+        haze: 0.82, sun: 1.3, vib: 1.15, moon: 1.0, moonsz: 1.15, moonph: 0.85,
+      },
+      post: { bloom: 0.72, lens: 0.32, contrast: 1.08, temp: 0.09, film: 0.06, artStyle: 0, artStrength: 1.0 },
     },
   },
   {
@@ -155,9 +192,18 @@ export function normalizeExactState(raw = {}) {
     cityRadius: Math.max(1, Math.min(15, Math.round(Number(raw.cityRadius) || 5))),
     suburbReach: roundN(raw.suburbReach ?? 1, 2),
     waterMode: Math.max(0, Math.min(4, Math.round(Number(raw.waterMode ?? 1)))),
+    waterAmount: Math.max(0, Math.min(2, roundN(Number(raw.waterAmount ?? 1), 2))),
+    shoreDist: Math.max(0.35, Math.min(2.5, roundN(Number(raw.shoreDist ?? 1), 2))),
     terrainMode: Math.max(0, Math.min(4, Math.round(Number(raw.terrainMode ?? 0)))),
     terrainScale: Math.max(0, Math.min(2, roundN(Number(raw.terrainScale ?? 1), 2))),
     treeMode: Math.max(0, Math.min(3, Math.round(Number(raw.treeMode ?? 0)))),
+    vegCover: Math.max(0, Math.min(2.5, roundN(Number(raw.vegCover ?? 1), 2))),
+    vegScale: Math.max(0.4, Math.min(4.5, roundN(Number(raw.vegScale ?? 1), 2))),
+    transitAmt: Math.max(0, Math.min(2.5, roundN(Number(raw.transitAmt ?? 0.75), 2))),
+    maritimeAmt: Math.max(0, Math.min(2.5, roundN(Number(raw.maritimeAmt ?? 1), 2))),
+    airAmt: Math.max(0, Math.min(2.5, roundN(Number(raw.airAmt ?? 1), 2))),
+    signAmt: Math.max(0, Math.min(2.5, roundN(Number(raw.signAmt ?? 1.15), 2))),
+    megaWrap: Math.max(0, Math.min(2.0, roundN(Number(raw.megaWrap ?? 1), 2))),
     worldCurve: roundN(raw.worldCurve ?? 0, 3),
     heightScale: roundN(raw.heightScale ?? 1, 2),
     timeOfDay: roundN(raw.timeOfDay ?? 18.2, 2),
@@ -180,8 +226,11 @@ export function normalizeExactState(raw = {}) {
     };
   }
   const defTune = {
+    tint: 0.75,
     win: 1, glow: 1, fog: 1, lights: 1, traffic: 1,
-    clouds: 1, cloudType: 0, cloudStyle: 0, haze: 1, sun: 1, vib: 1,
+    clouds: 1, cloudType: 0, cloudStyle: 0, cloudSeed: 17, cloudEvol: 1, cloudLac: 2.07,
+    glyphStyle: 0, signAnim: 1,
+    haze: 1, sun: 1, vib: 1,
     moon: 1, moonsz: 1, moonph: 0.85,
   };
   out.tune = { ...defTune };
