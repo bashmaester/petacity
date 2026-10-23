@@ -13,7 +13,8 @@ import {
   buildLandmarks, buildBeacons, buildPlaces, makeLamps, makeLandmarkMaterial,
   makeVehicles, makeSearchlights, makeLightPools,
   buildWater, buildBoulevards, buildBillboards, buildTrees, buildSculptures,
-  makeWeather, WEATHER_NAMES, buildSigns, buildHolos,
+  makeWeather, WEATHER_NAMES, CLOUD_TYPE_NAMES, describeMoonPhase,
+  buildSigns, buildHolos,
 } from '../src/scene.js';
 import {
   WORLD_PRESETS, DEFAULT_BOOKMARKS, encodeExactState, decodeExactState,
@@ -998,5 +999,99 @@ test('CameraPathRecorder & makeSceneExporter record, smoothly interpolate, round
   assert.equal(curH, 450, 'viewport height restored after 4K capture');
   assert.equal(curDpr, 1.25, 'pixelRatio restored after 4K capture');
 });
+
+test('Phase-9 special structures follow active color themes, celestial orbits & all 8 moon phases complete a 24h cycle, and 6 cloud types & covers work', () => {
+  const U = makeUniforms();
+  const world = makeWorld(U);
+  const { city, collider } = growCity(4417, 5, world.towerMat);
+
+  // 1) Special structures (landmarks + places) build richly and re-color dynamically with every look & Custom theme
+  const lms = buildLandmarks(city, U, LOOK_BY_ID.bladerunner);
+  const pls = buildPlaces(city, U, LOOK_BY_ID.bladerunner);
+  assert.equal(typeof lms.setLook, 'function', 'landmarkGroup exposes setLook(look)');
+  assert.equal(typeof pls.setLook, 'function', 'placeGroup exposes setLook(look)');
+
+  let firstTrimMat = null;
+  lms.traverse((o) => {
+    if (!firstTrimMat && o.isMesh && o.material?.uniforms?.uRole?.value === 2) {
+      firstTrimMat = o.material;
+    }
+  });
+  assert.ok(firstTrimMat, 'landmarks include glowing role=2 architectural trim meshes');
+  const colBR = firstTrimMat.uniforms.uCol.value.getHexString();
+  lms.setLook(LOOK_BY_ID.tron);
+  const colTron = firstTrimMat.uniforms.uCol.value.getHexString();
+  lms.setLook(LOOK_BY_ID.clay);
+  const colClay = firstTrimMat.uniforms.uCol.value.getHexString();
+  syncCustomLook({ zen: '#040812', hor: '#ff2277', base: '#121828', win: '#ffee88', accent: '#11ff99', sec: '#44ccff', style: 'lit', mono: false });
+  lms.setLook(LOOK_BY_ID.custom);
+  const colCustom = firstTrimMat.uniforms.uCol.value.getHexString();
+  assert.notEqual(colBR, colTron, 'landmark trim updates from Blade Runner to Tron');
+  assert.notEqual(colTron, colClay, 'landmark trim updates from Tron to Clay');
+  assert.notEqual(colClay, colCustom, 'landmark trim updates to Custom palette');
+
+  // 2) Moon traverses all 8 lunar phases across 0..2
+  const seenPhases = new Set();
+  for (let p = 0; p < 2.0; p += 0.125) {
+    const info = describeMoonPhase(p);
+    seenPhases.add(info.name);
+    applyTime(U, LOOK_BY_ID.bladerunner, 23.0, { moon: 1.2, moonph: p });
+    assert.ok(Math.abs(U.uMoonPhase.value - p) < 1e-6);
+  }
+  for (const expectedName of [
+    'New Moon', 'Waxing Crescent', 'First Quarter', 'Waxing Gibbous',
+    'Full Moon', 'Waning Gibbous', 'Third Quarter', 'Waning Crescent',
+  ]) {
+    assert.ok(seenPhases.has(expectedName), `moon phase cycle includes ${expectedName}`);
+  }
+
+  // 3) Proper 3D spherical celestial paths over a full 24h cycle (rise -> high transit -> set -> below horizon)
+  const L = LOOK_BY_ID.anime;
+  applyLook(U, L);
+  applyTime(U, L, 0.0, { moonph: 1.0 });
+  const sunMidnightY = U.uSolarDir.value.y;
+  const moonMidnightY = U.uMoonDir.value.y;
+  const star0 = U.uStarRot.value;
+
+  applyTime(U, L, 6.2, { moonph: 1.0 });
+  const sunDawn = U.uSolarDir.value.clone();
+
+  applyTime(U, L, 12.0, { moonph: 1.0 });
+  const sunNoonY = U.uSolarDir.value.y;
+  const moonNoonY = U.uMoonDir.value.y;
+  const star12 = U.uStarRot.value;
+
+  applyTime(U, L, 17.8, { moonph: 1.0 });
+  const sunDusk = U.uSolarDir.value.clone();
+
+  assert.ok(sunMidnightY < -0.6, `sun travels below horizon at midnight (y=${sunMidnightY.toFixed(2)})`);
+  assert.ok(sunNoonY > 0.9, `sun transits high overhead at noon (y=${sunNoonY.toFixed(2)})`);
+  assert.ok(sunDawn.x * sunDusk.x + sunDawn.z * sunDusk.z < -0.5, 'sun rises in East and sets opposite in West');
+  assert.ok(moonMidnightY > 0.85 && moonNoonY < -0.6, `full moon transits high at midnight (${moonMidnightY.toFixed(2)}) and dips below horizon at noon (${moonNoonY.toFixed(2)})`);
+  assert.ok(Math.abs((star12 - star0) - Math.PI) < 1e-4, 'starfield rotates 180 deg across 12 hours');
+
+  // 4) 6 volumetric cloud types & full cloud cover range (0 clear -> 2.4 overcast, even on Tron where sky.cloud=0)
+  assert.equal(CLOUD_TYPE_NAMES.length, 6, '6 cloud formation types exported');
+  for (let ct = 0; ct < 6; ct++) {
+    applyTime(U, LOOK_BY_ID.tron, 20.0, { clouds: 2.2, cloudType: ct });
+    assert.equal(U.uCloudType.value, ct);
+    assert.ok(U.uCloud.value > 0.65, 'high cloud cover works even on clear-authored looks');
+  }
+  applyTime(U, LOOK_BY_ID.bladerunner, 20.0, { clouds: 0 });
+  assert.equal(U.uCloud.value, 0, 'clouds=0 produces clear sky');
+
+  // 5) GPU swarm encodes horizontal street runs (mode < -0.5) & 90-degree corner turns (mode > 0.5)
+  const veh = makeVehicles(city, world.trailMat, 300, collider, { swarmMat: world.swarmMat, swarmCount: 1200 });
+  const cC = veh.swarmGeo.getAttribute('aCurveC');
+  let turnCount = 0;
+  let straightCount = 0;
+  for (let i = 0; i < 600; i++) {
+    const mode = cC.getW(i);
+    if (mode > 0.5) turnCount++;
+    else if (mode < -0.5) straightCount++;
+  }
+  assert.ok(turnCount >= 180 && straightCount >= 120, `swarm mixes 90-deg corner turns (${turnCount}) & horizontal street runs (${straightCount})`);
+});
+
 
 

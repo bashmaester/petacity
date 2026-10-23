@@ -9,7 +9,7 @@ export const WORLD_PRESETS = [
     state: {
       seed: 4417, lookId: 'bladerunner', cityRadius: 5, suburbReach: 1.15,
       worldCurve: 0.0, heightScale: 1.05, timeOfDay: 22.2, weatherMode: 1, dustLevel: 0.55,
-      tune: { win: 1.15, glow: 1.25, fog: 1.15, lights: 1.2, traffic: 1.1, clouds: 1.15, cloudStyle: 2, haze: 1.1, sun: 0.9, vib: 1.08, moon: 1.1, moonsz: 1.1, moonph: 0.82 },
+      tune: { win: 1.15, glow: 1.25, fog: 1.15, lights: 1.2, traffic: 1.1, clouds: 1.35, cloudType: 2, cloudStyle: 2, haze: 1.1, sun: 0.9, vib: 1.08, moon: 1.1, moonsz: 1.1, moonph: 0.82 },
       post: { bloom: 1.05, lens: 0.68, contrast: 1.10, temp: 0.14, film: 0.22 },
     },
   },
@@ -19,7 +19,7 @@ export const WORLD_PRESETS = [
     state: {
       seed: 4417, lookId: 'tron', cityRadius: 5, suburbReach: 1.35,
       worldCurve: 1.0, heightScale: 1.12, timeOfDay: 20.6, weatherMode: 0, dustLevel: 0.75,
-      tune: { win: 1.1, glow: 1.3, fog: 0.55, lights: 1.35, traffic: 1.15, clouds: 1.05, cloudStyle: 0, haze: 0.7, sun: 1.15, vib: 1.18, moon: 1.3, moonsz: 1.35, moonph: 0.78 },
+      tune: { win: 1.1, glow: 1.3, fog: 0.55, lights: 1.35, traffic: 1.15, clouds: 1.15, cloudType: 4, cloudStyle: 0, haze: 0.7, sun: 1.15, vib: 1.18, moon: 1.3, moonsz: 1.35, moonph: 1.0 },
       post: { bloom: 1.18, lens: 0.62, contrast: 1.14, temp: -0.18, film: 0.08 },
       cam: { x: 0, y: 980, z: 3150, yaw: 0, pitch: -0.46 },
     },
@@ -30,7 +30,7 @@ export const WORLD_PRESETS = [
     state: {
       seed: 1927, lookId: 'metropolis', cityRadius: 6, suburbReach: 1.1,
       worldCurve: 0.10, heightScale: 1.32, timeOfDay: 21.4, weatherMode: 6, dustLevel: 0.85,
-      tune: { win: 1.0, glow: 1.15, fog: 1.2, lights: 1.25, traffic: 0.95, clouds: 1.3, cloudStyle: 3, haze: 1.2, sun: 0.85, vib: 0.9, moon: 1.25, moonsz: 1.4, moonph: 0.9 },
+      tune: { win: 1.0, glow: 1.15, fog: 1.2, lights: 1.25, traffic: 0.95, clouds: 1.45, cloudType: 1, cloudStyle: 3, haze: 1.2, sun: 0.85, vib: 0.9, moon: 1.25, moonsz: 1.4, moonph: 1.25 },
       post: { bloom: 0.78, lens: 0.42, contrast: 1.24, temp: 0.06, film: 0.78 },
     },
   },
@@ -40,7 +40,7 @@ export const WORLD_PRESETS = [
     state: {
       seed: 8088, lookId: 'anime', cityRadius: 5, suburbReach: 1.45,
       worldCurve: 0.22, heightScale: 1.0, timeOfDay: 17.6, weatherMode: 0, dustLevel: 0.65,
-      tune: { win: 1.05, glow: 1.1, fog: 0.85, lights: 1.0, traffic: 1.05, clouds: 1.25, cloudStyle: 4, haze: 1.05, sun: 1.35, vib: 1.22, moon: 0.9, moonsz: 1.15, moonph: 0.72 },
+      tune: { win: 1.05, glow: 1.1, fog: 0.85, lights: 1.0, traffic: 1.05, clouds: 1.30, cloudType: 4, cloudStyle: 4, haze: 1.05, sun: 1.35, vib: 1.22, moon: 0.9, moonsz: 1.15, moonph: 0.55 },
       post: { bloom: 0.92, lens: 0.35, contrast: 1.06, temp: 0.22, film: 0.10 },
     },
   },
@@ -50,7 +50,7 @@ export const WORLD_PRESETS = [
     state: {
       seed: 1984, lookId: 'outrun', cityRadius: 5, suburbReach: 1.5,
       worldCurve: 0.28, heightScale: 0.95, timeOfDay: 19.4, weatherMode: 0, dustLevel: 0.5,
-      tune: { win: 1.2, glow: 1.35, fog: 0.9, lights: 1.25, traffic: 1.2, clouds: 1.1, cloudStyle: 5, haze: 1.15, sun: 1.5, vib: 1.3, moon: 1.2, moonsz: 1.6, moonph: 0.95 },
+      tune: { win: 1.2, glow: 1.35, fog: 0.9, lights: 1.25, traffic: 1.2, clouds: 1.15, cloudType: 3, cloudStyle: 5, haze: 1.15, sun: 1.5, vib: 1.3, moon: 1.2, moonsz: 1.6, moonph: 1.0 },
       post: { bloom: 1.25, lens: 0.72, contrast: 1.14, temp: 0.18, film: 0.16 },
     },
   },
@@ -60,7 +60,7 @@ export const WORLD_PRESETS = [
     state: {
       seed: 31415, lookId: 'clay', cityRadius: 5, suburbReach: 1.25,
       worldCurve: 0.45, heightScale: 0.92, timeOfDay: 15.4, weatherMode: 5, dustLevel: 0.9,
-      tune: { win: 0.65, glow: 0.75, fog: 0.95, lights: 0.8, traffic: 0.75, clouds: 1.05, cloudStyle: 6, haze: 1.1, sun: 1.1, vib: 1.0, moon: 0.6, moonsz: 1.0, moonph: 0.65 },
+      tune: { win: 0.65, glow: 0.75, fog: 0.95, lights: 0.8, traffic: 0.75, clouds: 1.05, cloudType: 0, cloudStyle: 6, haze: 1.1, sun: 1.1, vib: 1.0, moon: 0.6, moonsz: 1.0, moonph: 0.65 },
       post: { bloom: 0.55, lens: 0.25, contrast: 1.05, temp: 0.24, film: 0.24 },
     },
   },
@@ -71,7 +71,7 @@ export const WORLD_PRESETS = [
       seed: 7749, lookId: 'custom', cityRadius: 5, suburbReach: 1.3,
       worldCurve: 0.62, heightScale: 1.08, timeOfDay: 22.8, weatherMode: 3, dustLevel: 0.7,
       custom: { zen: '#051024', hor: '#0ea5a0', base: '#142238', win: '#ffe08a', accent: '#2ef2b8', sec: '#66d9ff', style: 'lit', mono: false },
-      tune: { win: 1.15, glow: 1.25, fog: 0.85, lights: 1.25, traffic: 1.0, clouds: 1.2, cloudStyle: 0, haze: 0.95, sun: 1.1, vib: 1.18, moon: 1.35, moonsz: 1.3, moonph: 0.86 },
+      tune: { win: 1.15, glow: 1.25, fog: 0.85, lights: 1.25, traffic: 1.0, clouds: 1.35, cloudType: 5, cloudStyle: 0, haze: 0.95, sun: 1.1, vib: 1.18, moon: 1.35, moonsz: 1.3, moonph: 1.65 },
       post: { bloom: 1.08, lens: 0.52, contrast: 1.10, temp: -0.22, film: 0.12 },
     },
   },
@@ -142,7 +142,7 @@ export function normalizeExactState(raw = {}) {
   }
   const defTune = {
     win: 1, glow: 1, fog: 1, lights: 1, traffic: 1,
-    clouds: 1, cloudStyle: 0, haze: 1, sun: 1, vib: 1,
+    clouds: 1, cloudType: 0, cloudStyle: 0, haze: 1, sun: 1, vib: 1,
     moon: 1, moonsz: 1, moonph: 0.85,
   };
   out.tune = { ...defTune };

@@ -197,6 +197,14 @@ body.ui-off #keys {
   min-width: 66px; text-align: right; white-space: nowrap;
   font-variant-emoji: text;
 }
+.slider-row .mini-btn {
+  width: 24px; height: 22px; flex: none; padding: 0; border-radius: 7px;
+  font-size: 10.5px; line-height: 1; display: inline-flex; align-items: center; justify-content: center;
+}
+.slider-row .mini-btn.on {
+  border-color: var(--accent); color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, rgba(255, 255, 255, 0.05));
+}
 
 #custom-box {
   display: none; margin: 7px 2px 3px; padding: 8px 9px;
@@ -452,7 +460,7 @@ button.icon-btn.rec-on, button.action.rec-on {
       <div class="slider-row" title="Window &amp; sign glow"><span>&#x273A;</span><input id="sl-glow" type="range" min="0" max="2.5" step="0.02" value="1" aria-label="Window glow"></div>
       <div class="slider-row" title="Atmospheric fog"><span>&#x224B;</span><input id="sl-fog" type="range" min="0" max="2.5" step="0.02" value="1" aria-label="Fog"></div>
       <div class="slider-row" title="Street, beacon &amp; searchlight intensity"><span>&#x2726;</span><input id="sl-lights" type="range" min="0" max="2" step="0.02" value="1" aria-label="Atmospheric lights"></div>
-      <div class="slider-row" title="3D Cloud cover"><span>&#x2601;&#xFE0E;</span><input id="sl-clouds" type="range" min="0" max="1.6" step="0.02" value="1" aria-label="Cloud cover"></div>
+      <div class="slider-row" title="3D Cloud cover (0 = clear sky … 2.4 = solid overcast)"><span>&#x2601;&#xFE0E;</span><input id="sl-clouds" type="range" min="0" max="2.4" step="0.02" value="1" aria-label="Cloud cover"></div>
       <div class="slider-row" title="Horizon haze"><span>&#x2261;</span><input id="sl-haze" type="range" min="0" max="2" step="0.02" value="1" aria-label="Horizon haze"></div>
       <div class="slider-row" title="Sun glow"><span>&#x263C;</span><input id="sl-sun" type="range" min="0" max="2" step="0.02" value="1" aria-label="Sun glow"></div>
       <div class="slider-row" title="Colour vibrance"><span>&#x25C8;</span><input id="sl-vib" type="range" min="0.4" max="1.6" step="0.02" value="1" aria-label="Colour vibrance"></div>
@@ -460,11 +468,28 @@ button.icon-btn.rec-on, button.action.rec-on {
 
     <span class="lab">Environment &amp; Weather</span>
     <div class="slider-grid">
-      <div class="slider-row" title="Time of day (0–24h)"><span>&#x2600;&#xFE0E;</span><input id="sl-time" type="range" min="0" max="24" step="0.1" value="18.2" aria-label="Time of day"></div>
+      <div class="slider-row wide" title="Time of day (0–24h) — Sun, Moon &amp; Stars follow spherical sky orbits (press T to run live cycle)">
+        <span>&#x2600;&#xFE0E;</span>
+        <input id="sl-time" type="range" min="0" max="24" step="0.05" value="18.2" aria-label="Time of day">
+        <em id="time-label">18:12</em>
+        <button id="b-time-play" type="button" class="mini-btn" aria-pressed="false" aria-label="Play or pause 24-hour time cycle" title="Play / pause continuous 24h celestial &amp; lunar cycle (T)">&#x25B6;</button>
+      </div>
       <div class="slider-row" title="Ambient dust motes"><span>&#x2726;</span><input id="sl-dust" type="range" min="0" max="1.8" step="0.02" value="0.6" aria-label="Ambient dust motes"></div>
+      <div class="slider-row" title="Moon size"><span>&#x25EF;</span><input id="sl-moonsz" type="range" min="0.3" max="2.5" step="0.02" value="1" aria-label="Moon size"></div>
       <div class="slider-row wide" title="Weather mode"><span>&#x2602;&#xFE0E;</span><input id="sl-weather" type="range" min="0" max="6" step="1" value="0" aria-label="Weather mode"><em id="weather-label">&#x2600;&#xFE0E; Clear</em></div>
-      <div class="slider-row wide" title="StormyClouds 3D sky &amp; cloud rendering style">
+      <div class="slider-row wide" title="Volumetric cloud formation type">
         <span>&#x2601;&#xFE0E;</span>
+        <select id="sel-cloudtype" aria-label="Volumetric cloud formation type">
+          <option value="0">Clouds · Fair-weather Cumulus</option>
+          <option value="1">Clouds · Thunderheads (Cumulonimbus)</option>
+          <option value="2">Clouds · Stratocumulus deck</option>
+          <option value="3">Clouds · High ice Cirrus wisps</option>
+          <option value="4">Clouds · Multi-layer Altocumulus + Cirrus</option>
+          <option value="5">Clouds · Low Sea-of-Clouds blanket</option>
+        </select>
+      </div>
+      <div class="slider-row wide" title="StormyClouds 3D sky &amp; cloud rendering style">
+        <span>&#x270E;</span>
         <select id="sel-cloudstyle" aria-label="StormyClouds sky rendering style">
           <option value="0">Volumetric painted (3D)</option>
           <option value="1">StormyClouds · Film grain</option>
@@ -475,9 +500,12 @@ button.icon-btn.rec-on, button.action.rec-on {
           <option value="6">StormyClouds · Line boil</option>
         </select>
       </div>
-      <div class="slider-row" title="Moon glow"><span>&#x263E;</span><input id="sl-moon" type="range" min="0" max="2" step="0.02" value="1" aria-label="Moon glow"></div>
-      <div class="slider-row" title="Moon size"><span>&#x25EF;</span><input id="sl-moonsz" type="range" min="0.3" max="2.5" step="0.02" value="1" aria-label="Moon size"></div>
-      <div class="slider-row wide" title="Moon phase"><span>&#x25D0;</span><input id="sl-moonph" type="range" min="0" max="1" step="0.02" value="0.85" aria-label="Moon phase"></div>
+      <div class="slider-row wide" title="Moon glow intensity"><span>&#x263E;</span><input id="sl-moon" type="range" min="0" max="2" step="0.02" value="1" aria-label="Moon glow"></div>
+      <div class="slider-row wide" title="Full synodic lunar phase cycle (New → Waxing → Full → Waning → New)">
+        <span>&#x25D0;</span>
+        <input id="sl-moonph" type="range" min="0" max="2" step="0.01" value="0.85" aria-label="Moon phase">
+        <em id="moon-label">&#x1F314; Waxing</em>
+      </div>
     </div>
 
     <span class="lab">Post &amp; Film</span>

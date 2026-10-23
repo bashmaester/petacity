@@ -86,6 +86,7 @@ test('UI toggle sits in top corner of panel, #keys avoids panel overlap, and gly
     'b-new', 'b-link', 'b-seed-pal',
     'b-preset-save', 'b-preset-del', 'b-poi-go', 'b-bm-go', 'b-bm-add', 'b-bm-del',
     'b-snap', 'b-vid', 'b-path-render', 'b-rec', 'b-kf-add', 'b-play', 'b-loop', 'b-path-exp', 'b-path-clear',
+    'b-time-play',
   ]) {
     const tag = html.match(new RegExp(`<button[^>]*id="${id}"[^>]*>`));
     assert.ok(tag, `button #${id} found`);
@@ -120,4 +121,14 @@ test('Phase-8 scene render export, camera path recorder & multi-strata traffic c
   }
   assert.match(html, /<select[^>]*id="sel-res"/, 'Render resolution selector is a <select> dropdown');
 });
+
+test('Phase-9 cloud types, extended cloud cover, complete moon phase readout & live 24h time-cycle controls exist', () => {
+  for (const id of ['sel-cloudtype', 'b-time-play', 'time-label', 'moon-label']) {
+    assert.ok(html.includes(`id="${id}"`), `#${id} present in index.html`);
+  }
+  assert.match(html, /<select[^>]*id="sel-cloudtype"/, 'Cloud formation type is a <select> dropdown');
+  assert.match(html, /id="sl-clouds"[^>]*max="2\.4"/, 'Cloud cover slider extends up to 2.4 overcast');
+  assert.match(html, /id="sl-moonph"[^>]*max="2"/, 'Moon phase slider spans full 0..2 synodic cycle');
+});
+
 

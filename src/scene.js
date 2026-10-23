@@ -77,8 +77,11 @@ export function makeUniforms() {
     uHor: { value: col('#a8452c') },
     uCloudCol: { value: col('#2c1226') },
     uStars: { value: 0 },
+    uStarRot: { value: 0 },
     uCloud: { value: 0.3 },
+    uCloudType: { value: 0 },
     uCloudStyle: { value: 0 },
+    uSolarDir: { value: new THREE.Vector3(0.5, 0.6, -0.5) },
     uHaze: { value: 0.5 },
     uGStreet: { value: col('#0c0713') },
     uGBlock: { value: col('#170e22') },
@@ -255,7 +258,8 @@ export function makeWorld(U) {
     vertexShader: SKY_VERT,
     fragmentShader: SKY_FRAG,
     uniforms: pick(U, [
-      'uZen', 'uHor', 'uSkySunCol', 'uSunDir', 'uCloudCol', 'uStars', 'uCloud', 'uCloudStyle',
+      'uZen', 'uHor', 'uSkySunCol', 'uSunDir', 'uSolarDir', 'uCloudCol', 'uStars', 'uStarRot',
+      'uCloud', 'uCloudType', 'uCloudStyle',
       'uHaze', 'uTime', 'uSunGlow', 'uSat', 'uMoonDir', 'uMoonSize', 'uMoonGlow', 'uMoonPhase',
       'uFlash', 'uWorldCurve', 'uPlanetR',
     ]),
@@ -287,7 +291,8 @@ export function makeWorld(U) {
     fragmentShader: CLOUD_FRAG,
     uniforms: pick(U, [
       'uCloudCol', 'uSkySunCol', 'uSunDir', 'uFogCol', 'uSunFogCol', 'uHazeSun',
-      'uCloud', 'uCloudStyle', 'uSunGlow', 'uTime', 'uSat', 'uWorldCurve', 'uPlanetR',
+      'uCloud', 'uCloudType', 'uCloudStyle', 'uSunGlow', 'uTime', 'uSat',
+      'uPoolCol', 'uLightK', 'uWorldCurve', 'uPlanetR',
     ]),
     transparent: true,
     depthWrite: false,
@@ -403,16 +408,18 @@ export function makeWorld(U) {
   };
 }
 
-/** One landmark material — shared look vocabulary with the towers. */
-export function makeLandmarkMaterial(U, hex) {
+/** One landmark material — shared look vocabulary with the towers, parameterized by architectural role. */
+export function makeLandmarkMaterial(U, hex = '#4a5568', role = 0) {
   return new THREE.ShaderMaterial({
     vertexShader: LANDMARK_VERT,
     fragmentShader: LANDMARK_FRAG,
     uniforms: {
       uCol: { value: col(hex) },
+      uRole: { value: role },
       ...pick(U, [
         'uSunDir', 'uSunCol', 'uSunK', 'uAmb', 'uAmbG', 'uWinDensity', 'uWinGlow',
-        'uWinA', 'uWinB', 'uEdge', 'uEdgeCol',
+        'uWinA', 'uWinB', 'uWinC', 'uEdge', 'uEdgeCol', 'uBandGlow', 'uToon', 'uFlat',
+        'uPoolCol', 'uLightK',
         'uFogCol', 'uSunFogCol', 'uFogDensity', 'uFogHeight', 'uHazeSun', 'uTime', 'uSat',
         'uWorldCurve', 'uPlanetR',
       ]),
@@ -463,181 +470,449 @@ export function growCity(seed, radius, towerMat, suburbReach = 1.0) {
 /* -------------------------------------------------------------- landmarks */
 
 /**
- * Build the named landmark (POI) geometry group from city.landmarks.
- * Each kind is a monumental composition: primary mass + strange companions
- * (tilted rings, floating slabs, buttresses, skybridges, orbiting halos).
+ * Derive a 5-tone architectural palette for landmarks and public venues from
+ * either an explicit `look` object or the active uniforms `U`, so every special
+ * structure follows the active color theme (Blade Runner, Tron, Clay, Anime,
+ * Abstract, Metropolis, Outrun, or Custom) while preserving per-structure seed variety.
  */
-export function buildLandmarks(city, U) {
+function computeSpecialPalette(look, U, seed = 0.5) {
+  const cPrimary = new THREE.Color();
+  const cSecondary = new THREE.Color();
+  const cTrim = new THREE.Color();
+  const cGallery = new THREE.Color();
+  const cPad = new THREE.Color();
+  const tmpA = new THREE.Color();
+  const tmpB = new THREE.Color();
+
+  const s = ((seed % 1) + 1) % 1;
+  if (look && look.tower) {
+    const tw = look.tower;
+    const gr = look.ground || {};
+    const sig = look.signals || {};
+    const lt = look.light || {};
+    if (tw.usePalette > 0.5 && Array.isArray(tw.palette) && tw.palette.length > 0) {
+      const pIdx = Math.floor(s * tw.palette.length) % tw.palette.length;
+      const pIdx2 = (pIdx + 2) % tw.palette.length;
+      cPrimary.set(tw.palette[pIdx]);
+      cSecondary.set(tw.palette[pIdx2]).lerp(tmpA.set(tw.baseA), 0.42);
+    } else {
+      cPrimary.set(tw.baseA).lerp(tmpA.set(tw.baseB), 0.30 + s * 0.58);
+      if (lt.amb) cPrimary.lerp(tmpB.set(lt.amb), 0.14);
+      cSecondary.set(tw.baseA).lerp(tmpA.set(gr.block || tw.baseA), 0.38);
+      if (tw.edgeCol) cSecondary.lerp(tmpB.set(tw.edgeCol), 0.08);
+    }
+    const accentHex = look.accent || tw.edgeCol || '#68e8ff';
+    const billHex = sig.billA || tw.edgeCol || accentHex;
+    cTrim.set(accentHex);
+    if (!(sig.billMono > 0.5)) cTrim.lerp(tmpA.set(billHex), s * 0.55);
+    const winHex = (!tw.winA || tw.winA === '#000000') ? accentHex : tw.winA;
+    cGallery.set(winHex).lerp(cTrim, 0.28);
+    cPad.set(gr.block || tw.baseA).lerp(tmpA.set(tw.baseA), 0.35);
+  } else {
+    if (U.uUsePal && U.uUsePal.value > 0.5 && U.uPal && U.uPal.value.length) {
+      const pal = U.uPal.value;
+      const pIdx = Math.floor(s * pal.length) % pal.length;
+      cPrimary.copy(pal[pIdx]);
+      cSecondary.copy(pal[(pIdx + 2) % pal.length]).lerp(U.uBaseA.value, 0.42);
+    } else {
+      cPrimary.copy(U.uBaseA.value).lerp(U.uBaseB.value, 0.30 + s * 0.58).lerp(U.uAmb.value, 0.14);
+      cSecondary.copy(U.uBaseA.value).lerp(U.uGBlock.value, 0.38).lerp(U.uEdgeCol.value, 0.08);
+    }
+    cTrim.copy(U.uBillA.value).lerp(U.uEdgeCol.value, s * 0.45);
+    cGallery.copy(U.uWinA.value);
+    if (cGallery.r + cGallery.g + cGallery.b < 0.03) cGallery.copy(cTrim);
+    cPad.copy(U.uGBlock.value).lerp(U.uBaseA.value, 0.35);
+  }
+  return { primary: cPrimary, secondary: cSecondary, trim: cTrim, gallery: cGallery, pad: cPad };
+}
+
+/**
+ * Build the named landmark (POI) geometry group from city.landmarks.
+ * Every landmark uses 4 theme-synced architectural material roles:
+ *   role 0 (`primary`)   : primary monumental structural casing & fluted facade
+ *   role 1 (`secondary`) : heavy podium plinths, mega-cores, ribs & buttress trusses
+ *   role 2 (`trim`)      : glowing architectural accent crowns, arrises & halo rings
+ *   role 3 (`gallery`)   : recessed illuminated sky-lobbies, terraces & observation pods
+ * Includes `arch`, `spire`, `dome`, `mast`, `crown`, `needle`, `pyramid`, `cantilever`, and `ziggurat`.
+ */
+export function buildLandmarks(city, U, initialLook = null) {
   const group = new THREE.Group();
-  const mats = new Map();
-  const mat = (hex) => {
-    if (!mats.has(hex)) mats.set(hex, makeLandmarkMaterial(U, hex));
-    return mats.get(hex);
+  const entries = [];
+
+  const addBox = (parent, w, h, d, mat, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    mesh.position.set(x, y, z);
+    if (rx || ry || rz) mesh.rotation.set(rx, ry, rz);
+    parent.add(mesh);
+    return mesh;
   };
-  const towerHexes = ['#3c4d66', '#4a3d63', '#2f4457', '#54425c', '#37485e', '#443a58'];
-  const accentHex = '#6a5a86';
 
   for (const lm of city.landmarks) {
-    const hex = towerHexes[Math.floor(lm.colorSeed * towerHexes.length) % towerHexes.length];
+    const pal = computeSpecialPalette(initialLook, U, lm.colorSeed);
+    const primaryMat = makeLandmarkMaterial(U, '#ffffff', 0);
+    const secondaryMat = makeLandmarkMaterial(U, '#ffffff', 1);
+    const trimMat = makeLandmarkMaterial(U, '#ffffff', 2);
+    const galleryMat = makeLandmarkMaterial(U, '#ffffff', 3);
+    primaryMat.uniforms.uCol.value.copy(pal.primary);
+    secondaryMat.uniforms.uCol.value.copy(pal.secondary);
+    trimMat.uniforms.uCol.value.copy(pal.trim);
+    galleryMat.uniforms.uCol.value.copy(pal.gallery);
+    entries.push({ seed: lm.colorSeed, primaryMat, secondaryMat, trimMat, galleryMat });
+
     const m = new THREE.Group();
     m.position.set(lm.x, 0, lm.z);
     m.rotation.y = lm.rot;
     const { kind, r, h } = lm;
 
-    if (kind === 'arch') {
-      const legH = h * 0.52;
-      for (const sx of [-1, 1]) {
-        const leg = new THREE.Mesh(new THREE.BoxGeometry(r * 0.4, legH, r * 0.58), mat(hex));
-        leg.position.set(sx * r, legH / 2, 0);
-        m.add(leg);
-        // buttress pylons leaning into the legs
-        const but = new THREE.Mesh(new THREE.BoxGeometry(r * 0.22, legH * 0.72, r * 0.9), mat(hex));
-        but.position.set(sx * r * 1.42, legH * 0.36, 0);
-        but.rotation.z = sx * -0.12;
-        m.add(but);
+    // Shared monumental stepped plaza plinth so landmarks meet the city grid cleanly
+    addBox(m, r * 2.25, 4.5, r * 2.25, secondaryMat, 0, 2.25, 0);
+    addBox(m, r * 1.92, 4.0, r * 1.92, primaryMat, 0, 6.2, 0);
+
+    if (kind === 'pyramid') {
+      // Neo-Mayan / Tyrell Arcology Pyramid: sloped 4-face monumental pyramid, armored diagonal
+      // corner spines, recessed illuminated sky-terraces, axial grand stairs & hovering capstone
+      const baseH = h * 0.14;
+      addBox(m, r * 2.55, baseH * 0.55, r * 2.55, secondaryMat, 0, baseH * 0.275, 0);
+      addBox(m, r * 2.28, baseH * 0.50, r * 2.28, primaryMat, 0, baseH * 0.78, 0);
+
+      // 4 axial ceremonial stair-ramps climbing the N/S/E/W faces of the base
+      for (let d = 0; d < 4; d++) {
+        const ang = d * (Math.PI / 2);
+        const ramp = new THREE.Group();
+        ramp.rotation.y = ang;
+        addBox(ramp, r * 0.44, baseH * 1.18, r * 0.68, secondaryMat, 0, baseH * 0.52, r * 1.16, -0.46, 0, 0);
+        addBox(ramp, r * 0.06, baseH * 1.24, r * 0.70, trimMat, -r * 0.23, baseH * 0.58, r * 1.16, -0.46, 0, 0);
+        addBox(ramp, r * 0.06, baseH * 1.24, r * 0.70, trimMat, r * 0.23, baseH * 0.58, r * 1.16, -0.46, 0, 0);
+        m.add(ramp);
       }
-      const arc = new THREE.Mesh(new THREE.TorusGeometry(r, r * 0.15, 8, 22, Math.PI), mat(hex));
+
+      // Main 4-sided sloped casing pyramid (rotated 45 deg so flat faces face N/S/E/W)
+      const pyrH = h * 0.74;
+      const rBot = r * 1.52;
+      const rTop = r * 0.28;
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(rTop, rBot, pyrH, 4, 1), primaryMat);
+      body.rotation.y = Math.PI / 4;
+      body.position.y = baseH + pyrH * 0.5;
+      m.add(body);
+
+      // 3 recessed horizontal sky-terrace observation galleries girdling the sloped faces
+      for (const frac of [0.26, 0.52, 0.76]) {
+        const yT = baseH + pyrH * frac;
+        const wT = (rBot + (rTop - rBot) * frac) * Math.SQRT2 * 1.03;
+        addBox(m, wT, h * 0.022, wT, galleryMat, 0, yT, 0);
+        addBox(m, wT * 1.035, h * 0.008, wT * 1.035, trimMat, 0, yT + h * 0.014, 0);
+      }
+
+      // 4 heavy armored corner ridge spines + glowing power conduits along the 4 diagonal arrises
+      const slopeAng = Math.atan2(rBot - rTop, pyrH);
+      const spineLen = Math.hypot(rBot - rTop, pyrH);
+      const rMid = (rBot + rTop) * 0.5;
+      for (let cIdx = 0; cIdx < 4; cIdx++) {
+        const diagA = cIdx * (Math.PI / 2) + Math.PI / 4;
+        const cornerGrp = new THREE.Group();
+        cornerGrp.rotation.y = diagA;
+        addBox(cornerGrp, r * 0.14, spineLen, r * 0.18, secondaryMat, 0, baseH + pyrH * 0.5, rMid * 0.99, -slopeAng, 0, 0);
+        addBox(cornerGrp, r * 0.045, spineLen * 0.98, r * 0.05, trimMat, 0, baseH + pyrH * 0.5, rMid * 1.045, -slopeAng, 0, 0);
+        m.add(cornerGrp);
+      }
+
+      // Summit sanctuary temple + hovering illuminated pyramidion capstone & halo
+      const sumY = baseH + pyrH;
+      const sanctW = rTop * Math.SQRT2 * 1.25;
+      addBox(m, sanctW, h * 0.045, sanctW, secondaryMat, 0, sumY + h * 0.02, 0);
+      addBox(m, sanctW * 0.84, h * 0.028, sanctW * 0.84, galleryMat, 0, sumY + h * 0.052, 0);
+      const cap = new THREE.Mesh(new THREE.ConeGeometry(rTop * 0.88, h * 0.095, 4), trimMat);
+      cap.rotation.y = Math.PI / 4;
+      cap.position.y = sumY + h * 0.135;
+      m.add(cap);
+      const halo = new THREE.Mesh(new THREE.TorusGeometry(rTop * 1.65, r * 0.028, 6, 32), trimMat);
+      halo.rotation.x = Math.PI / 2;
+      halo.position.y = sumY + h * 0.105;
+      m.add(halo);
+    } else if (kind === 'cantilever') {
+      // Cantilevered Sky-Wing Megastructure: twin mega-shear cores, 3 dramatic alternating
+      // horizontal cantilevered sky-wings with diagonal tension ties, under-slung compression
+      // struts, panoramic glowing sky-lobbies, and cantilevered rooftop helipad
+      const coreOffset = r * 0.42;
+      for (const sx of [-1, 1]) {
+        addBox(m, r * 0.46, h * 0.94, r * 0.62, secondaryMat, sx * coreOffset, h * 0.47, -r * 0.18);
+        addBox(m, r * 0.07, h * 0.92, r * 0.08, trimMat, sx * (coreOffset + sx * r * 0.22), h * 0.47, r * 0.13);
+      }
+      // Central glazed elevator atrium between the twin shear cores
+      addBox(m, r * 0.44, h * 0.88, r * 0.38, galleryMat, 0, h * 0.45, -r * 0.18);
+
+      // 3 dramatic horizontal cantilevered sky-wings projecting into open space
+      const wings = [
+        { yf: 0.36, len: r * 2.55, thick: h * 0.085, wid: r * 0.98, dirX: 1, dirZ: 0 },
+        { yf: 0.62, len: r * 2.75, thick: h * 0.092, wid: r * 0.92, dirX: 0, dirZ: 1 },
+        { yf: 0.84, len: r * 2.35, thick: h * 0.078, wid: r * 0.86, dirX: -1, dirZ: 0 },
+      ];
+      for (const w of wings) {
+        const wg = new THREE.Group();
+        wg.position.y = h * w.yf;
+        wg.rotation.y = Math.atan2(-w.dirZ, w.dirX);
+        // Main cantilevered horizontal box beam jutting along +X
+        addBox(wg, w.len, w.thick, w.wid, primaryMat, w.len * 0.34, 0, 0);
+        // Under-slung illuminated sky-lobby glass soffit & upper terrace band
+        addBox(wg, w.len * 0.92, w.thick * 0.26, w.wid * 0.90, galleryMat, w.len * 0.36, -w.thick * 0.46, 0);
+        addBox(wg, w.len * 1.01, w.thick * 0.11, w.wid * 1.02, trimMat, w.len * 0.34, w.thick * 0.50, 0);
+        // Diagonal steel compression knee-struts beneath the overhang
+        const strutLen = w.len * 0.68;
+        for (const sz of [-1, 1]) {
+          addBox(wg, strutLen, r * 0.085, r * 0.095, secondaryMat, w.len * 0.34, -w.thick * 0.95, sz * w.wid * 0.40, 0, 0, 0.42);
+          // Diagonal upper suspension tie-rods anchored high on the core
+          addBox(wg, strutLen * 0.88, r * 0.05, r * 0.05, trimMat, w.len * 0.38, w.thick * 0.95, sz * w.wid * 0.38, 0, 0, -0.38);
+        }
+        m.add(wg);
+      }
+
+      // Summit mast & cantilevered circular helipad ring
+      const padCyl = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.56, r * 0.48, 3.2, 20), secondaryMat);
+      padCyl.position.set(0, h * 0.95, r * 0.46);
+      m.add(padCyl);
+      const padRing = new THREE.Mesh(new THREE.TorusGeometry(r * 0.52, r * 0.04, 6, 28), trimMat);
+      padRing.rotation.x = Math.PI / 2;
+      padRing.position.set(0, h * 0.958, r * 0.46);
+      m.add(padRing);
+      const spire = new THREE.Mesh(new THREE.CylinderGeometry(0.6, r * 0.09, h * 0.14, 8), trimMat);
+      spire.position.set(-coreOffset, h * 0.99, -r * 0.18);
+      m.add(spire);
+    } else if (kind === 'ziggurat') {
+      // Seven-Step Hanging-Terrace Ziggurat: crisp stepped square tiers, corner buttress pylons,
+      // glowing colonnade galleries on every terrace, 4 axial grand stairways & temple crown
+      const tiers = 7;
+      const bodyH = h * 0.82;
+      const tierH = bodyH / tiers;
+      for (let i = 0; i < tiers; i++) {
+        const frac = i / tiers;
+        const w = r * 2.42 * (1 - frac * 0.66);
+        const yCenter = 6 + (i + 0.5) * tierH;
+        const useMat = i % 2 === 0 ? primaryMat : secondaryMat;
+        addBox(m, w, tierH * 0.82, w, useMat, 0, yCenter - tierH * 0.06, 0);
+        // Illuminated colonnade gallery recessed under each step cornice
+        addBox(m, w * 0.96, tierH * 0.18, w * 0.96, galleryMat, 0, yCenter + tierH * 0.38, 0);
+        addBox(m, w * 1.02, tierH * 0.06, w * 1.02, trimMat, 0, yCenter + tierH * 0.48, 0);
+        // Corner pylon bastions on lower 5 tiers
+        if (i < 5) {
+          const pw = w * 0.12;
+          for (const sx of [-1, 1]) {
+            for (const sz of [-1, 1]) {
+              addBox(m, pw, tierH * 0.96, pw, secondaryMat, sx * w * 0.48, yCenter, sz * w * 0.48);
+            }
+          }
+        }
+      }
+      // 4 monumental axial stairways climbing all 7 terraces
+      const stairRun = r * 2.42 * 0.33;
+      const stairLen = Math.hypot(stairRun, bodyH * 0.88);
+      const stairTilt = Math.atan2(stairRun, bodyH * 0.88);
+      for (let d = 0; d < 4; d++) {
+        const sg = new THREE.Group();
+        sg.rotation.y = d * (Math.PI / 2);
+        const zMid = r * 1.21 - stairRun * 0.46;
+        addBox(sg, r * 0.30, stairLen, r * 0.16, secondaryMat, 0, 6 + bodyH * 0.44, zMid, -stairTilt, 0, 0);
+        addBox(sg, r * 0.045, stairLen, r * 0.18, trimMat, -r * 0.16, 6 + bodyH * 0.45, zMid, -stairTilt, 0, 0);
+        addBox(sg, r * 0.045, stairLen, r * 0.18, trimMat, r * 0.16, 6 + bodyH * 0.45, zMid, -stairTilt, 0, 0);
+        m.add(sg);
+      }
+      // Summit sanctuary + twin horn pylons + hovering solar ring
+      const topY = 6 + bodyH;
+      const tw = r * 0.72;
+      addBox(m, tw, h * 0.10, tw, primaryMat, 0, topY + h * 0.05, 0);
+      addBox(m, tw * 0.78, h * 0.05, tw * 0.78, galleryMat, 0, topY + h * 0.11, 0);
+      for (const sx of [-1, 1]) {
+        addBox(m, tw * 0.16, h * 0.14, tw * 0.22, secondaryMat, sx * tw * 0.36, topY + h * 0.08, 0);
+      }
+      const zRing = new THREE.Mesh(new THREE.TorusGeometry(tw * 0.82, r * 0.032, 6, 32), trimMat);
+      zRing.position.y = topY + h * 0.155;
+      zRing.rotation.x = Math.PI / 2 - 0.25;
+      m.add(zRing);
+    } else if (kind === 'arch') {
+      const legH = h * 0.54;
+      for (const sx of [-1, 1]) {
+        addBox(m, r * 0.42, legH, r * 0.60, primaryMat, sx * r, legH / 2, 0);
+        addBox(m, r * 0.24, legH * 0.76, r * 0.92, secondaryMat, sx * r * 1.40, legH * 0.38, 0, 0, 0, sx * -0.12);
+        // Vertical glowing corner flutes along each leg
+        addBox(m, r * 0.05, legH * 0.94, r * 0.64, trimMat, sx * r * 0.78, legH * 0.48, 0);
+      }
+      const arc = new THREE.Mesh(new THREE.TorusGeometry(r, r * 0.16, 10, 28, Math.PI), primaryMat);
       arc.position.y = legH;
       m.add(arc);
-      // second, larger halo arc — strange, slightly rotated
-      const halo = new THREE.Mesh(new THREE.TorusGeometry(r * 1.32, r * 0.05, 6, 26, Math.PI * 0.86), mat(accentHex));
-      halo.position.y = legH * 0.92;
-      halo.rotation.z = 0.22;
-      halo.rotation.y = 0.35;
+      const innerArc = new THREE.Mesh(new THREE.TorusGeometry(r * 0.83, r * 0.038, 6, 28, Math.PI), trimMat);
+      innerArc.position.y = legH;
+      m.add(innerArc);
+      const halo = new THREE.Mesh(new THREE.TorusGeometry(r * 1.30, r * 0.045, 6, 30, Math.PI * 0.88), trimMat);
+      halo.position.y = legH * 0.94;
+      halo.rotation.set(0, 0.32, 0.18);
       m.add(halo);
-      const deck = new THREE.Mesh(new THREE.BoxGeometry(r * 2.15, r * 0.1, r * 0.34), mat(hex));
-      deck.position.y = legH + r * 0.02;
-      m.add(deck);
-      // floating keystone slab above the arc
-      const key = new THREE.Mesh(new THREE.BoxGeometry(r * 0.5, r * 0.16, r * 0.5), mat(accentHex));
-      key.position.y = legH + r * 1.42;
-      key.rotation.set(0.18, 0.5, 0.1);
-      m.add(key);
+      // Underslung panoramic skybridge deck + crown observation gallery
+      addBox(m, r * 2.18, r * 0.11, r * 0.38, secondaryMat, 0, legH + r * 0.02, 0);
+      addBox(m, r * 1.88, r * 0.08, r * 0.42, galleryMat, 0, legH - r * 0.06, 0);
+      addBox(m, r * 0.78, r * 0.16, r * 0.56, galleryMat, 0, legH + r * 1.12, 0);
+      addBox(m, r * 0.92, r * 0.05, r * 0.62, trimMat, 0, legH + r * 1.22, 0);
     } else if (kind === 'spire') {
-      const segs = 3;
-      let y = 0;
+      const segs = 4;
+      let y = 6;
       for (let i = 0; i < segs; i++) {
-        const segH = (h * 0.72) / segs;
-        const rb = r * (1 - (i / segs) * 0.55);
-        const rt = r * (1 - ((i + 1) / segs) * 0.55);
-        const seg = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, segH, 12), mat(hex));
+        const segH = (h * 0.70) / segs;
+        const rb = r * (1.06 - (i / segs) * 0.60);
+        const rt = r * (1.06 - ((i + 1) / segs) * 0.60);
+        const seg = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, segH, 12), i % 2 === 0 ? primaryMat : secondaryMat);
         seg.position.y = y + segH / 2;
         m.add(seg);
         y += segH;
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(rb * 1.35, rb * 0.14, 6, 18), mat(accentHex));
-        ring.rotation.x = Math.PI / 2 + (i % 2 ? 0.16 : -0.12);
+        const gal = new THREE.Mesh(new THREE.CylinderGeometry(rt * 1.10, rt * 1.10, segH * 0.12, 12), galleryMat);
+        gal.position.y = y - segH * 0.08;
+        m.add(gal);
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(rb * 1.24, rb * 0.08, 6, 24), trimMat);
+        ring.rotation.x = Math.PI / 2 + (i % 2 ? 0.12 : -0.10);
         ring.position.y = y;
         m.add(ring);
       }
-      const mast = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.1, r * 0.16, h * 0.3, 8), mat(hex));
-      mast.position.y = y + h * 0.15;
+      // 4 flying buttress fins anchoring the spire base
+      for (let i = 0; i < 4; i++) {
+        const a = i * (Math.PI / 2) + Math.PI / 4;
+        addBox(m, r * 0.16, h * 0.34, r * 0.85, secondaryMat, Math.cos(a) * r * 1.05, h * 0.17, Math.sin(a) * r * 1.05, 0, -a, 0);
+      }
+      const mast = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.06, r * 0.18, h * 0.28, 8), secondaryMat);
+      mast.position.y = y + h * 0.14;
       m.add(mast);
-      // giant tilted halo orbiting the spire
-      const orb = new THREE.Mesh(new THREE.TorusGeometry(r * 3.1, r * 0.12, 6, 40), mat(accentHex));
+      const orb = new THREE.Mesh(new THREE.TorusGeometry(r * 2.45, r * 0.08, 6, 40), trimMat);
       orb.position.y = h * 0.58;
-      orb.rotation.set(Math.PI / 2 - 0.42, 0.5, 0.28);
+      orb.rotation.set(Math.PI / 2 - 0.38, 0.5, 0.24);
       m.add(orb);
-      // cantilevered observation slabs
       for (let i = 0; i < 3; i++) {
-        const slab = new THREE.Mesh(new THREE.BoxGeometry(r * 2.6, r * 0.22, r * 0.8), mat(hex));
-        const a = i * 2.1 + lm.colorSeed * 6.0;
-        slab.position.set(Math.cos(a) * r * 1.6, h * (0.34 + i * 0.14), Math.sin(a) * r * 1.6);
-        slab.rotation.y = -a;
-        m.add(slab);
+        const a = i * 2.094 + lm.colorSeed * 6.0;
+        addBox(m, r * 2.2, r * 0.18, r * 0.72, primaryMat, Math.cos(a) * r * 1.35, h * (0.34 + i * 0.14), Math.sin(a) * r * 1.35, 0, -a, 0);
+        addBox(m, r * 2.0, r * 0.08, r * 0.76, galleryMat, Math.cos(a) * r * 1.35, h * (0.34 + i * 0.14) - r * 0.11, Math.sin(a) * r * 1.35, 0, -a, 0);
       }
     } else if (kind === 'dome') {
-      const podium = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 1.08, h * 0.45, 18), mat(hex));
-      podium.position.y = h * 0.225;
+      const podium = new THREE.Mesh(new THREE.CylinderGeometry(r * 1.02, r * 1.12, h * 0.42, 24), primaryMat);
+      podium.position.y = h * 0.21;
       m.add(podium);
-      const dome = new THREE.Mesh(new THREE.SphereGeometry(r * 0.92, 18, 12, 0, Math.PI * 2, 0, Math.PI / 2), mat(hex));
-      dome.position.y = h * 0.45;
+      const colonnade = new THREE.Mesh(new THREE.CylinderGeometry(r * 1.06, r * 1.06, h * 0.08, 24), galleryMat);
+      colonnade.position.y = h * 0.38;
+      m.add(colonnade);
+      const dome = new THREE.Mesh(new THREE.SphereGeometry(r * 0.96, 24, 14, 0, Math.PI * 2, 0, Math.PI / 2), primaryMat);
+      dome.position.y = h * 0.42;
       m.add(dome);
-      const finial = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.8, h * 0.22, 6), mat(hex));
-      finial.position.y = h * 0.45 + r * 0.92 + h * 0.11;
+      // Meridian structural ribs arching over the dome shell + glowing oculus lantern
+      for (let i = 0; i < 6; i++) {
+        const rib = new THREE.Mesh(new THREE.TorusGeometry(r * 0.97, r * 0.032, 6, 24, Math.PI), i % 2 === 0 ? secondaryMat : trimMat);
+        rib.position.y = h * 0.42;
+        rib.rotation.y = (i / 6) * Math.PI;
+        m.add(rib);
+      }
+      const lantern = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.16, r * 0.22, h * 0.12, 12), galleryMat);
+      lantern.position.y = h * 0.42 + r * 0.96 + h * 0.05;
+      m.add(lantern);
+      const finial = new THREE.Mesh(new THREE.CylinderGeometry(0.8, r * 0.08, h * 0.18, 8), trimMat);
+      finial.position.y = h * 0.42 + r * 0.96 + h * 0.18;
       m.add(finial);
-      // ring of radial buttress fins
-      const fins = 8;
+      const fins = 12;
       for (let i = 0; i < fins; i++) {
         const a = (i / fins) * Math.PI * 2;
-        const fin = new THREE.Mesh(new THREE.BoxGeometry(r * 0.14, h * 0.42, r * 0.62), mat(hex));
-        fin.position.set(Math.cos(a) * r * 1.18, h * 0.21, Math.sin(a) * r * 1.18);
-        fin.rotation.y = -a;
-        m.add(fin);
+        addBox(m, r * 0.14, h * 0.40, r * 0.56, secondaryMat, Math.cos(a) * r * 1.16, h * 0.20, Math.sin(a) * r * 1.16, 0, -a, 0);
       }
-      // hovering halo ring
-      const halo = new THREE.Mesh(new THREE.TorusGeometry(r * 1.5, r * 0.07, 6, 36), mat(accentHex));
-      halo.position.y = h * 0.45 + r * 1.05;
+      const halo = new THREE.Mesh(new THREE.TorusGeometry(r * 1.48, r * 0.055, 6, 36), trimMat);
+      halo.position.y = h * 0.42 + r * 1.02;
       halo.rotation.x = Math.PI / 2 - 0.12;
       m.add(halo);
     } else if (kind === 'mast') {
-      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.5, r * 1.1, h, 10), mat(hex));
-      shaft.position.y = h / 2;
+      // 4 splayed lattice legs + central core + 3 hexagonal broadcast decks
+      for (let i = 0; i < 4; i++) {
+        const a = i * (Math.PI / 2) + Math.PI / 4;
+        addBox(m, r * 0.28, h * 0.48, r * 0.28, secondaryMat, Math.cos(a) * r * 0.82, h * 0.22, Math.sin(a) * r * 0.82, 0, -a, 0.14);
+      }
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.36, r * 0.92, h * 0.94, 10), primaryMat);
+      shaft.position.y = h * 0.47;
       m.add(shaft);
-      for (const t of [0.35, 0.62, 0.86]) {
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(r * (2.4 - t * 1.4), r * 0.3, 6, 16), mat(hex));
+      for (const t of [0.34, 0.60, 0.84]) {
+        const rw = r * (2.3 - t * 1.2);
+        const deck = new THREE.Mesh(new THREE.CylinderGeometry(rw, rw * 0.92, h * 0.028, 6), secondaryMat);
+        deck.position.y = h * t;
+        m.add(deck);
+        const pod = new THREE.Mesh(new THREE.CylinderGeometry(rw * 0.86, rw * 0.86, h * 0.018, 6), galleryMat);
+        pod.position.y = h * t + h * 0.02;
+        m.add(pod);
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(rw * 1.08, r * 0.14, 6, 20), trimMat);
         ring.rotation.x = Math.PI / 2;
         ring.position.y = h * t;
         m.add(ring);
       }
-      const bar = new THREE.Mesh(new THREE.BoxGeometry(r * 5.2, r * 0.35, r * 0.35), mat(hex));
-      bar.position.y = h * 0.97;
-      m.add(bar);
-      // cross booms + floating spheres
+      addBox(m, r * 4.8, r * 0.28, r * 0.28, secondaryMat, 0, h * 0.96, 0);
       for (let i = 0; i < 3; i++) {
-        const a = i * 2.2 + lm.colorSeed * 5.0;
-        const boom = new THREE.Mesh(new THREE.BoxGeometry(r * 7.5, r * 0.28, r * 0.28), mat(hex));
-        boom.position.y = h * (0.42 + i * 0.17);
-        boom.rotation.y = a;
-        m.add(boom);
-        const ball = new THREE.Mesh(new THREE.SphereGeometry(r * 0.62, 10, 8), mat(accentHex));
-        ball.position.set(Math.cos(a) * r * 3.4, h * (0.42 + i * 0.17), Math.sin(a) * r * 3.4);
+        const a = i * 2.094 + lm.colorSeed * 5.0;
+        addBox(m, r * 6.4, r * 0.22, r * 0.22, secondaryMat, 0, h * (0.42 + i * 0.17), 0, 0, a, 0);
+        const ball = new THREE.Mesh(new THREE.SphereGeometry(r * 0.52, 10, 8), trimMat);
+        ball.position.set(Math.cos(a) * r * 3.0, h * (0.42 + i * 0.17), Math.sin(a) * r * 3.0);
         m.add(ball);
       }
     } else if (kind === 'crown') {
       const tiers = 5;
       for (let i = 0; i < tiers; i++) {
-        const w = r * 2 * (1 - (i / tiers) * 0.52);
-        const th = (h * 0.62) / tiers;
-        const tier = new THREE.Mesh(new THREE.BoxGeometry(w, th, w), mat(hex));
-        tier.position.y = (i + 0.5) * th;
-        // alternate tiers cantilever sideways — majestic, slightly wrong
-        tier.position.x = ((i % 2) ? 1 : -1) * r * 0.22 * i * 0.45;
-        tier.rotation.y = i * 0.16;
-        m.add(tier);
+        const w = r * 2.05 * (1 - (i / tiers) * 0.50);
+        const th = (h * 0.64) / tiers;
+        const offX = ((i % 2) ? 1 : -1) * r * 0.18 * i * 0.42;
+        addBox(m, w, th * 0.88, w, i % 2 === 0 ? primaryMat : secondaryMat, offX, (i + 0.5) * th, 0, 0, i * 0.14, 0);
+        addBox(m, w * 0.94, th * 0.14, w * 0.94, galleryMat, offX, (i + 0.94) * th, 0, 0, i * 0.14, 0);
+        addBox(m, w * 1.03, th * 0.05, w * 1.03, trimMat, offX, (i + 1.0) * th, 0, 0, i * 0.14, 0);
       }
-      const top = new THREE.Mesh(new THREE.BoxGeometry(r * 0.9, h * 0.34, r * 0.9), mat(hex));
-      top.position.y = h * 0.62 + h * 0.17;
-      m.add(top);
-      // tilted crown halo
-      const halo = new THREE.Mesh(new THREE.TorusGeometry(r * 1.75, r * 0.09, 6, 34), mat(accentHex));
-      halo.position.y = h * 0.82;
-      halo.rotation.x = Math.PI / 2 - 0.35;
+      addBox(m, r * 0.92, h * 0.30, r * 0.92, primaryMat, 0, h * 0.64 + h * 0.15, 0);
+      // 4 Art-Deco crown toweret fins + glowing finial halo
+      for (let i = 0; i < 4; i++) {
+        const a = i * (Math.PI / 2);
+        addBox(m, r * 0.18, h * 0.24, r * 0.34, trimMat, Math.cos(a) * r * 0.52, h * 0.84, Math.sin(a) * r * 0.52, 0, -a, 0);
+      }
+      const halo = new THREE.Mesh(new THREE.TorusGeometry(r * 1.65, r * 0.075, 6, 34), trimMat);
+      halo.position.y = h * 0.84;
+      halo.rotation.x = Math.PI / 2 - 0.32;
       m.add(halo);
     } else { // needle
-      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.4, r * 0.95, h * 0.78, 10), mat(hex));
+      for (let i = 0; i < 3; i++) {
+        const a = (i / 3) * Math.PI * 2;
+        addBox(m, r * 0.24, h * 0.36, r * 0.68, secondaryMat, Math.cos(a) * r * 0.86, h * 0.18, Math.sin(a) * r * 0.86, 0, -a, 0.15);
+      }
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.36, r * 0.92, h * 0.78, 12), primaryMat);
       shaft.position.y = h * 0.39;
       m.add(shaft);
-      const bulb = new THREE.Mesh(new THREE.SphereGeometry(r * 1.35, 14, 10), mat(hex));
-      bulb.position.y = h * 0.82;
-      m.add(bulb);
-      const spike = new THREE.Mesh(new THREE.CylinderGeometry(0.4, r * 0.32, h * 0.26, 8), mat(hex));
-      spike.position.y = h * 0.78 + h * 0.13;
+      // Double-deck revolving panoramic sky-pod
+      const podLow = new THREE.Mesh(new THREE.CylinderGeometry(r * 1.62, r * 1.10, h * 0.045, 20), secondaryMat);
+      podLow.position.y = h * 0.76;
+      m.add(podLow);
+      const podGlass = new THREE.Mesh(new THREE.CylinderGeometry(r * 1.72, r * 1.58, h * 0.042, 20), galleryMat);
+      podGlass.position.y = h * 0.80;
+      m.add(podGlass);
+      const podRim = new THREE.Mesh(new THREE.TorusGeometry(r * 1.76, r * 0.055, 6, 32), trimMat);
+      podRim.rotation.x = Math.PI / 2;
+      podRim.position.y = h * 0.822;
+      m.add(podRim);
+      const spike = new THREE.Mesh(new THREE.CylinderGeometry(0.4, r * 0.28, h * 0.22, 8), trimMat);
+      spike.position.y = h * 0.82 + h * 0.11;
       m.add(spike);
-      // twin ghost needles + skybridges
       for (const sx of [-1, 1]) {
-        const twin = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.14, r * 0.34, h * 0.55, 8), mat(accentHex));
-        twin.position.set(sx * r * 3.1, h * 0.275, sx * r * 0.7);
+        const twin = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.14, r * 0.34, h * 0.54, 8), secondaryMat);
+        twin.position.set(sx * r * 2.85, h * 0.27, sx * r * 0.65);
         m.add(twin);
-        for (const t of [0.3, 0.52]) {
-          const bridge = new THREE.Mesh(new THREE.BoxGeometry(r * 3.4, r * 0.18, r * 0.5), mat(hex));
-          bridge.position.set(sx * r * 1.55, h * t, sx * r * 0.35);
-          m.add(bridge);
+        for (const t of [0.30, 0.50]) {
+          addBox(m, r * 2.9, r * 0.14, r * 0.44, galleryMat, sx * r * 1.42, h * t, sx * r * 0.32);
+          addBox(m, r * 2.9, r * 0.05, r * 0.48, trimMat, sx * r * 1.42, h * t + r * 0.09, sx * r * 0.32);
         }
       }
     }
     m.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
     group.add(m);
   }
+
+  group.setLook = (look) => {
+    for (const ent of entries) {
+      const pal = computeSpecialPalette(look, U, ent.seed);
+      ent.primaryMat.uniforms.uCol.value.copy(pal.primary);
+      ent.secondaryMat.uniforms.uCol.value.copy(pal.secondary);
+      ent.trimMat.uniforms.uCol.value.copy(pal.trim);
+      ent.galleryMat.uniforms.uCol.value.copy(pal.gallery);
+    }
+  };
   return group;
 }
 
@@ -688,35 +963,45 @@ export function makeLamps(city, lampMat) {
 }
 
 /**
- * Public spaces — markets, plazas, parks, fairs. Stalls, canopies, monoliths,
- * tent rings and light trees: low, busy, lit places between the towers.
+ * Public spaces — markets, plazas, parks, fairs, arenas, theatres & stadiums.
+ * Uses theme-synced architectural material roles (`primary`, `secondary`, `trim`, `gallery`, `pad`)
+ * and exposes `group.setLook(look)` so every venue tracks active color themes & Custom palettes.
  */
-export function buildPlaces(city, U) {
+export function buildPlaces(city, U, initialLook = null) {
   const group = new THREE.Group();
-  const mats = new Map();
-  const mat = (hex) => {
-    if (!mats.has(hex)) mats.set(hex, makeLandmarkMaterial(U, hex));
-    return mats.get(hex);
-  };
-  const padHex = '#232838';
-  const stallHexes = ['#4a3a58', '#3a4a5e', '#584238', '#3c4c44', '#4e3d52'];
-  const warmHex = '#6a4a58';
+  const entries = [];
 
   for (const pl of city.places) {
+    const pal = computeSpecialPalette(initialLook, U, pl.seed);
+    const padMat = makeLandmarkMaterial(U, '#ffffff', 1);
+    const primaryMat = makeLandmarkMaterial(U, '#ffffff', 0);
+    const secondaryMat = makeLandmarkMaterial(U, '#ffffff', 1);
+    const trimMat = makeLandmarkMaterial(U, '#ffffff', 2);
+    const galleryMat = makeLandmarkMaterial(U, '#ffffff', 3);
+    padMat.uniforms.uCol.value.copy(pal.pad);
+    primaryMat.uniforms.uCol.value.copy(pal.primary);
+    secondaryMat.uniforms.uCol.value.copy(pal.secondary);
+    trimMat.uniforms.uCol.value.copy(pal.trim);
+    galleryMat.uniforms.uCol.value.copy(pal.gallery);
+    entries.push({ seed: pl.seed, padMat, primaryMat, secondaryMat, trimMat, galleryMat });
+
     const m = new THREE.Group();
     m.position.set(pl.x, 0, pl.z);
     m.rotation.y = pl.rot;
     const { kind, r, seed } = pl;
 
-    // the ground pad
-    const pad = new THREE.Mesh(new THREE.BoxGeometry(r * 2, 1.6, r * 2), mat(padHex));
+    // Stepped paved plaza plinth + perimeter trim curb
+    const pad = new THREE.Mesh(new THREE.BoxGeometry(r * 2.02, 1.6, r * 2.02), padMat);
     pad.position.y = 0.8;
     m.add(pad);
+    const curb = new THREE.Mesh(new THREE.BoxGeometry(r * 1.88, 0.55, r * 1.88), secondaryMat);
+    curb.position.y = 1.75;
+    m.add(curb);
 
     const rnd = (k) => ((Math.sin(seed * 97.1 + k * 41.7) * 43758.5453) % 1 + 1) % 1;
+    const stallMats = [primaryMat, secondaryMat];
 
     if (kind === 'market') {
-      // rings of stalls with canopy slabs
       const rings = 2;
       let idx = 0;
       for (let ring = 0; ring < rings; ring++) {
@@ -725,166 +1010,188 @@ export function buildPlaces(city, U) {
         for (let i = 0; i < count; i++) {
           const a = (i / count) * Math.PI * 2 + rnd(idx++) * 0.35;
           const sw = 7 + rnd(idx++) * 7;
-          const stall = new THREE.Mesh(new THREE.BoxGeometry(sw, 5 + rnd(idx++) * 4, sw * 0.8), mat(stallHexes[idx % stallHexes.length]));
+          const stall = new THREE.Mesh(new THREE.BoxGeometry(sw, 5 + rnd(idx++) * 4, sw * 0.8), stallMats[idx % 2]);
           stall.position.set(Math.cos(a) * rr, 4, Math.sin(a) * rr);
           stall.rotation.y = -a + rnd(idx++) * 0.5;
           m.add(stall);
-          const canopy = new THREE.Mesh(new THREE.BoxGeometry(sw * 1.45, 0.8, sw * 1.2), mat(warmHex));
+          const canopy = new THREE.Mesh(new THREE.BoxGeometry(sw * 1.45, 0.85, sw * 1.2), i % 2 === 0 ? trimMat : galleryMat);
           canopy.position.set(Math.cos(a) * rr, 9.5 + rnd(idx) * 3, Math.sin(a) * rr);
           canopy.rotation.y = stall.rotation.y;
           m.add(canopy);
         }
       }
-      const ob = new THREE.Mesh(new THREE.CylinderGeometry(2.4, 3.6, 26, 8), mat(warmHex));
-      ob.position.y = 13;
+      // Central glass market pavilion pyramid + clock obelisk
+      const pav = new THREE.Mesh(new THREE.ConeGeometry(r * 0.24, 9.5, 4), galleryMat);
+      pav.rotation.y = Math.PI / 4;
+      pav.position.y = 11.5;
+      m.add(pav);
+      const ob = new THREE.Mesh(new THREE.CylinderGeometry(1.8, 3.4, 28, 8), trimMat);
+      ob.position.y = 15;
       m.add(ob);
     } else if (kind === 'plaza') {
-      // monolith ring + floating centre orb
-      for (let i = 0; i < 5; i++) {
-        const a = (i / 5) * Math.PI * 2 + pl.seed * 3;
-        const mh = 26 + rnd(i) * 42;
-        const mono = new THREE.Mesh(new THREE.BoxGeometry(5 + rnd(i + 9) * 4, mh, 10), mat(stallHexes[i % stallHexes.length]));
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2 + pl.seed * 3;
+        const mh = 26 + rnd(i) * 40;
+        const mono = new THREE.Mesh(new THREE.BoxGeometry(5 + rnd(i + 9) * 4, mh, 10), i % 2 === 0 ? primaryMat : secondaryMat);
         mono.position.set(Math.cos(a) * r * 0.62, mh / 2, Math.sin(a) * r * 0.62);
         mono.rotation.y = -a + 0.4;
         mono.rotation.z = (rnd(i + 3) - 0.5) * 0.14;
         m.add(mono);
       }
-      const orb = new THREE.Mesh(new THREE.SphereGeometry(7, 12, 10), mat(warmHex));
+      // Stepped central glass pyramid fountain + hovering solar astrolabe rings
+      const ftn = new THREE.Mesh(new THREE.ConeGeometry(r * 0.22, 14, 4), galleryMat);
+      ftn.rotation.y = Math.PI / 4;
+      ftn.position.y = 8.5;
+      m.add(ftn);
+      const orb = new THREE.Mesh(new THREE.SphereGeometry(6.5, 14, 12), trimMat);
       orb.position.y = 34;
       m.add(orb);
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(r * 0.34, 1.1, 6, 28), mat(warmHex));
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(r * 0.34, 1.05, 6, 32), trimMat);
       ring.position.y = 34;
       ring.rotation.x = Math.PI / 2 - 0.3;
       m.add(ring);
+      const ring2 = new THREE.Mesh(new THREE.TorusGeometry(r * 0.26, 0.75, 6, 28), galleryMat);
+      ring2.position.y = 34;
+      ring2.rotation.set(0.45, 0.6, 0.2);
+      m.add(ring2);
     } else if (kind === 'park') {
-      // light trees + winding path slabs
-      for (let i = 0; i < 12; i++) {
+      for (let i = 0; i < 14; i++) {
         const a = rnd(i * 3) * Math.PI * 2;
         const rr = r * (0.15 + rnd(i * 3 + 1) * 0.72);
         const th = 9 + rnd(i * 3 + 2) * 14;
-        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 1.1, th, 6), mat(padHex));
+        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 1.1, th, 6), secondaryMat);
         trunk.position.set(Math.cos(a) * rr, th / 2, Math.sin(a) * rr);
         m.add(trunk);
-        const crown = new THREE.Mesh(new THREE.SphereGeometry(2.6 + rnd(i) * 2.2, 8, 6), mat(warmHex));
+        const crown = new THREE.Mesh(new THREE.SphereGeometry(2.8 + rnd(i) * 2.2, 10, 8), i % 3 === 0 ? trimMat : galleryMat);
         crown.position.set(Math.cos(a) * rr, th + 1.6, Math.sin(a) * rr);
         m.add(crown);
       }
+      // Botanical geodesic conservatory dome at heart of park
+      const dome = new THREE.Mesh(new THREE.SphereGeometry(r * 0.24, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), galleryMat);
+      dome.position.y = 2.0;
+      m.add(dome);
       for (let i = 0; i < 5; i++) {
-        const slab = new THREE.Mesh(new THREE.BoxGeometry(r * 0.5, 0.9, 4.5), mat(stallHexes[i % stallHexes.length]));
+        const slab = new THREE.Mesh(new THREE.BoxGeometry(r * 0.52, 0.9, 4.5), primaryMat);
         const a = i * 1.35 + seed * 6;
-        slab.position.set(Math.cos(a) * r * 0.35, 1.6, Math.sin(a) * r * 0.35);
+        slab.position.set(Math.cos(a) * r * 0.35, 1.9, Math.sin(a) * r * 0.35);
         slab.rotation.y = a * 1.7;
         m.add(slab);
       }
-    } else if (kind === 'fair') { // tent ring + wheel-ish ring + midway stalls
+    } else if (kind === 'fair') {
       for (let i = 0; i < 7; i++) {
         const a = (i / 7) * Math.PI * 2 + seed * 4;
-        const tent = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 8 + rnd(i) * 5, 12 + rnd(i + 5) * 9, 4), mat(stallHexes[i % stallHexes.length]));
+        const tent = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 8 + rnd(i) * 5, 12 + rnd(i + 5) * 9, 6), i % 2 === 0 ? primaryMat : galleryMat);
         tent.position.set(Math.cos(a) * r * 0.55, 7, Math.sin(a) * r * 0.55);
         tent.rotation.y = a + 0.6;
         m.add(tent);
       }
-      const wheel = new THREE.Mesh(new THREE.TorusGeometry(r * 0.42, 1.6, 6, 30), mat(warmHex));
-      wheel.position.set(r * 0.25, r * 0.42, -r * 0.3);
+      const wheel = new THREE.Mesh(new THREE.TorusGeometry(r * 0.42, 1.6, 8, 32), trimMat);
+      wheel.position.set(r * 0.25, r * 0.44, -r * 0.3);
       wheel.rotation.y = 0.5;
       m.add(wheel);
       for (let i = 0; i < 8; i++) {
         const a = (i / 8) * Math.PI * 2;
-        const bar = new THREE.Mesh(new THREE.BoxGeometry(r * 0.82, 0.9, 0.9), mat(padHex));
-        bar.position.set(r * 0.25, r * 0.42, -r * 0.3);
+        const bar = new THREE.Mesh(new THREE.BoxGeometry(r * 0.82, 0.9, 0.9), secondaryMat);
+        bar.position.set(r * 0.25, r * 0.44, -r * 0.3);
         bar.rotation.z = a;
         bar.rotation.y = 0.5;
         m.add(bar);
       }
     } else if (kind === 'arena') {
-      // the arena: ribbed oval bowl + twin glowing halo crowns + flying buttresses + entrance arches
-      const bowl = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.78, r * 0.92, 36, 24), mat(stallHexes[1]));
+      const bowl = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.78, r * 0.92, 36, 28), primaryMat);
       bowl.scale.z = 0.76;
       bowl.position.y = 18;
       m.add(bowl);
-      const hole = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.52, r * 0.52, 38, 20), mat(padHex));
+      const concourse = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.88, r * 0.88, 5.5, 28), galleryMat);
+      concourse.scale.z = 0.76;
+      concourse.position.y = 14;
+      m.add(concourse);
+      const hole = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.52, r * 0.52, 38, 22), padMat);
       hole.scale.z = 0.76;
       hole.position.y = 19;
       m.add(hole);
       for (let i = 0; i < 16; i++) {
         const a = (i / 16) * Math.PI * 2;
-        const rib = new THREE.Mesh(new THREE.BoxGeometry(3.8, 42, 10), mat(warmHex));
+        const rib = new THREE.Mesh(new THREE.BoxGeometry(3.6, 42, 10), i % 2 === 0 ? secondaryMat : trimMat);
         rib.position.set(Math.cos(a) * r * 0.86, 21, Math.sin(a) * r * 0.66);
         rib.rotation.y = -a;
         rib.rotation.z = 0.14;
         m.add(rib);
       }
-      const crown = new THREE.Mesh(new THREE.TorusGeometry(r * 0.66, 2.0, 6, 36), mat(warmHex));
+      const crown = new THREE.Mesh(new THREE.TorusGeometry(r * 0.66, 2.0, 6, 36), trimMat);
       crown.scale.z = 0.76;
       crown.position.y = 40;
       m.add(crown);
-      const innerCrown = new THREE.Mesh(new THREE.TorusGeometry(r * 0.42, 1.3, 6, 28), mat(warmHex));
+      const innerCrown = new THREE.Mesh(new THREE.TorusGeometry(r * 0.42, 1.3, 6, 28), galleryMat);
       innerCrown.scale.z = 0.76;
       innerCrown.position.y = 46;
       m.add(innerCrown);
       for (let i = 0; i < 4; i++) {
         const a = (i / 4) * Math.PI * 2 + 0.4;
-        const gate = new THREE.Mesh(new THREE.TorusGeometry(12, 2.4, 6, 14, Math.PI), mat(warmHex));
+        const gate = new THREE.Mesh(new THREE.TorusGeometry(12, 2.4, 6, 14, Math.PI), trimMat);
         gate.position.set(Math.cos(a) * r * 0.9, 2, Math.sin(a) * r * 0.68);
         gate.rotation.y = -a + Math.PI / 2;
         m.add(gate);
       }
     } else if (kind === 'theatre') {
-      // grand movie palace: stepped Art-Deco fly-tower, glowing marquee canopy, twin neon fins & grand stairs
-      const hall = new THREE.Mesh(new THREE.BoxGeometry(r * 1.08, 30, r * 0.86), mat(stallHexes[0]));
+      const hall = new THREE.Mesh(new THREE.BoxGeometry(r * 1.08, 30, r * 0.86), primaryMat);
       hall.position.y = 15;
       m.add(hall);
-      const flyTower = new THREE.Mesh(new THREE.BoxGeometry(r * 0.66, 22, r * 0.44), mat(stallHexes[4]));
-      flyTower.position.set(0, 36, -r * 0.14);
+      const flyTower = new THREE.Mesh(new THREE.BoxGeometry(r * 0.66, 24, r * 0.44), secondaryMat);
+      flyTower.position.set(0, 37, -r * 0.14);
       m.add(flyTower);
-      const crown = new THREE.Mesh(new THREE.BoxGeometry(r * 0.82, 9, r * 0.64), mat(warmHex));
-      crown.position.y = 34;
+      const crown = new THREE.Mesh(new THREE.BoxGeometry(r * 0.82, 8, r * 0.64), galleryMat);
+      crown.position.y = 33.5;
       m.add(crown);
-      const marquee = new THREE.Mesh(new THREE.BoxGeometry(r * 0.98, 4.2, 18), mat(warmHex));
-      marquee.position.set(0, 12.5, r * 0.52);
+      // Dramatic cantilevered marquee canopy projecting over the grand stairs
+      const marquee = new THREE.Mesh(new THREE.BoxGeometry(r * 1.02, 3.8, 22), trimMat);
+      marquee.position.set(0, 13.0, r * 0.56);
       m.add(marquee);
       for (const sx of [-1, 1]) {
-        const blade = new THREE.Mesh(new THREE.BoxGeometry(4.6, 38, 3.0), mat(warmHex));
-        blade.position.set(sx * r * 0.42, 31, r * 0.46);
+        const blade = new THREE.Mesh(new THREE.BoxGeometry(4.2, 40, 3.2), trimMat);
+        blade.position.set(sx * r * 0.42, 32, r * 0.46);
         m.add(blade);
       }
-      const spire = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 2.2, 22, 8), mat(warmHex));
-      spire.position.set(0, 56, -r * 0.14);
+      const spire = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 2.2, 22, 8), trimMat);
+      spire.position.set(0, 58, -r * 0.14);
       m.add(spire);
       for (let i = 0; i < 4; i++) {
-        const step = new THREE.Mesh(new THREE.BoxGeometry(r * 0.9 - i * 6, 1.4, 8), mat(padHex));
+        const step = new THREE.Mesh(new THREE.BoxGeometry(r * 0.9 - i * 6, 1.4, 8), padMat);
         step.position.set(0, 0.7 + i * 1.4, r * 0.52 + 14 - i * 4);
         m.add(step);
       }
     } else if (kind === 'stadium') {
-      // the stadium: twin-tier oval colosseum, canopy rim, floodlight towers & glowing track
-      const tier1 = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.92, r * 0.99, 17, 26), mat(stallHexes[2]));
+      const tier1 = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.92, r * 0.99, 17, 28), primaryMat);
       tier1.scale.z = 0.72;
       tier1.position.y = 8.5;
       m.add(tier1);
-      const tier2 = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.72, r * 0.88, 19, 26), mat(stallHexes[4]));
+      const skyBox = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.90, r * 0.90, 4.2, 28), galleryMat);
+      skyBox.scale.z = 0.72;
+      skyBox.position.y = 18.0;
+      m.add(skyBox);
+      const tier2 = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.72, r * 0.88, 18, 28), secondaryMat);
       tier2.scale.z = 0.72;
-      tier2.position.y = 26;
+      tier2.position.y = 26.5;
       m.add(tier2);
-      const rim = new THREE.Mesh(new THREE.TorusGeometry(r * 0.74, 2.6, 6, 36), mat(warmHex));
+      const rim = new THREE.Mesh(new THREE.TorusGeometry(r * 0.74, 2.6, 6, 36), trimMat);
       rim.scale.z = 0.72;
-      rim.position.y = 35.5;
+      rim.position.y = 36.0;
       m.add(rim);
-      const field = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.58, r * 0.58, 2.2, 22), mat(padHex));
+      const field = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.58, r * 0.58, 2.2, 22), padMat);
       field.scale.z = 0.66;
       field.position.y = 2;
       m.add(field);
-      const track = new THREE.Mesh(new THREE.TorusGeometry(r * 0.6, 2.4, 6, 36), mat(warmHex));
+      const track = new THREE.Mesh(new THREE.TorusGeometry(r * 0.6, 2.2, 6, 36), trimMat);
       track.scale.z = 0.7;
       track.position.y = 3.5;
       m.add(track);
       for (let i = 0; i < 6; i++) {
         const a = (i / 6) * Math.PI * 2 + 0.25;
         const mh = 50 + rnd(i) * 18;
-        const mast = new THREE.Mesh(new THREE.BoxGeometry(2.4, mh, 2.4), mat(padHex));
+        const mast = new THREE.Mesh(new THREE.BoxGeometry(2.4, mh, 2.4), secondaryMat);
         mast.position.set(Math.cos(a) * r * 1.02, mh / 2, Math.sin(a) * r * 0.74);
         m.add(mast);
-        const lamp = new THREE.Mesh(new THREE.BoxGeometry(9, 4.2, 2.4), mat(warmHex));
+        const lamp = new THREE.Mesh(new THREE.BoxGeometry(9.5, 4.4, 2.4), galleryMat);
         lamp.position.set(Math.cos(a) * r * 1.02, mh + 1.5, Math.sin(a) * r * 0.74);
         lamp.rotation.y = -a;
         m.add(lamp);
@@ -893,6 +1200,17 @@ export function buildPlaces(city, U) {
     m.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
     group.add(m);
   }
+
+  group.setLook = (look) => {
+    for (const ent of entries) {
+      const pal = computeSpecialPalette(look, U, ent.seed);
+      ent.padMat.uniforms.uCol.value.copy(pal.pad);
+      ent.primaryMat.uniforms.uCol.value.copy(pal.primary);
+      ent.secondaryMat.uniforms.uCol.value.copy(pal.secondary);
+      ent.trimMat.uniforms.uCol.value.copy(pal.trim);
+      ent.galleryMat.uniforms.uCol.value.copy(pal.gallery);
+    }
+  };
   return group;
 }
 
@@ -1323,12 +1641,14 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     side: THREE.DoubleSide,
   });
 
-  // Store integer indices into `lanes` so ring-loop `L.nextIdx`/`L.prevIdx` handoffs stay O(1) & exact!
+  // Store integer indices into `lanes` so ring-loop & street-intersection `L.outs` handoffs stay O(1) & exact!
   const allIndices = lanes.map((_, idx) => idx);
   const lanePoolIdx = VEHICLE_CLASSES.map((V) => {
     const pool = [];
     for (let idx = 0; idx < lanes.length; idx++) {
-      if (V.layers.includes(lanes[idx].layer)) pool.push(idx);
+      const L = lanes[idx];
+      const effLayer = L.nominalLayer || L.layer;
+      if (V.layers.includes(effLayer)) pool.push(idx);
     }
     return pool.length ? pool : allIndices;
   });
@@ -1381,7 +1701,7 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
   trails.frustumCulled = false;
   group.add(trails);
 
-  // ---- Tier 2: GPU-evaluated multi-strata Bézier skyway swarm (up to 18,600+ craft, 0ms CPU loop!) ----
+  // ---- Tier 2: GPU-evaluated horizontal street-layer & corner-turning traffic swarm (18,600+ craft, 0ms CPU!) ----
   let swarmMesh = null;
   let swarmGeo = null;
   let swarmColors = null;
@@ -1397,77 +1717,192 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     const curveC = new Float32Array(swarmCap * 4);
     swarmColors = new Float32Array(swarmCap * 3);
 
-    // 6 distinct vertical altitude strata from street canyons (18m) up to stratospheric cruisers (920m)
-    const strataHeights = [
-      [18, 42],   // Stratum 0: avenue & low-canyon skimmers
-      [54, 118],  // Stratum 1: lower commercial skyways
-      [135, 240], // Stratum 2: mid-tower commuter rivers
-      [260, 415], // Stratum 3: upper-spire expressways
-      [440, 640], // Stratum 4: cloud-skimming cruisers
-      [665, 920], // Stratum 5: high-orbital shuttles
+    // 6 horizontal street-layer decks with grade separation between N-S (`yNS`) and E-W (`yEW`) streets
+    // so perpendicular traffic streams cross at separated elevations without traffic lights!
+    const strataDecks = [
+      { yNS: 22,  yEW: 37  }, // Stratum 0 (<50m): low avenue & skyscraper-canyon deck
+      { yNS: 72,  yEW: 96  }, // Stratum 1 (50..130m): lower commercial street layer
+      { yNS: 158, yEW: 188 }, // Stratum 2 (130..255m): mid-tower commuter street layer
+      { yNS: 292, yEW: 334 }, // Stratum 3 (255..435m): upper-spire express street layer
+      { yNS: 488, yEW: 542 }, // Stratum 4 (435..660m): cloud-skimming street layer
+      { yNS: 696, yEW: 758 }, // Stratum 5 (>660m): high-orbital overflight corridor
     ];
 
-    const laneRoofMax = lanes.map((L) => {
-      if (!L.prof) return L.y;
-      let mx = L.y;
-      for (let sIdx = 0; sIdx < L.prof.length; sIdx++) if (L.prof[sIdx] > mx) mx = L.prof[sIdx];
-      return mx;
-    });
+    // Candidate street indices on the city grid (avenues multiples of 4 + secondary even streets)
+    const maxGridR = Math.max(6, Math.round((city.span || CELL * 5) / CELL) + 4);
+    const aveLines = [];
+    const allLines = [];
+    for (let g = -maxGridR; g <= maxGridR; g += 2) {
+      allLines.push(g);
+      if (g % 4 === 0) aveLines.push(g);
+    }
+    if (!aveLines.length) aveLines.push(0);
+
+    const isSwarmPathClear = (x1, z1, ix, iz, x2, z2, y1, y2, turnMode) => {
+      if (!colCheck) return true;
+      for (let sIdx = 0; sIdx <= 6; sIdx++) {
+        const u = sIdx / 6;
+        let px, pz, py;
+        if (turnMode > 0.5) {
+          // Approximate corner-turn trajectory
+          if (u < 0.5) {
+            const k = u * 2;
+            px = x1 + (ix - x1) * k;
+            pz = z1 + (iz - z1) * k;
+          } else {
+            const k = (u - 0.5) * 2;
+            px = ix + (x2 - ix) * k;
+            pz = iz + (z2 - iz) * k;
+          }
+          py = y1 + (y2 - y1) * u;
+        } else {
+          px = x1 + (x2 - x1) * u;
+          pz = z1 + (z2 - z1) * u;
+          py = y1 + (y2 - y1) * (u * u * (3 - 2 * u));
+        }
+        if (colCheck.hitsPoint(px, pz, py, 6.5)) return false;
+      }
+      return true;
+    };
+
+    const ringLanes = lanes.filter((L) => L.ringId !== undefined);
 
     for (let i = 0; i < swarmCap; i++) {
-      // Interleave strata across indices so any prefix [0..swarmActive] spans ALL 6 vertical strata!
+      // Interleave strata across indices so any prefix [0..swarmActive] spans ALL 6 horizontal layers!
       const sPick = h01(i, 101);
       const stratum = sPick < 0.14 ? 0 : sPick < 0.38 ? 1 : sPick < 0.62 ? 2 : sPick < 0.80 ? 3 : sPick < 0.93 ? 4 : 5;
-      const [yLo, yHi] = strataHeights[stratum];
-      const lIdx = Math.floor(h01(i, 103) * lanes.length) % lanes.length;
-      const L = lanes[lIdx];
-      const fwdSign = h01(i, 107) < 0.5 ? 1 : -1;
+      const deck = strataDecks[stratum];
+      const craftScale = 0.68 + h01(i, 151) * 0.70 + (stratum >= 4 ? 0.32 : 0);
 
-      const xStart = fwdSign > 0 ? L.x1 : L.x2;
-      const zStart = fwdSign > 0 ? L.z1 : L.z2;
-      const xEnd = fwdSign > 0 ? L.x2 : L.x1;
-      const zEnd = fwdSign > 0 ? L.z2 : L.z1;
-      const dx = xEnd - xStart;
-      const dz = zEnd - zStart;
-      const chord = Math.hypot(dx, dz) || 1;
-      const nx = -dz / chord;
-      const nz = dx / chord;
+      // ~8% on high strata ride closed horizontal orbital rings
+      if (stratum >= 4 && ringLanes.length > 0 && h01(i, 105) < 0.14) {
+        const RL = ringLanes[Math.floor(h01(i, 103) * ringLanes.length) % ringLanes.length];
+        const yFlat = stratum === 5 ? 710 + (h01(i, 131) - 0.5) * 24 : Math.max(460, RL.y + (h01(i, 131) - 0.5) * 16);
+        const approxLen = Math.max(240, Math.hypot(RL.cx - RL.x1, RL.cz - RL.z1) + Math.hypot(RL.x2 - RL.cx, RL.z2 - RL.cz));
+        const worldSpd = 95 + stratum * 22 + h01(i, 149) * 65;
+        curveA[i * 4 + 0] = RL.x1;
+        curveA[i * 4 + 1] = RL.z1;
+        curveA[i * 4 + 2] = yFlat;
+        curveA[i * 4 + 3] = worldSpd / approxLen;
+        curveB[i * 4 + 0] = RL.cx;
+        curveB[i * 4 + 1] = RL.cz;
+        curveB[i * 4 + 2] = yFlat;
+        curveB[i * 4 + 3] = h01(i, 157);
+        curveC[i * 4 + 0] = RL.x2;
+        curveC[i * 4 + 1] = RL.z2;
+        curveC[i * 4 + 2] = craftScale;
+        curveC[i * 4 + 3] = 0.0; // closed orbital arc mode
+        continue;
+      }
 
-      const ribbonW = stratum === 0 ? 7.5 : 22 + stratum * 14;
-      const lat = (h01(i, 109) - 0.5) * ribbonW * 2;
-      const x1 = xStart + nx * lat;
-      const z1 = zStart + nz * lat;
-      const x2 = xEnd + nx * lat;
-      const z2 = zEnd + nz * lat;
-      const cx = L.cx + nx * (lat + (h01(i, 113) - 0.5) * 26);
-      const cz = L.cz + nz * (lat + (h01(i, 127) - 0.5) * 26);
+      const routeRoll = h01(i, 107);
+      const wantCornerTurn = routeRoll < 0.56;
+      const wantDeckSwitch = !wantCornerTurn && routeRoll > 0.84;
 
-      const rawY = yLo + h01(i, 131) * (yHi - yLo);
-      const safeY = stratum === 0 && L.layer === 'ground'
-        ? Math.max(6.2, L.y + h01(i, 137) * 2.5)
-        : Math.max(rawY, laneRoofMax[lIdx] + 12 + h01(i, 137) * 28);
-      const yArch = stratum === 0 ? 1.5 : 10 + h01(i, 139) * (16 + stratum * 8);
+      const linePool = stratum <= 1 ? aveLines : allLines;
+      let built = false;
+      for (let attempt = 0; attempt < 5 && !built; attempt++) {
+        const usePool = attempt >= 2 ? aveLines : linePool;
+        const g1 = usePool[Math.floor(h01(i + attempt * 19, 109) * usePool.length) % usePool.length];
+        const g2 = usePool[Math.floor(h01(i + attempt * 23, 113) * usePool.length) % usePool.length];
+        const startNS = h01(i + attempt * 7, 127) < 0.5;
+        const sgn1 = h01(i + attempt * 11, 131) < 0.5 ? 1 : -1;
+        const sgn2 = h01(i + attempt * 13, 137) < 0.5 ? 1 : -1;
+        const laneJitter = (h01(i, 139) - 0.5) * 3.2;
+        const yJitter = (h01(i, 141) - 0.5) * 4.0;
 
-      const approxLen = Math.max(180, Math.hypot(cx - x1, cz - z1) + Math.hypot(x2 - cx, z2 - cz));
-      const worldSpd = (58 + stratum * 28 + h01(i, 149) * 95);
-      const rate = worldSpd / approxLen;
-      const closed = L.ringId !== undefined ? 1.0 : 0.0;
-      const craftScale = 0.68 + h01(i, 151) * 0.72 + (stratum >= 4 ? 0.35 : 0);
-
-      curveA[i * 4 + 0] = x1;
-      curveA[i * 4 + 1] = z1;
-      curveA[i * 4 + 2] = safeY;
-      curveA[i * 4 + 3] = rate;
-
-      curveB[i * 4 + 0] = cx;
-      curveB[i * 4 + 1] = cz;
-      curveB[i * 4 + 2] = yArch;
-      curveB[i * 4 + 3] = h01(i, 157);
-
-      curveC[i * 4 + 0] = x2;
-      curveC[i * 4 + 1] = z2;
-      curveC[i * 4 + 2] = craftScale;
-      curveC[i * 4 + 3] = closed;
+        if (wantCornerTurn) {
+          // 90-degree street corner turn at intersection (g1, g2) with perpendicular deck grade separation!
+          const leg1 = (2 + Math.floor(h01(i, 143) * 4)) * CELL;
+          const leg2 = (2 + Math.floor(h01(i, 145) * 4)) * CELL;
+          const off1 = (g1 % 4 === 0 ? 8.2 : 5.2) + laneJitter;
+          const off2 = (g2 % 4 === 0 ? 8.2 : 5.2) + laneJitter;
+          let x1, z1, ix, iz, x2, z2, y1, y2;
+          if (startNS) {
+            // Leg 1 travels N-S along x = g1*CELL +/- off1 -> turns 90 deg onto E-W z = g2*CELL +/- off2
+            const xLane = g1 * CELL + (sgn1 > 0 ? -off1 : off1);
+            const zLane = g2 * CELL + (sgn2 > 0 ? off2 : -off2);
+            ix = xLane;
+            iz = zLane;
+            x1 = xLane;
+            z1 = iz - sgn1 * leg1;
+            x2 = ix + sgn2 * leg2;
+            z2 = zLane;
+            y1 = deck.yNS + yJitter;
+            y2 = deck.yEW + yJitter;
+          } else {
+            // Leg 1 travels E-W along z = g2*CELL +/- off2 -> turns 90 deg onto N-S x = g1*CELL +/- off1
+            const zLane = g2 * CELL + (sgn1 > 0 ? off2 : -off2);
+            const xLane = g1 * CELL + (sgn2 > 0 ? -off1 : off1);
+            ix = xLane;
+            iz = zLane;
+            x1 = ix - sgn1 * leg1;
+            z1 = zLane;
+            x2 = xLane;
+            z2 = iz + sgn2 * leg2;
+            y1 = deck.yEW + yJitter;
+            y2 = deck.yNS + yJitter;
+          }
+          const turnR = (g1 % 4 === 0 && g2 % 4 === 0) ? 33.0 : 25.0;
+          if (stratum <= 3 && attempt < 4 && !isSwarmPathClear(x1, z1, ix, iz, x2, z2, y1, y2, turnR)) continue;
+          const totalLen = Math.max(220, leg1 + leg2);
+          const worldSpd = 56 + stratum * 24 + h01(i, 149) * 68;
+          curveA[i * 4 + 0] = x1;
+          curveA[i * 4 + 1] = z1;
+          curveA[i * 4 + 2] = y1;
+          curveA[i * 4 + 3] = worldSpd / totalLen;
+          curveB[i * 4 + 0] = ix;
+          curveB[i * 4 + 1] = iz;
+          curveB[i * 4 + 2] = y2;
+          curveB[i * 4 + 3] = h01(i, 157);
+          curveC[i * 4 + 0] = x2;
+          curveC[i * 4 + 1] = z2;
+          curveC[i * 4 + 2] = craftScale;
+          curveC[i * 4 + 3] = turnR;
+          built = true;
+        } else {
+          // Straight horizontal street run (either flat horizontal y2 == y1, or smooth elevation switch!)
+          const runSpan = (4 + Math.floor(h01(i, 143) * 5)) * CELL;
+          const centerAlong = (g2 * 0.5) * CELL;
+          const off = (g1 % 4 === 0 ? 8.2 : 5.2) + laneJitter;
+          let x1, z1, x2, z2, y1, y2;
+          y1 = (startNS ? deck.yNS : deck.yEW) + yJitter;
+          if (wantDeckSwitch) {
+            const adjIdx = Math.max(0, Math.min(5, stratum + (h01(i, 147) < 0.55 ? 1 : -1)));
+            const adjDeck = strataDecks[adjIdx];
+            y2 = (startNS ? adjDeck.yNS : adjDeck.yEW) + yJitter;
+          } else {
+            y2 = y1; // 100% flat horizontal cruise!
+          }
+          if (startNS) {
+            const xLane = g1 * CELL + (sgn1 > 0 ? -off : off);
+            x1 = xLane; x2 = xLane;
+            z1 = centerAlong - sgn1 * runSpan * 0.5;
+            z2 = centerAlong + sgn1 * runSpan * 0.5;
+          } else {
+            const zLane = g1 * CELL + (sgn1 > 0 ? off : -off);
+            z1 = zLane; z2 = zLane;
+            x1 = centerAlong - sgn1 * runSpan * 0.5;
+            x2 = centerAlong + sgn1 * runSpan * 0.5;
+          }
+          const mx = (x1 + x2) * 0.5, mz = (z1 + z2) * 0.5;
+          if (stratum <= 3 && attempt < 4 && !isSwarmPathClear(x1, z1, mx, mz, x2, z2, y1, y2, -1.0)) continue;
+          const worldSpd = 62 + stratum * 26 + h01(i, 149) * 74;
+          curveA[i * 4 + 0] = x1;
+          curveA[i * 4 + 1] = z1;
+          curveA[i * 4 + 2] = y1;
+          curveA[i * 4 + 3] = worldSpd / Math.max(240, runSpan);
+          curveB[i * 4 + 0] = mx;
+          curveB[i * 4 + 1] = mz;
+          curveB[i * 4 + 2] = y2;
+          curveB[i * 4 + 3] = h01(i, 157);
+          curveC[i * 4 + 0] = x2;
+          curveC[i * 4 + 1] = z2;
+          curveC[i * 4 + 2] = craftScale;
+          curveC[i * 4 + 3] = -1.0; // linear horizontal street mode
+          built = true;
+        }
+      }
     }
 
     swarmGeo.setAttribute('aCurveA', new THREE.InstancedBufferAttribute(curveA, 4));
@@ -1480,6 +1915,8 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
   }
 
   const laneIdx = new Int32Array(total);
+  const prevLane = new Int32Array(total).fill(-1);
+  const nextLane = new Int32Array(total).fill(-1);
   const laps = new Int32Array(total);
   const t = new Float32Array(total);
   const dir = new Float32Array(total);
@@ -1501,7 +1938,7 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
   const s = new THREE.Vector3();
   const c = new THREE.Color();
 
-  // Smooth C1 Catmull-Rom cubic interpolation along the 33-node rooftop-cleared profile (zero slope kinks!)
+  // Smooth C1 Catmull-Rom cubic interpolation along the 33-node horizontal/ramp profile (zero slope kinks!)
   const laneY = (L, tt) => {
     const prof = L.prof;
     if (!prof) return L.y;
@@ -1537,19 +1974,44 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     return out;
   };
   const tmp = { x: 0, z: 0, dx: 1, dz: 0, len: 1 };
-  const tmpA = { x: 0, z: 0, dx: 1, dz: 0, len: 1 };
-  const tmpB = { x: 0, z: 0, dx: 1, dz: 0, len: 1 };
+
+  // Pick a connected outgoing segment at an intersection (straight-through, 90-deg corner turn, or deck ramp)
+  const pickOutLane = (i, curIdx, stepSeed) => {
+    const L = lanes[curIdx];
+    if (!L) return -1;
+    if (L.nextIdx !== undefined) return L.nextIdx;
+    if (!L.outs || L.outs.length === 0) return -1;
+    const V = VEHICLE_CLASSES[classOf[i]];
+    const matching = [];
+    for (let k = 0; k < L.outs.length; k++) {
+      const cand = lanes[L.outs[k]];
+      if (cand && V.layers.includes(cand.nominalLayer || cand.layer)) matching.push(L.outs[k]);
+    }
+    const choices = matching.length > 0 ? matching : L.outs;
+    return choices[Math.floor(h01(i + stepSeed * 991, 67) * choices.length) % choices.length];
+  };
 
   const assignRoute = (i, lap) => {
     const pool = lanePoolIdx[classOf[i]];
     const V = VEHICLE_CLASSES[classOf[i]];
     laneIdx[i] = pool[Math.floor(h01(i + lap * 997, 23) * pool.length) % pool.length];
     const L = lanes[laneIdx[i]];
-    dir[i] = h01(i + lap * 613, 31) < 0.5 ? 1 : -1;
-    const sideSpread = L.layer === 'ground' ? 2.4 : 8.5;
-    latOf[i] = dir[i] * sideSpread * 0.55 + (h01(i + lap * 317, 41) - 0.5) * sideSpread;
-    vOf[i] = L.layer === 'ground' ? 0 : (h01(i + lap * 419, 43) - 0.5) * 8;
-    baseSpd[i] = V.spd * (0.68 + h01(i + lap * 733, 53) * 0.72);
+    prevLane[i] = L.prevIdx !== undefined ? L.prevIdx : -1;
+    if (L.directed) {
+      dir[i] = 1;
+      nextLane[i] = pickOutLane(i, laneIdx[i], lap);
+      // Tight lateral & vertical trim so street-grid handoffs across turns & ramps stay 100% seamless
+      latOf[i] = (h01(i, 41) - 0.5) * 1.6;
+      const isDeck0 = (L.nominalLayer || L.layer) === 'ground';
+      vOf[i] = isDeck0 ? 0 : (h01(i, 43) - 0.5) * 2.2;
+    } else {
+      dir[i] = h01(i + lap * 613, 31) < 0.5 ? 1 : -1;
+      nextLane[i] = dir[i] > 0 && L.nextIdx !== undefined ? L.nextIdx : (dir[i] < 0 && L.prevIdx !== undefined ? L.prevIdx : -1);
+      const sideSpread = L.layer === 'ground' ? 2.0 : 5.5;
+      latOf[i] = dir[i] * sideSpread * 0.5 + (h01(i + lap * 317, 41) - 0.5) * sideSpread;
+      vOf[i] = L.layer === 'ground' ? 0 : (h01(i + lap * 419, 43) - 0.5) * 4.5;
+    }
+    baseSpd[i] = V.spd * (0.74 + h01(i + lap * 733, 53) * 0.62);
     spd[i] = baseSpd[i];
   };
 
@@ -1602,7 +2064,7 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
   }
   setPalette(VEHICLE_COLORS);
 
-  // Evaluate exact 3D position at (tVal, elTime) so velocity tangent includes curve + glide + weave!
+  // Evaluate exact 3D position at (tVal, elTime) across connected street segments, 90-deg turns & orbital rings!
   const samplePos3 = (i, tVal, elTime, bobOff, out) => {
     const cc = classOf[i];
     const V = VEHICLE_CLASSES[cc];
@@ -1611,26 +2073,36 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     if (L.nextIdx !== undefined && L.prevIdx !== undefined) {
       if (tt >= 1) { L = lanes[L.nextIdx]; tt -= 1; }
       else if (tt < 0) { L = lanes[L.prevIdx]; tt += 1; }
+    } else if (L.directed) {
+      if (tt >= 1 && nextLane[i] >= 0) {
+        L = lanes[nextLane[i]];
+        tt -= 1;
+      } else if (tt < 0 && prevLane[i] >= 0) {
+        L = lanes[prevLane[i]];
+        tt += 1;
+      }
     }
     tt = Math.max(0, Math.min(1, tt));
     evalLane(L, tt, tmp);
     const sign = dir[i];
     const tx = tmp.dx * sign;
     const tz = tmp.dz * sign;
-    const wAmp = L.layer === 'ground' ? 0.25 : Math.min(6.5, V.weaveA * 0.28);
-    const wArg = elTime * 0.28 + phase[i];
+    const isDeck0 = (L.nominalLayer || L.layer) === 'ground';
+    // Gentle micro-drift on air lanes; practically zero on directed street corridors so turns stay crisp!
+    const wAmp = L.directed ? (isDeck0 ? 0.08 : 0.35) : (isDeck0 ? 0.22 : Math.min(4.5, V.weaveA * 0.22));
+    const wArg = elTime * 0.26 + phase[i];
     const weave = Math.sin(wArg) * wAmp;
     const nx = -tz;
     const nz = tx;
     out.x = tmp.x + nx * (weave + latOf[i]);
     out.z = tmp.z + nz * (weave + latOf[i]);
-    out.y = L.layer === 'ground'
+    out.y = isDeck0
       ? Math.max(5.2, laneY(L, tt))
       : (laneY(L, tt) + vOf[i]) * curHeightScale + bobOff;
     out.len = tmp.len;
     out.tt = tt;
-    out.closed = L.nextIdx !== undefined;
-    out.isGround = L.layer === 'ground';
+    out.closed = (L.nextIdx !== undefined) || (nextLane[i] >= 0) || (prevLane[i] >= 0);
+    out.isGround = isDeck0;
     return out;
   };
   const posCur = { x: 0, y: 0, z: 0, len: 1, tt: 0, closed: false, isGround: false };
@@ -1765,12 +2237,24 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
       if (t[i] > 1 || t[i] < 0) {
         if (L.nextIdx !== undefined && L.prevIdx !== undefined) {
           if (t[i] > 1) {
+            prevLane[i] = laneIdx[i];
             laneIdx[i] = L.nextIdx;
+            nextLane[i] = lanes[laneIdx[i]].nextIdx ?? -1;
             t[i] -= Math.floor(t[i]);
           } else {
             laneIdx[i] = L.prevIdx;
+            nextLane[i] = L.nextIdx;
+            prevLane[i] = lanes[laneIdx[i]].prevIdx ?? -1;
             t[i] = ((t[i] % 1) + 1) % 1;
           }
+        } else if (t[i] > 1 && L.directed && nextLane[i] >= 0) {
+          // Step seamlessly onto the connected straight, 90-deg corner turn, or deck-switch segment!
+          laps[i]++;
+          prevLane[i] = laneIdx[i];
+          laneIdx[i] = nextLane[i];
+          nextLane[i] = pickOutLane(i, laneIdx[i], laps[i]);
+          if ((lanes[laneIdx[i]].nominalLayer || lanes[laneIdx[i]].layer) === 'ground') vOf[i] = 0;
+          t[i] -= Math.floor(t[i]);
         } else {
           laps[i]++;
           const wasOver = t[i] > 1;
@@ -1779,8 +2263,10 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
         }
       }
 
-      const bob = L.layer === 'ground' ? 0 : Math.sin(elapsed * V.bobF + ph) * V.bobA * 0.75;
-      const roll = L.layer === 'ground' ? 0 : Math.sin(elapsed * 0.75 + ph) * 0.04;
+      const curL = lanes[laneIdx[i]];
+      const isDeck0 = (curL.nominalLayer || curL.layer) === 'ground';
+      const bob = isDeck0 ? 0 : Math.sin(elapsed * V.bobF + ph) * V.bobA * (curL.directed ? 0.28 : 0.65);
+      const roll = isDeck0 ? 0 : Math.sin(elapsed * 0.75 + ph) * 0.03;
       const li = local[i];
 
       composeAt(i, t[i], { bob, roll });
@@ -2422,6 +2908,35 @@ export function buildSculptures(city, beaconMat, lampMat) {
   return group;
 }
 
+export const CLOUD_TYPE_NAMES = [
+  'Cumulus',
+  'Thunderheads (Cb)',
+  'Stratocumulus deck',
+  'High ice cirrus',
+  'Multi-layer sky',
+  'Low cloud sea',
+];
+
+export const MOON_PHASE_STAGES = [
+  { max: 0.125, glyph: '🌑', name: 'New Moon' },
+  { max: 0.375, glyph: '🌒', name: 'Waxing Crescent' },
+  { max: 0.625, glyph: '🌓', name: 'First Quarter' },
+  { max: 0.875, glyph: '🌔', name: 'Waxing Gibbous' },
+  { max: 1.125, glyph: '🌕', name: 'Full Moon' },
+  { max: 1.375, glyph: '🌖', name: 'Waning Gibbous' },
+  { max: 1.625, glyph: '🌗', name: 'Third Quarter' },
+  { max: 1.875, glyph: '🌘', name: 'Waning Crescent' },
+  { max: 2.001, glyph: '🌑', name: 'New Moon' },
+];
+
+export function describeMoonPhase(phase = 1.0) {
+  const p = ((phase % 2) + 2) % 2;
+  for (const s of MOON_PHASE_STAGES) {
+    if (p <= s.max) return { phase: p, glyph: s.glyph, name: s.name };
+  }
+  return { phase: p, glyph: '🌕', name: 'Full Moon' };
+}
+
 /**
  * Push a look preset into the uniforms.
  * @returns {{accent:string, post:Object}} bits the UI needs
@@ -2433,6 +2948,7 @@ export function applyLook(U, look, tune = { win: 1, glow: 1, fog: 1 }) {
   set(U.uHor.value, look.sky.hor);
   set(U.uSkySunCol.value, look.sky.sun);
   U.uSunDir.value.set(...look.sky.sunDir).normalize();
+  if (U.uSolarDir) U.uSolarDir.value.copy(U.uSunDir.value);
   set(U.uCloudCol.value, look.sky.cloudCol);
   U.uStars.value = look.sky.stars;
   U.uCloud.value = look.sky.cloud;
@@ -2482,19 +2998,24 @@ export function applyLook(U, look, tune = { win: 1, glow: 1, fog: 1 }) {
   set(U.uWaterDeep.value, sig.waterDeep || look.sky.zen);
   set(U.uWaterShallow.value, sig.waterShallow || look.sky.hor);
   if (tune.cloudStyle !== undefined) U.uCloudStyle.value = tune.cloudStyle;
+  if (tune.cloudType !== undefined && U.uCloudType) U.uCloudType.value = tune.cloudType;
 
   return { accent: look.accent, post: look.post, grade: look.grade };
 }
 
 /**
- * Time of day — a full 24-hour cycle. Each look's palette is authored for its
- * defTime hour and stays *identity* there; moving the clock applies only the
- * DELTA (dawn / day / golden / dusk / the small hours), so lighting works
- * everywhere instead of crushing the palette. The sun sweeps east→west around
- * the sky through the day and continues as a low moon path at night.
- * @param {number} hours 0..24 (6 = sunrise, 12 = noon, 18 = sunset)
- * @param {{lights?:number, glow?:number, clouds?:number, haze?:number, sun?:number, sat?:number}} tune
- * @returns {{hour:number, elev:number, night:number, warm:number, deep:number}}
+ * Time of day — a complete 24-hour celestial cycle.
+ * - Sun (`uSolarDir`) traces an inclined great-circle sky orbit: rises on the East
+ *   horizon at ~06:00, transits high overhead at 12:00, sets in the West at ~18:00,
+ *   and travels below the horizon (`y < 0`) through the night.
+ * - Moon (`uMoonDir`) traces an inclined lunar great-circle orbit across moonrise,
+ *   meridian transit, moonset, and below-horizon phases, coupled with all 8 lunar
+ *   phases (`uMoonPhase` 0..1: New -> Waxing Crescent -> First Quarter -> Waxing
+ *   Gibbous -> Full -> Waning Gibbous -> Third Quarter -> Waning Crescent -> New).
+ * - Stars (`uStarRot`) wheel smoothly across the celestial sphere over 24 hours.
+ * - Architectural key light (`uSunDir`) tracks the true Sun by day and hands off
+ *   smoothly across twilight to the lunar/nocturnal sky key at night, while keeping
+ *   each look's authored palette exact identity at `look.defTime`.
  */
 export function applyTime(U, look, hours = 12, tune = { lights: 1, glow: 1 }) {
   const h = ((hours % 24) + 24) % 24;
@@ -2516,16 +3037,51 @@ export function applyTime(U, look, hours = 12, tune = { lights: 1, glow: 1 }) {
   const cur = model(h);
   const ref = model(look.defTime);
 
-  // sun path: the look's base azimuth plus a full sweep through the day —
-  // east at sunrise, overhead arc, west at sunset, low moon path at night
+  // Local horizon frame anchored to the look's authored azimuth
   const [ax, , az] = look.sky.sunDir;
   const alen = Math.hypot(ax, az) || 1;
   const baseAz = Math.atan2(az / alen, ax / alen);
-  const sweep = ((h - 6) / 12) * Math.PI;
-  const sunAz = baseAz + sweep;
-  const ey = 0.06 + Math.max(cur.elev, cur.night * 0.26) * 0.94;
-  const exz = Math.sqrt(Math.max(0, 1 - ey * ey));
-  U.uSunDir.value.set(Math.cos(sunAz) * exz, ey, Math.sin(sunAz) * exz).normalize();
+  const eastX = Math.cos(baseAz), eastZ = Math.sin(baseAz);
+  const southX = -Math.sin(baseAz), southZ = Math.cos(baseAz);
+
+  // 1. True inclined 3D solar great-circle trajectory (rises East 06:00, transits 12:00, sets West 18:00, <0 at night)
+  const solarTilt = 0.32; // ~18.3 deg ecliptic zenith offset -> noon elevation cos(0.32) ≈ 0.949
+  const solarHa = ((h - 12) / 24) * Math.PI * 2;
+  const sEast = -Math.sin(solarHa);
+  const sElev = Math.cos(solarHa) * Math.cos(solarTilt) + 0.025;
+  const sSouth = Math.cos(solarHa) * Math.sin(solarTilt);
+  const solX = eastX * sEast + southX * sSouth;
+  const solZ = eastZ * sEast + southZ * sSouth;
+  const solarVec = new THREE.Vector3(solX, sElev, solZ).normalize();
+  if (U.uSolarDir) U.uSolarDir.value.copy(solarVec);
+
+  // 2. True inclined 3D lunar great-circle trajectory + full 0..2 synodic phase cycle
+  //    (0 = New, 0.5 = First Quarter, 1.0 = Full Moon, 1.5 = Third Quarter, 2.0 = New)
+  const rawMoonPh = tune.moonph ?? 0.85;
+  const moonPhWrap = ((rawMoonPh % 2) + 2) % 2;
+  const lunarTilt = -0.38; // ~5 deg orbital inclination relative to solar arc
+  const lunarHa = ((h - 24) / 24) * Math.PI * 2 + (moonPhWrap - 1.0) * 0.42;
+  const mEast = -Math.sin(lunarHa);
+  const mElev = Math.cos(lunarHa) * Math.cos(lunarTilt) + 0.04;
+  const mSouth = Math.cos(lunarHa) * Math.sin(lunarTilt);
+  const moonX = eastX * mEast + southX * mSouth;
+  const moonZ = eastZ * mEast + southZ * mSouth;
+  U.uMoonDir.value.set(moonX, mElev, moonZ).normalize();
+  const phaseIllum = 0.5 - 0.5 * Math.cos(rawMoonPh * Math.PI); // 0 at New (0, 2), 1 at Full (1.0)
+  U.uMoonGlow.value = (tune.moon ?? 1) * (0.20 + cur.night * 1.10 + cur.deep * 0.32) * (0.35 + 0.78 * phaseIllum);
+  U.uMoonSize.value = tune.moonsz ?? 1;
+  U.uMoonPhase.value = rawMoonPh;
+
+  // 3. Sidereal starfield wheeling smoothly 360 deg over 24 hours
+  if (U.uStarRot) U.uStarRot.value = (h / 24) * Math.PI * 2;
+
+  // 4. Scene architectural key light (`uSunDir`): follows true Sun above horizon, hands off smoothly to nocturnal lunar key
+  const dayWeight = smoothstep(-0.14, 0.09, solarVec.y);
+  const nightAz = baseAz + ((h - 6) / 12) * Math.PI + Math.PI;
+  const nightY = Math.max(0.22, Math.min(0.64, U.uMoonDir.value.y > 0.18 ? U.uMoonDir.value.y : 0.28 + cur.deep * 0.14));
+  const nightXZ = Math.sqrt(Math.max(0, 1 - nightY * nightY));
+  const nightKey = new THREE.Vector3(Math.cos(nightAz) * nightXZ, nightY, Math.sin(nightAz) * nightXZ).normalize();
+  U.uSunDir.value.copy(nightKey).lerp(solarVec, dayWeight).normalize();
 
   // tint DELTA relative to the authored hour — lighting moves with the clock
   // but never crushes the palette
@@ -2575,18 +3131,11 @@ export function applyTime(U, look, hours = 12, tune = { lights: 1, glow: 1 }) {
   stars *= 1 - 0.8 * clamp01(starRef - starBoost);
   U.uStars.value = stars;
 
-  // moon: opposite the sun, high at midnight — sliders drive glow/size/phase
-  const moonAz = sunAz + Math.PI;
-  const mElev = Math.sin(((h - 18) / 12) * Math.PI); // +1 at midnight
-  const mey = 0.12 + Math.max(0, mElev) * 0.72;
-  const mexz = Math.sqrt(Math.max(0, 1 - mey * mey));
-  U.uMoonDir.value.set(Math.cos(moonAz) * mexz, mey, Math.sin(moonAz) * mexz).normalize();
-  U.uMoonGlow.value = (tune.moon ?? 1) * (0.22 + cur.night * 1.15 + cur.deep * 0.35);
-  U.uMoonSize.value = tune.moonsz ?? 1;
-  U.uMoonPhase.value = tune.moonph ?? 0.85;
-
-  // parametric atmosphere knobs
-  U.uCloud.value = look.sky.cloud * (tune.clouds ?? 1);
+  // parametric atmosphere & cloud cover / cloud type knobs
+  // Ensure even looks authored with `look.sky.cloud === 0` (e.g. Tron / Abstract) can show clouds when user raises cover > 1!
+  const baseCloud = Math.max(look.sky.cloud, (tune.clouds ?? 1) > 1.05 ? 0.32 : look.sky.cloud);
+  U.uCloud.value = baseCloud * (tune.clouds ?? 1);
+  if (tune.cloudType !== undefined && U.uCloudType) U.uCloudType.value = tune.cloudType;
   if (tune.cloudStyle !== undefined) U.uCloudStyle.value = tune.cloudStyle;
   U.uHaze.value = look.sky.haze * (tune.haze ?? 1);
   U.uSunGlow.value = 0.65 * (tune.sun ?? 1) * Math.max(0.08, 0.6 + cur.warm * 0.8 + cur.night * 0.1 - cur.deep * 0.15);
@@ -2595,5 +3144,14 @@ export function applyTime(U, look, hours = 12, tune = { lights: 1, glow: 1 }) {
   const sig = look.signals || {};
   U.uBeaconCol.value.set(sig.beacon || (look.tower.winC === '#000000' ? look.accent : look.tower.winC));
 
-  return { hour: h, elev: cur.elev, night: cur.night, warm: cur.warm, deep: cur.deep };
+  return {
+    hour: h,
+    elev: cur.elev,
+    solarElev: solarVec.y,
+    moonElev: U.uMoonDir.value.y,
+    moonPhase: moonPhWrap,
+    night: cur.night,
+    warm: cur.warm,
+    deep: cur.deep,
+  };
 }

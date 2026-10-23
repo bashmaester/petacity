@@ -12,7 +12,8 @@ import {
   buildLandmarks, buildBeacons, buildPlaces, makeLamps,
   makeVehicles, makeSearchlights, makeLightPools,
   buildWater, buildBoulevards, buildBillboards, buildTrees, buildSculptures,
-  makeWeather, WEATHER_NAMES, buildSigns, buildHolos,
+  makeWeather, WEATHER_NAMES, CLOUD_TYPE_NAMES, describeMoonPhase,
+  buildSigns, buildHolos,
 } from './scene.js';
 import { makePostProcessor } from './post.js';
 import { FlyControls } from './controls.js';
@@ -144,7 +145,8 @@ const tune = initialExact
   ? { ...initialExact.tune }
   : {
       win: 1, glow: 1, fog: 1, lights: 1, traffic: 1,
-      clouds: 1, cloudStyle: clampInt(params.get('cs'), 0, 6, 0),
+      clouds: 1, cloudType: clampInt(params.get('ct'), 0, 5, 0),
+      cloudStyle: clampInt(params.get('cs'), 0, 6, 0),
       haze: 1, sun: 1, vib: 1,
       moon: 1, moonsz: 1, moonph: 0.85,
     };
@@ -269,6 +271,7 @@ function boot() {
   let poiList = [];
   let glideOn = initialExact ? !!initialExact.glide : false;
   let collideOn = initialExact ? initialExact.collide !== false : true;
+  let timeCycleOn = false;
   let activePresetId = '';
 
   function computePlanetRadius() {
@@ -304,8 +307,8 @@ function boot() {
     }
     const look = LOOK_BY_ID[lookId];
     cityMesh = grown.mesh;
-    landmarkGroup = buildLandmarks(city, U);
-    placeGroup = buildPlaces(city, U);
+    landmarkGroup = buildLandmarks(city, U, look);
+    placeGroup = buildPlaces(city, U, look);
     beacons = buildBeacons(city, world.beaconMat);
     lamps = makeLamps(city, world.lampMat);
     pools = makeLightPools(city, world.poolMat);
@@ -381,6 +384,30 @@ function boot() {
     $('#sl-film').value = String(postState.film);
   }
 
+  function formatClock(hours) {
+    const wrapped = ((hours % 24) + 24) % 24;
+    const hh = Math.floor(wrapped);
+    const mm = Math.floor((wrapped - hh) * 60);
+    return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+  }
+
+  function syncTimeLabel() {
+    const el = $('#time-label');
+    el.textContent = formatClock(timeOfDay);
+    const b = $('#b-time-play');
+    b.classList.toggle('on', timeCycleOn);
+    b.setAttribute('aria-pressed', String(timeCycleOn));
+    b.textContent = timeCycleOn ? '\u275A\u275A' : '\u25B6';
+  }
+
+  function syncMoonLabel() {
+    const info = describeMoonPhase(tune.moonph);
+    const shortName = info.name.replace('Waxing ', 'Wax ').replace('Waning ', 'Wan ').replace(' Moon', '');
+    const el = $('#moon-label');
+    el.textContent = `${info.glyph} ${shortName}`;
+    el.title = `Lunar phase: ${info.name}`;
+  }
+
   function syncAllSliders() {
     $('#seed-input').value = String(seed);
     $('#sel-look').value = lookId;
@@ -400,12 +427,15 @@ function boot() {
     $('#sl-time').value = String(timeOfDay);
     $('#sl-dust').value = String(dustLevel);
     $('#sl-weather').value = String(weatherMode);
+    $('#sel-cloudtype').value = String(tune.cloudType ?? 0);
     $('#sel-cloudstyle').value = String(tune.cloudStyle);
     $('#sl-moon').value = String(tune.moon);
     $('#sl-moonsz').value = String(tune.moonsz);
     $('#sl-moonph').value = String(tune.moonph);
     syncPostSliders();
     syncWeatherLabel();
+    syncTimeLabel();
+    syncMoonLabel();
     syncWorldGeometry();
     syncTrafficLabel();
   }
@@ -436,7 +466,7 @@ function boot() {
     $('#cp-mono').checked = !!cfg.mono;
   }
 
-  function refreshLook(loadLookGrade = false) {
+  function refreshLook(loadLookGrade = false, skipURL = false) {
     const look = LOOK_BY_ID[lookId];
     if (loadLookGrade && look.grade) {
       postState.bloom = look.grade.bloom;
@@ -446,10 +476,13 @@ function boot() {
       postState.film = look.grade.film;
       syncPostSliders();
     }
-    const effClouds = weatherMode === 2 || weatherMode === 6 ? Math.max(tune.clouds, 1.25) : tune.clouds;
+    const effClouds = weatherMode === 2 || weatherMode === 6 ? Math.max(tune.clouds, 1.35) : tune.clouds;
+    const effType = weatherMode === 2 && (tune.cloudType ?? 0) === 0 ? 1 : (tune.cloudType ?? 0);
     const effStyle = weatherMode === 6 && tune.cloudStyle === 0 ? 1 : tune.cloudStyle;
-    applyLook(U, look, { ...tune, cloudStyle: effStyle });
-    applyTime(U, look, timeOfDay, { ...tune, clouds: effClouds, cloudStyle: effStyle, sat: tune.vib });
+    applyLook(U, look, { ...tune, cloudType: effType, cloudStyle: effStyle });
+    applyTime(U, look, timeOfDay, { ...tune, clouds: effClouds, cloudType: effType, cloudStyle: effStyle, sat: tune.vib });
+    if (landmarkGroup && landmarkGroup.setLook) landmarkGroup.setLook(look);
+    if (placeGroup && placeGroup.setLook) placeGroup.setLook(look);
     if (trees) trees.setNature(look);
     if (vehicles) vehicles.setPalette(look);
     if (weather) weather.setTint(look);
@@ -464,8 +497,10 @@ function boot() {
     $('#custom-box').classList.toggle('on', lookId === 'custom');
     $('#sel-look').value = lookId;
     $('#look-blurb').textContent = look.blurb;
+    syncTimeLabel();
+    syncMoonLabel();
     syncPostUniforms(look);
-    syncURL();
+    if (!skipURL) syncURL();
   }
 
   function syncURL(includeExactToken = false) {
@@ -477,6 +512,7 @@ function boot() {
     if (Math.abs(suburbReach - 1) > 0.01) p.set('sub', suburbReach.toFixed(2));
     if (worldCurve > 0.005) p.set('curve', worldCurve.toFixed(2));
     if (weatherMode > 0) p.set('w', String(weatherMode));
+    if ((tune.cloudType ?? 0) > 0) p.set('ct', String(tune.cloudType));
     if (tune.cloudStyle > 0) p.set('cs', String(tune.cloudStyle));
     if (lookId === 'custom' && LOOK_BY_ID.custom.customConfig) {
       const c = LOOK_BY_ID.custom.customConfig;
@@ -833,11 +869,20 @@ function boot() {
     b.title = (off ? 'Show' : 'Hide') + ' interface (H)';
   };
   $('#b-ui').onclick = toggleUI;
+  const toggleTimeCycle = () => {
+    timeCycleOn = !timeCycleOn;
+    syncTimeLabel();
+    if (!timeCycleOn) syncURL();
+    flash(timeCycleOn ? '\u25B6 24h Celestial Cycle running' : `Time paused · ${formatClock(timeOfDay)}`);
+  };
+  $('#b-time-play').onclick = toggleTimeCycle;
+
   window.addEventListener('keydown', (e) => {
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) return;
     if (e.key === 'h' || e.key === 'H') toggleUI();
     else if (e.key === 'g' || e.key === 'G') toggleGlide();
     else if (e.key === 'c' || e.key === 'C') toggleCollision();
+    else if (e.key === 't' || e.key === 'T') toggleTimeCycle();
     else if (e.key === 'r' || e.key === 'R') togglePathRecord();
     else if (e.key === 'p' || e.key === 'P') togglePathPlay();
     else if (e.key === 'k' || e.key === 'K') addPathKeyframe();
@@ -890,6 +935,12 @@ function boot() {
     syncWeatherLabel();
     refreshLook();
   });
+  $('#sel-cloudtype').value = String(tune.cloudType ?? 0);
+  $('#sel-cloudtype').onchange = (ev) => {
+    tune.cloudType = clampInt(ev.target.value, 0, 5, 0);
+    refreshLook();
+    flash(`Clouds · ${CLOUD_TYPE_NAMES[tune.cloudType] || 'Cumulus'}`);
+  };
   $('#sel-cloudstyle').value = String(tune.cloudStyle);
   $('#sel-cloudstyle').onchange = (ev) => {
     tune.cloudStyle = clampInt(ev.target.value, 0, 6, 0);
@@ -1228,8 +1279,13 @@ function boot() {
   const POI_GLYPHS = {
     media: '\u25C8',
     spire: '\u25B2',
+    needle: '\u25B2',
     obelisk: '\u25B2',
     pyramid: '\u25B3',
+    cantilever: '\u25E7',
+    ziggurat: '\u25EC',
+    mast: '\u2316',
+    crown: '\u265B',
     ring: '\u25CE',
     wheel: '\u25CE',
     dome: '\u25EF',
@@ -1365,6 +1421,13 @@ function boot() {
     try {
       const dt = Math.min(clock.getDelta(), 0.05);
       U.uTime.value += dt;
+      if (timeCycleOn) {
+        timeOfDay = (timeOfDay + dt * 0.48) % 24;
+        tune.moonph = ((tune.moonph + dt * 0.032) % 2 + 2) % 2;
+        $('#sl-time').value = String(timeOfDay);
+        $('#sl-moonph').value = String(tune.moonph);
+        refreshLook(false, true);
+      }
       if (pathRecorder.playing) {
         // User manual input gracefully interrupts path playback unless rendering a path video
         const manualBreak = !renderingPathVideo && (controls.keys.size || controls._drag);

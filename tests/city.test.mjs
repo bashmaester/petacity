@@ -375,4 +375,43 @@ test('billboards & holograms are de-concentrated across avenues (not 100% cramme
   assert.ok(ringLinks >= 24, `expected >=24 stitched orbital ring segments, got ${ringLinks}`);
 });
 
+test('Phase-9 landmarks include pyramids, cantilevered sky-wings & ziggurats, and streets form horizontal grade-separated layers with turns & ramps', () => {
+  const c = generateCity({ seed: 4417, radius: 5 });
+  const lmKinds = new Set(c.landmarks.map((l) => l.kind));
+  assert.ok(lmKinds.has('pyramid'), 'city generates pyramid landmark');
+  assert.ok(lmKinds.has('cantilever'), 'city generates cantilevered sky-wing landmark');
+  assert.ok(lmKinds.has('ziggurat'), 'city generates stepped ziggurat landmark');
+
+  // Verify street segments are predominantly flat horizontal layers, with N-S vs E-W grade separation,
+  // 90-degree corner turns, and occasional smooth elevation-switch ramps
+  const streets = c.lanes.filter((L) => L.kind === 'street');
+  const turns = c.lanes.filter((L) => L.kind === 'turn');
+  const ramps = c.lanes.filter((L) => L.kind === 'ramp');
+  const thrus = c.lanes.filter((L) => L.kind === 'thru');
+  assert.ok(streets.length >= 80, `expected horizontal street segments, got ${streets.length}`);
+  assert.ok(turns.length >= 40, `expected 90-degree corner turn segments, got ${turns.length}`);
+  assert.ok(ramps.length >= 6 && ramps.length < streets.length * 0.45, `occasional smooth elevation ramps (${ramps.length} vs ${streets.length} flat)`);
+  assert.ok(thrus.length >= 20, `expected straight-through intersection segments, got ${thrus.length}`);
+
+  // Every flat street segment keeps exact constant altitude (y1 === y2)
+  for (const S of streets) {
+    assert.equal(S.y1, S.y2, 'horizontal street segment maintains flat deck altitude');
+  }
+
+  // On any given deck, N-S streets and perpendicular E-W streets use separated elevations (no traffic lights needed!)
+  for (let deckIdx = 0; deckIdx < 5; deckIdx++) {
+    const nsSeg = streets.find((L) => L.deck === deckIdx && L.axis === 'ns');
+    const ewSeg = streets.find((L) => L.deck === deckIdx && L.axis === 'ew');
+    assert.ok(nsSeg && ewSeg, `deck ${deckIdx} has both N-S and E-W street corridors`);
+    assert.ok(Math.abs(nsSeg.y1 - ewSeg.y1) >= 12, `deck ${deckIdx} separates N-S (${nsSeg.y1}m) vs E-W (${ewSeg.y1}m) by >=12m`);
+  }
+
+  // Every 90-degree corner turn smoothly bridges the grade-separated yNS <-> yEW height difference and connects to outgoing street segments
+  for (const T of turns.slice(0, 30)) {
+    assert.ok(Math.abs(T.y2 - T.y1) >= 12, 'corner turn smoothly bridges perpendicular street elevations');
+    assert.ok(Array.isArray(T.outs) && T.outs.length >= 1, 'corner turn links into outgoing perpendicular street');
+  }
+});
+
+
 

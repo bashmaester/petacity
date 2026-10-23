@@ -237,9 +237,12 @@ uniform vec3 uZen;
 uniform vec3 uHor;
 uniform vec3 uSkySunCol;
 uniform vec3 uSunDir;
+uniform vec3 uSolarDir;
 uniform vec3 uCloudCol;
 uniform float uStars;
+uniform float uStarRot;
 uniform float uCloud;
+uniform float uCloudType;
 uniform float uCloudStyle;
 uniform float uHaze;
 uniform float uTime;
@@ -266,63 +269,198 @@ vec2 intersectSphereShell(vec3 oc, vec3 rd, float rad) {
   return vec2(-b - s, -b + s);
 }
 
-// Continuous 3D cumulus cloud density inside concentric spherical shell
-float skyCumulusDensity(vec3 p, float h01, float covK, float t) {
+// Multi-regime 3D volumetric cloud density:
+// 0 = Cumulus, 1 = Cumulonimbus thunderheads, 2 = Stratocumulus deck,
+// 3 = High ice Cirrus, 4 = Multi-layer Altocumulus + Cirrus, 5 = Low Sea-of-Clouds
+float skyCumulusDensity(vec3 p, float h01, float covK, float cType, float t) {
   vec3 wind = vec3(t * 22.0, 0.0, t * 9.5);
+  float over = clamp((covK - 1.05) / 1.15, 0.0, 1.0);
+
+  if (cType > 2.5 && cType < 3.5) {
+    // 3: High ice-crystal Cirrus & wind-sheared mares' tails
+    vec3 cw = (p + wind * 2.1 + vec3(h01 * 520.0, 0.0, -h01 * 210.0)) * vec3(0.00019, 0.0014, 0.00052);
+    float warp = fbm3(cw * 0.85);
+    float wisps = fbm3(cw * vec3(1.6, 1.0, 3.4) + vec3(warp * 2.4, 0.0, -warp * 1.6));
+    float fine = vnoise3(cw * vec3(4.5, 1.8, 7.5));
+    float prof = smoothstep(0.05, 0.45, h01) * smoothstep(1.0, 0.48, h01);
+    float shape = (wisps * 0.72 + fine * 0.28) * (0.65 + 0.55 * prof);
+    float thresh = mix(clamp(0.58 - covK * 0.20, 0.22, 0.64), 0.16, over);
+    return clamp((shape - thresh) * 2.2, 0.0, 0.78) * prof;
+  }
+
+  if (cType > 1.5 && cType < 2.5) {
+    // 2: Stratocumulus cellular rolls & unbroken overcast ceiling at high cover
+    vec3 sq = (p + wind * 0.85) * vec3(0.00028, 0.00125, 0.00044);
+    float rolls = fbm3(sq * vec3(0.85, 1.0, 1.55));
+    float cells = fbm3(sq * 2.6 + vec3(4.1, -1.3, 2.7));
+    float detail = vnoise3(sq * 5.4);
+    float prof = smoothstep(0.03, 0.26, h01) * smoothstep(1.0, 0.44, h01);
+    float shape = (rolls * 0.62 + cells * 0.38) * (0.62 + 0.52 * prof) - detail * 0.09;
+    float thresh = mix(clamp(0.53 - covK * 0.24, 0.16, 0.60), 0.06, over);
+    return clamp((shape - thresh) * 3.25, 0.0, 1.0) * prof;
+  }
+
+  if (cType > 0.5 && cType < 1.5) {
+    // 1: Towering Cumulonimbus storm cells with sheared glaciated anvil tops
+    float anvilShear = smoothstep(0.58, 0.96, h01);
+    vec3 tp = p + wind * (0.9 + anvilShear * 1.15) - vec3(anvilShear * 680.0, 0.0, anvilShear * 240.0);
+    vec3 tq = tp * vec3(mix(0.00028, 0.00017, anvilShear), 0.00042, mix(0.00028, 0.00019, anvilShear));
+    float core = fbm3(tq);
+    float turret = fbm3(tq * 2.45 + vec3(2.9, -3.1, 4.7));
+    float detail = vnoise3(tq * 5.6);
+    float baseProf = smoothstep(0.01, 0.14, h01);
+    float topProf = smoothstep(1.0, 0.78, h01);
+    float anvilBoost = 1.0 + anvilShear * 0.28;
+    float prof = baseProf * topProf;
+    float shape = (core * 0.68 + turret * 0.32) * (0.58 + 0.58 * baseProf) * anvilBoost - detail * 0.12;
+    float thresh = mix(clamp(0.55 - covK * 0.22, 0.18, 0.62), 0.08, over);
+    return clamp((shape - thresh) * 3.1, 0.0, 1.0) * prof;
+  }
+
+  if (cType > 3.5 && cType < 4.5) {
+    // 4: Multi-layer deck — mid-altitude mackerel Altocumulus + high sheared Cirrus
+    float lowBand = smoothstep(0.03, 0.16, h01) * smoothstep(0.44, 0.24, h01);
+    float hiBand = smoothstep(0.64, 0.78, h01) * smoothstep(1.0, 0.84, h01);
+    float dOut = 0.0;
+    if (lowBand > 0.005) {
+      vec3 mq = (p + wind * 0.95) * vec3(0.00042, 0.0011, 0.00048);
+      float m1 = fbm3(mq * 1.4);
+      float m2 = vnoise3(mq * 4.2);
+      float sh = m1 * 0.78 + m2 * 0.22;
+      float th = mix(clamp(0.55 - covK * 0.22, 0.18, 0.62), 0.09, over);
+      dOut += clamp((sh - th) * 3.0, 0.0, 1.0) * lowBand;
+    }
+    if (hiBand > 0.005) {
+      vec3 hq = (p + wind * 2.2 + vec3(320.0, 0.0, -180.0)) * vec3(0.00020, 0.0015, 0.00055);
+      float w1 = fbm3(hq * vec3(1.5, 1.0, 3.1));
+      float thH = mix(clamp(0.56 - covK * 0.20, 0.20, 0.62), 0.14, over);
+      dOut += clamp((w1 - thH) * 2.3, 0.0, 0.75) * hiBand;
+    }
+    return clamp(dOut, 0.0, 1.0);
+  }
+
+  if (cType > 4.5) {
+    // 5: Low urban Sea-of-Clouds / canyon inversion blanket
+    vec3 fq = (p + wind * 0.55) * vec3(0.00030, 0.0016, 0.00030);
+    float swell = fbm3(fq);
+    float crest = fbm3(fq * 2.5 + vec3(1.7, 2.3, -3.4));
+    float prof = smoothstep(0.0, 0.22, h01) * smoothstep(1.0, 0.42, h01);
+    float shape = (swell * 0.66 + crest * 0.34) * (0.66 + 0.48 * prof);
+    float thresh = mix(clamp(0.50 - covK * 0.24, 0.12, 0.58), 0.04, over);
+    return clamp((shape - thresh) * 3.4, 0.0, 1.0) * prof;
+  }
+
+  // 0: Fair-weather Cumulus humilis / mediocris
   vec3 q = (p + wind) * vec3(0.00034, 0.00072, 0.00034);
   float macro = fbm3(q);
   float billow = fbm3(q * 2.35 + vec3(3.7, -1.9, 5.1));
   float detail = vnoise3(q * 5.8 - vec3(t * 0.08, 0.0, 0.0));
-  // Cumulus anvil profile: flat condensation base, rounded billowing cauliflower tops
   float prof = smoothstep(0.02, 0.22, h01) * smoothstep(1.0, 0.36, h01);
   float shape = (macro * 0.66 + billow * 0.34) * (0.55 + 0.62 * prof) - detail * 0.14;
-  float thresh = clamp(0.56 - covK * 0.21, 0.22, 0.62);
+  float thresh = mix(clamp(0.56 - covK * 0.21, 0.20, 0.62), 0.08, over);
   return clamp((shape - thresh) * 2.85, 0.0, 1.0) * prof;
 }
 
 void main() {
   vec3 d = normalize(vDir);
   vec3 sd = normalize(uSunDir);
+  vec3 solarD = normalize(uSolarDir);
+  float horMask = mix(smoothstep(-0.045, 0.014, d.y), 1.0, clamp(uWorldCurve * 1.35, 0.0, 1.0));
+
   // In sphere/orbital mode, gradient wraps smoothly across both hemispheres
   float elev = mix(smoothstep(-0.18, 0.58, d.y), smoothstep(-0.85, 0.75, d.y) * 0.85 + 0.15, uWorldCurve * 0.75);
   vec3 col = mix(uHor, uZen, pow(clamp(elev, 0.0, 1.0), 0.8));
 
-  // sun: tight disc, mid halo, wide atmospheric glow
-  float s = max(dot(d, sd), 0.0);
-  float disc = smoothstep(0.99965, 0.99995, s);
-  float halo = pow(s, 14.0) * 0.55 + pow(s, 5.0) * 0.18;
-  col += uSkySunCol * (disc * 2.8 + halo * (0.55 + uSunGlow * 1.4)) * (0.35 + uSunGlow * 0.75);
+  // True astronomical sun: rises in the East, transits high, sets below Western horizon (y < 0 at night)
+  float sunVis = smoothstep(-0.16, 0.03, solarD.y);
+  float s = max(dot(d, solarD), 0.0);
+  if (sunVis > 0.001) {
+    float disc = smoothstep(0.99962, 0.99993, s) * smoothstep(-0.03, 0.02, solarD.y) * horMask;
+    float halo = (pow(s, 14.0) * 0.55 + pow(s, 5.0) * 0.18) * sunVis * mix(horMask * 0.85 + 0.15, 1.0, uWorldCurve);
+    // Overcast decks naturally soften direct solar disc glare
+    float overcastDim = 1.0 - 0.78 * smoothstep(1.15, 2.1, uCloud);
+    col += uSkySunCol * (disc * 2.8 * overcastDim + halo * (0.55 + uSunGlow * 1.4)) * (0.35 + uSunGlow * 0.75);
+  }
+  // Civil/nautical twilight glow hugging the rising/setting solar azimuth near the horizon
+  float twi = exp(-pow((solarD.y + 0.05) / 0.18, 2.0)) * (1.0 - uWorldCurve * 0.55);
+  if (twi > 0.01) {
+    float azAlign = pow(max(dot(normalize(vec3(d.x, 0.0, d.z) + vec3(1e-5)), normalize(vec3(solarD.x, 0.0, solarD.z) + vec3(1e-5))), 0.0), 3.0);
+    float bandH = exp(-abs(d.y) * 8.5);
+    col += uSkySunCol * twi * azAlign * bandH * (0.28 + uSunGlow * 0.35);
+  }
 
-  // Stars sit behind volumetric clouds so clouds naturally occlude starlight
+  // Sidereal rotating star vault behind volumetric clouds (rotates around inclined celestial pole)
   float starFloor = mix(-0.02, -1.02, clamp(uWorldCurve * 1.3, 0.0, 1.0));
   if (uStars > 0.002 && d.y > starFloor) {
-    vec2 sph = vec2(atan(d.z, d.x), asin(clamp(d.y, -1.0, 1.0)));
+    vec3 pole = normalize(vec3(0.0, 0.743, 0.669));
+    float cR = cos(uStarRot);
+    float sR = sin(uStarRot);
+    vec3 dStar = d * cR + cross(pole, d) * sR + pole * dot(pole, d) * (1.0 - cR);
+    vec2 sph = vec2(atan(dStar.z, dStar.x), asin(clamp(dStar.y, -1.0, 1.0)));
     vec2 g = sph * 42.0;
     vec2 id = floor(g);
     vec2 f = fract(g) - 0.5;
     float sh = hash12(id + 0.5);
-    float star = step(0.982, sh) * (1.0 - smoothstep(0.0, 0.1, length(f)));
+    float star = step(0.981, sh) * (1.0 - smoothstep(0.0, 0.105, length(f)));
     star *= 0.65 + 0.35 * sin(uTime * 2.4 + sh * 60.0);
+    // Faint galactic star-band sweeping diagonally across the celestial sphere
+    float mwBand = exp(-pow((dStar.y * 0.58 - dStar.x * 0.62 + dStar.z * 0.25) * 3.4, 2.0));
+    float mw = mwBand * fbm(sph * 3.8 + 2.1) * 0.14;
     float starVis = mix(smoothstep(-0.02, 0.12, d.y), 1.0, clamp(uWorldCurve * 1.2, 0.0, 1.0));
-    col += vec3(0.82, 0.88, 1.0) * star * uStars * starVis;
+    vec3 starTint = mix(vec3(0.78, 0.86, 1.0), vec3(1.0, 0.90, 0.76), fract(sh * 13.7));
+    col += (starTint * star + vec3(0.56, 0.66, 0.92) * mw) * uStars * starVis;
   }
 
-  // Moon also sits behind volumetric clouds so cloud banks drift naturally across the moon
-  if (uMoonGlow > 0.003) {
-    vec3 md = normalize(uMoonDir);
-    vec3 mright = normalize(cross(md, vec3(0.0, 1.0, 0.0)) + vec3(1e-4));
-    vec3 mup = cross(mright, md);
+  // Complete 8-phase 3D spherical Moon behind volumetric clouds:
+  // uMoonPhase: 0.0 = New, 0.125 = Waxing Crescent, 0.25 = First Quarter,
+  // 0.375 = Waxing Gibbous, 0.5 = Full, 0.625 = Waning Gibbous, 0.75 = Third Quarter, 0.875 = Waning Crescent
+  vec3 md = normalize(uMoonDir);
+  float moonAbove = mix(smoothstep(-0.08, 0.01, md.y), 1.0, clamp(uWorldCurve * 1.35, 0.0, 1.0));
+  if (uMoonGlow > 0.003 && moonAbove > 0.002 && dot(d, md) > 0.2) {
+    vec3 mright = normalize(cross(vec3(0.0, 1.0, 0.0), md) + vec3(1e-4, 0.0, 0.0));
+    vec3 mup = cross(md, mright);
     vec2 muv = vec2(dot(d, mright), dot(d, mup));
-    float moonR = 0.045 * max(uMoonSize, 0.15);
+    float moonR = 0.044 * max(uMoonSize, 0.15);
+    vec2 mp = muv / moonR;
+    float r2 = dot(mp, mp);
     float mAng = length(muv);
-    float mDisc = 1.0 - smoothstep(moonR * 0.9, moonR, mAng);
-    float shOff = (uMoonPhase - 0.5) * 2.4 * moonR;
-    float shadow = 1.0 - smoothstep(moonR * 0.94, moonR * 1.02, length(muv - vec2(shOff, moonR * 0.15)));
-    float mBody = mDisc * (1.0 - shadow * 0.94);
-    float crater = 0.78 + 0.22 * vnoise(muv * 95.0 + 3.7);
-    col += vec3(0.86, 0.9, 1.0) * mBody * crater * (1.15 + uMoonGlow * 1.3);
-    float haloM = 1.0 - smoothstep(moonR, moonR * 3.4, mAng);
-    col += vec3(0.62, 0.72, 1.0) * haloM * uMoonGlow * 0.34;
+
+    // uMoonPhase in 0..2: 0 = New, 0.25 = Waxing Crescent, 0.5 = First Quarter, 0.75 = Waxing Gibbous,
+    // 1.0 = Full Moon, 1.25 = Waning Gibbous, 1.5 = Third Quarter, 1.75 = Waning Crescent, 2.0 = New
+    float phi = uMoonPhase * 3.14159265;
+    float illumFrac = 0.5 - 0.5 * cos(phi);
+
+    if (r2 < 1.06) {
+      float mDisc = (1.0 - smoothstep(0.92, 1.0, sqrt(r2))) * horMask * moonAbove;
+      float mz = sqrt(max(0.0, 1.0 - min(r2, 1.0)));
+      // Lunar maria basalt plains + subtle terminator crater-rim relief
+      float maria = fbm(mp * 2.35 + vec2(1.7, -0.85));
+      float c1 = vnoise(mp * 11.5 + 4.3);
+      float c2 = vnoise(mp * 24.0 - 2.1);
+      vec2 relief = vec2(c1 - 0.5, c2 - 0.5) * 0.11;
+      vec3 mn = normalize(vec3(mp.x + relief.x, mp.y + relief.y, mz));
+
+      // 3D sun illumination vector in moon-view frame driven by synodic phase phi
+      vec3 mSun = normalize(vec3(sin(phi), 0.07 * sin(phi), -cos(phi)));
+      float ndl = dot(mn, mSun);
+      // Lommel-Seeliger-like lunar reflectance: crisp terminator, full bright limb at phi = pi
+      float term = smoothstep(-0.045, 0.075, ndl);
+      float lommel = max(ndl, 0.0) / (max(ndl, 0.0) + max(mn.z, 0.14) * 0.55 + 0.05);
+      float litMoon = term * mix(0.42, 1.08, lommel);
+
+      float albedo = mix(0.62, 1.04, smoothstep(0.36, 0.66, maria)) * (0.86 + 0.14 * c1);
+      // Subtle blue-silver planetshine ("earthshine") on the unlit lunar nightside so New/Crescent moons read as real 3D spheres!
+      float earthshine = (0.042 + 0.032 * (1.0 - illumFrac)) * (0.65 + 0.35 * mz);
+      float limbRim = pow(1.0 - mz, 3.0) * 0.09 * (0.35 + 0.65 * illumFrac);
+      vec3 litTint = vec3(0.92, 0.95, 1.02) * (1.05 + uMoonGlow * 1.25);
+      vec3 darkTint = mix(col * 0.35, vec3(0.42, 0.54, 0.78), 0.65) * (0.6 + uMoonGlow * 0.6);
+      vec3 moonSurf = (litTint * litMoon * albedo + darkTint * earthshine + litTint * limbRim);
+      // Occlude stars behind the solid lunar sphere and add illuminated lunar disc
+      col = mix(col, moonSurf, mDisc * clamp(0.82 + 0.18 * litMoon, 0.0, 1.0));
+    }
+
+    float haloM = (1.0 - smoothstep(moonR * 0.85, moonR * 3.8, mAng)) * horMask * moonAbove;
+    col += vec3(0.62, 0.72, 1.0) * haloM * uMoonGlow * (0.07 + 0.34 * illumFrac);
   }
 
   // True 3D volumetric raymarch through concentric spherical cloud shell
@@ -331,7 +469,6 @@ void main() {
     float curveBlend = smoothstep(0.02, 0.35, uWorldCurve);
     float globeR = max(uPlanetR, 1200.0) / max(uWorldCurve, 0.04);
     float atmoR = mix(15500.0, globeR, curveBlend);
-    // In flat mode, anchor horizontal coordinates softly so flying through the world shifts clouds with real parallax!
     vec3 sphereCenter = mix(
       vec3(cameraPosition.x * 0.65, -atmoR, cameraPosition.z * 0.65),
       vec3(0.0, -atmoR, 0.0),
@@ -339,8 +476,19 @@ void main() {
     );
     vec3 oc = cameraPosition - sphereCenter;
     float rCam = length(oc);
-    float rBase = atmoR + 620.0;
-    float rTop = atmoR + 1660.0;
+
+    // Cloud shell base & ceiling adapt to selected meteorological cloud type
+    float baseH = 580.0;
+    float topH = 1580.0;
+    float extMul = 1.0;
+    if (uCloudType > 0.5 && uCloudType < 1.5) { baseH = 420.0; topH = 2420.0; extMul = 1.25; }
+    else if (uCloudType > 1.5 && uCloudType < 2.5) { baseH = 500.0; topH = 980.0; extMul = 1.35; }
+    else if (uCloudType > 2.5 && uCloudType < 3.5) { baseH = 1340.0; topH = 1960.0; extMul = 0.46; }
+    else if (uCloudType > 3.5 && uCloudType < 4.5) { baseH = 540.0; topH = 2040.0; extMul = 0.95; }
+    else if (uCloudType > 4.5) { baseH = 85.0; topH = 355.0; extMul = 1.55; }
+
+    float rBase = atmoR + baseH;
+    float rTop = atmoR + topH;
     float shellThick = rTop - rBase;
 
     vec2 hit0 = intersectSphereShell(oc, d, rBase);
@@ -366,8 +514,9 @@ void main() {
       vec2 fc = gl_FragCoord.xy;
       float jit = grainHash(fc + fract(uTime * 7.31) * 113.0);
       float span = tEnd - tStart;
-      float dtStep = span / 9.0;
-      float covK = clamp(uCloud, 0.0, 1.6);
+      float dtStep = span / 10.0;
+      float covK = clamp(uCloud, 0.0, 2.5);
+      float overTint = smoothstep(1.15, 2.2, covK);
 
       float Tr = 1.0;
       vec3 accum = vec3(0.0);
@@ -375,28 +524,28 @@ void main() {
       float wSum = 0.0;
       vec3 repP = cameraPosition + d * (tStart + span * 0.45);
 
-      vec3 darkBelly = mix(uCloudCol * 0.34, uHor * 0.48, 0.28);
-      vec3 brightTop = mix(uCloudCol + uSkySunCol * 0.92, vec3(0.97, 0.96, 0.93), 0.30);
+      vec3 darkBelly = mix(uCloudCol * 0.34, uHor * 0.44, 0.26) * (1.0 - 0.26 * overTint);
+      vec3 brightTop = mix(uCloudCol + uSkySunCol * 0.92, vec3(0.97, 0.96, 0.93), 0.30) * (1.0 - 0.14 * overTint);
       float cosTheta = dot(d, sd);
       float hgPhase = 0.25 + 0.95 * pow(max(cosTheta, 0.0), 6.0) * (0.4 + uSunGlow * 0.85);
 
-      for (int i = 0; i < 9; i++) {
-        if (Tr < 0.03) break;
+      for (int i = 0; i < 10; i++) {
+        if (Tr < 0.025) break;
         float tCur = tStart + (float(i) + jit) * dtStep;
         vec3 p = cameraPosition + d * tCur;
         float h01 = clamp((length(p - sphereCenter) - rBase) / shellThick, 0.0, 1.0);
-        float dens = skyCumulusDensity(p, h01, covK, uTime);
+        float dens = skyCumulusDensity(p, h01, covK, uCloudType, uTime);
         if (dens > 0.004) {
           vec3 pSun = p + sd * 145.0;
           float hSun = clamp((length(pSun - sphereCenter) - rBase) / shellThick, 0.0, 1.0);
-          float shDens = skyCumulusDensity(pSun, hSun, covK, uTime);
+          float shDens = skyCumulusDensity(pSun, hSun, covK, uCloudType, uTime);
           float sunTrans = exp(-shDens * 2.6);
           float powder = 1.0 - exp(-dens * 3.4);
           float lit = clamp(sunTrans * (0.52 + 0.55 * h01) + 0.10 + 0.16 * h01, 0.0, 1.25);
           vec3 stepCol = mix(darkBelly, brightTop, clamp(lit, 0.0, 1.0));
           stepCol += uSkySunCol * sunTrans * (0.35 + 0.65 * powder) * hgPhase * 0.55;
 
-          float sig = dens * (0.0026 + covK * 0.0012);
+          float sig = dens * (0.0026 + covK * 0.0014) * extMul;
           float stepT = exp(-sig * dtStep);
           float w = Tr * (1.0 - stepT);
           accum += w * stepCol;
@@ -415,11 +564,10 @@ void main() {
           cRgb = mix(cRgb, plate.rgb, 0.85);
           cloudAlpha *= plate.a;
         }
-        // Horizon atmospheric perspective softly blends very distant cloud rims into horizon haze
         float distFade = mix(smoothstep(-0.10, 0.07, d.y), 1.0, clamp(uWorldCurve * 1.3, 0.0, 1.0));
         float farAtmo = smoothstep(3500.0, 14500.0, tStart) * (1.0 - curveBlend * 0.65);
         cRgb = mix(cRgb, mix(uHor, uSkySunCol, pow(s, 5.0) * 0.35), farAtmo * 0.58);
-        col = mix(col, cRgb, clamp(cloudAlpha * distFade, 0.0, 0.96));
+        col = mix(col, cRgb, clamp(cloudAlpha * distFade, 0.0, 0.985));
       }
     }
   }
@@ -445,6 +593,7 @@ export const CLOUD_VERT = /* glsl */ `
 attribute vec3 aCenter;
 attribute vec3 aScale;
 attribute float aSeed;
+uniform float uCloudType;
 varying vec3 vWorld;
 varying vec3 vCenterW;
 varying vec3 vAxisX;
@@ -455,9 +604,35 @@ varying float vSeed;
 ${GLSL_CURVE}
 void main() {
   vSeed = aSeed;
-  vHalfExt = max(aScale * 0.5, vec3(1.0));
-  vCenterW = bendWorld(aCenter);
-  vec3 upAxis = normalize(bendNormal(aCenter.xz, vec3(0.0, 1.0, 0.0)));
+  vec3 ctr = aCenter;
+  vec3 scl = aScale;
+  // Morph 3D skyscraper-weaving cloud volumes by selected cloud type without rebuilding geometry!
+  if (uCloudType > 0.5 && uCloudType < 1.5) {
+    // 1: Cumulonimbus towering storm columns
+    ctr.y = 260.0 + (aCenter.y - 330.0) * 1.45;
+    scl *= vec3(1.15, 2.05, 1.15);
+  } else if (uCloudType > 1.5 && uCloudType < 2.5) {
+    // 2: Stratocumulus wide horizontal roll sheets
+    ctr.y = 385.0 + (aCenter.y - 330.0) * 0.36;
+    scl *= vec3(1.75, 0.52, 1.55);
+  } else if (uCloudType > 2.5 && uCloudType < 3.5) {
+    // 3: High ice Cirrus wind-sheared wisps
+    ctr.y = 840.0 + (aCenter.y - 330.0) * 0.85;
+    scl *= vec3(2.25, 0.28, 0.85);
+  } else if (uCloudType > 3.5 && uCloudType < 4.5) {
+    // 4: Multi-layer (split puffs into mid altocumulus & high cirrus decks)
+    float upper = step(0.5, fract(aSeed * 13.7));
+    ctr.y = mix(340.0 + (aCenter.y - 330.0) * 0.35, 860.0 + (aCenter.y - 330.0) * 0.55, upper);
+    scl *= mix(vec3(1.35, 0.65, 1.35), vec3(2.0, 0.32, 0.9), upper);
+  } else if (uCloudType > 4.5) {
+    // 5: Low urban Sea-of-Clouds hugging skyscraper canyons (spires & pyramids pierce above!)
+    ctr.y = 95.0 + (aCenter.y - 330.0) * 0.34;
+    scl *= vec3(1.90, 0.54, 1.85);
+  }
+
+  vHalfExt = max(scl * 0.5, vec3(1.0));
+  vCenterW = bendWorld(ctr);
+  vec3 upAxis = normalize(bendNormal(ctr.xz, vec3(0.0, 1.0, 0.0)));
   float yaw = aSeed * 6.2831853;
   vec3 refH = vec3(cos(yaw), 0.0, sin(yaw));
   vec3 axX = cross(upAxis, refH);
@@ -484,8 +659,11 @@ uniform vec3 uFogCol;
 uniform vec3 uSunFogCol;
 uniform float uHazeSun;
 uniform float uCloud;
+uniform float uCloudType;
 uniform float uCloudStyle;
 uniform float uSunGlow;
+uniform vec3 uPoolCol;
+uniform float uLightK;
 uniform float uTime;
 uniform float uSat;
 varying vec3 vWorld;
@@ -508,18 +686,20 @@ vec3 worldToCloudLocal(vec3 p) {
   );
 }
 
-float puffVolDensity(vec3 pL, float covK, float seed, float t) {
+float puffVolDensity(vec3 pL, float covK, float cType, float seed, float t) {
   // Ellipsoidal radial falloff strictly reaches 0.0 at r = 0.88 (< 1.0 cube wall!)
-  vec3 sq = vec3(pL.x, pL.y * 1.12 - 0.06, pL.z);
+  vec3 sq = vec3(pL.x, pL.y * 1.10 - 0.05, pL.z);
   float r = length(sq);
   if (r >= 0.88) return 0.0;
-  float env = (1.0 - smoothstep(0.22, 0.87, r)) * smoothstep(-0.78, -0.20, pL.y);
+  float baseFloor = (cType > 2.5 && cType < 3.5) ? smoothstep(-0.85, 0.0, pL.y) : smoothstep(-0.78, -0.20, pL.y);
+  float env = (1.0 - smoothstep(0.20, 0.87, r)) * baseFloor;
+  vec3 freq = (cType > 2.5 && cType < 3.5) ? vec3(1.3, 3.2, 4.4) : vec3(2.15, 2.15, 2.15);
   vec3 drift = vec3(t * 0.045, 0.0, t * 0.022) + seed * 17.3;
-  float n1 = fbm3(pL * 2.15 + drift);
-  float n2 = fbm3(pL * 4.6 - drift * 1.4);
+  float n1 = fbm3(pL * freq + drift);
+  float n2 = fbm3(pL * (freq * 2.1) - drift * 1.4);
   float raw = (n1 * 0.68 + n2 * 0.32) * env;
-  float cut = clamp(0.26 - covK * 0.09, 0.08, 0.30);
-  return clamp((raw - cut) * 3.1, 0.0, 1.0) * env;
+  float cut = clamp(0.27 - covK * 0.10, 0.05, 0.31);
+  return clamp((raw - cut) * 3.15, 0.0, 1.0) * env;
 }
 
 void main() {
@@ -529,7 +709,6 @@ void main() {
   if (distToBack < 1e-3) discard;
   vec3 rdW = rayVec / distToBack;
 
-  // Transform camera ray into normalized ellipsoid space where unit sphere r<=0.88 is inside [-1,1]^3
   vec3 roL = worldToCloudLocal(cameraPosition);
   vec3 backL = worldToCloudLocal(vWorld);
   vec3 segL = backL - roL;
@@ -555,31 +734,37 @@ void main() {
 
   float jit = grainHash(gl_FragCoord.xy + fract(uTime * 9.17) * 83.0);
   float dtL = (t1 - t0) / 7.0;
-  float covK = clamp(uCloud, 0.0, 1.6);
+  float covK = clamp(uCloud, 0.0, 2.5);
+  float isCirrus = (uCloudType > 2.5 && uCloudType < 3.5) ? 1.0 : 0.0;
+  float isLowSea = (uCloudType > 4.5) ? 1.0 : 0.0;
 
   float Tr = 1.0;
   vec3 accum = vec3(0.0);
   float avgLit = 0.0;
   float wSum = 0.0;
 
-  vec3 darkBelly = uCloudCol * 0.38;
+  // Low sea-of-clouds picks up warm/neon city under-glow on its undersides!
+  vec3 cityUnder = uPoolCol * max(uLightK, 0.15) * (0.20 + 0.45 * isLowSea);
+  vec3 darkBelly = uCloudCol * 0.38 + cityUnder * 0.35;
   vec3 brightTop = mix(uCloudCol + uSkySunCol * 0.95, vec3(0.97, 0.96, 0.93), 0.30);
   float fwd = pow(max(dot(rdW, sd), 0.0), 5.0);
+  float optScale = mix(1.85 + covK * 0.95, 0.78 + covK * 0.42, isCirrus);
 
   for (int i = 0; i < 7; i++) {
     if (Tr < 0.04) break;
     float tCur = t0 + (float(i) + jit) * dtL;
     vec3 pL = roL + rdL * tCur;
-    float dens = puffVolDensity(pL, covK, vSeed, uTime);
+    float dens = puffVolDensity(pL, covK, uCloudType, vSeed, uTime);
     if (dens > 0.005) {
-      float shD = puffVolDensity(pL + sdL * 0.32, covK, vSeed, uTime);
+      float shD = puffVolDensity(pL + sdL * 0.32, covK, uCloudType, vSeed, uTime);
       float sunT = exp(-shD * 2.4);
       float hUp = clamp(pL.y * 0.5 + 0.5, 0.0, 1.0);
       float lit = clamp(sunT * (0.55 + 0.52 * hUp) + 0.12, 0.0, 1.22);
       vec3 sc = mix(darkBelly, brightTop, clamp(lit, 0.0, 1.0));
+      sc += cityUnder * (1.0 - hUp) * 0.55;
       sc += uSkySunCol * sunT * fwd * (0.35 + uSunGlow * 0.75);
 
-      float stepT = exp(-dens * dtL * (1.85 + covK * 0.95));
+      float stepT = exp(-dens * dtL * optScale);
       float w = Tr * (1.0 - stepT);
       accum += w * sc;
       avgLit += w * lit;
@@ -588,7 +773,8 @@ void main() {
     }
   }
 
-  float alpha = (1.0 - Tr) * 0.78;
+  float maxA = mix(0.84, 0.52, isCirrus);
+  float alpha = (1.0 - Tr) * mix(0.80, 0.55, isCirrus);
   if (alpha < 0.008) discard;
 
   vec3 cl = accum / max(wSum, 1e-4);
@@ -602,7 +788,7 @@ void main() {
   vec3 fogCol = mix(uFogCol, uSunFogCol, pow(max(dot(rdW, sd), 0.0), 6.0) * uHazeSun);
   float farMix = smoothstep(3200.0, 11500.0, camDist) * 0.62;
   cl = saturate3(mix(cl, fogCol, farMix), uSat);
-  gl_FragColor = vec4(cl, clamp(alpha, 0.0, 0.82));
+  gl_FragColor = vec4(cl, clamp(alpha, 0.0, maxA));
 }
 `;
 
@@ -1049,8 +1235,10 @@ varying vec3 vN;
 varying vec3 vFlat;
 varying vec3 vWorld;
 varying vec3 vLocalN;
+varying vec3 vLocalP;
 ${GLSL_CURVE}
 void main() {
+  vLocalP = position;
   vec4 wp = modelMatrix * vec4(position, 1.0);
   vFlat = wp.xyz;
   vec3 nrm = normalize(mat3(modelMatrix) * normal);
@@ -1064,6 +1252,7 @@ void main() {
 
 export const LANDMARK_FRAG = /* glsl */ `
 uniform vec3 uCol;
+uniform float uRole;
 uniform vec3 uSunDir;
 uniform vec3 uSunCol;
 uniform float uSunK;
@@ -1073,8 +1262,14 @@ uniform float uWinDensity;
 uniform float uWinGlow;
 uniform vec3 uWinA;
 uniform vec3 uWinB;
+uniform vec3 uWinC;
 uniform float uEdge;
 uniform vec3 uEdgeCol;
+uniform float uBandGlow;
+uniform float uToon;
+uniform float uFlat;
+uniform vec3 uPoolCol;
+uniform float uLightK;
 uniform vec3 uFogCol;
 uniform vec3 uSunFogCol;
 uniform float uFogDensity;
@@ -1086,34 +1281,110 @@ varying vec3 vN;
 varying vec3 vFlat;
 varying vec3 vWorld;
 varying vec3 vLocalN;
+varying vec3 vLocalP;
 ${GLSL_NOISE}
 ${GLSL_UTIL}
 void main() {
   vec3 n = normalize(vN);
   vec3 ln = normalize(vLocalN);
   vec3 vdir = normalize(vWorld - cameraPosition);
+  float wy = max(vFlat.y, 0.0);
+
+  // Tangent architectural coordinate that works on flat box walls, 45-deg pyramid faces, AND cylinders!
+  vec3 horizT = cross(vec3(0.0, 1.0, 0.0), ln);
+  float hLen = length(horizT);
+  horizT = hLen > 1e-3 ? horizT / hLen : vec3(1.0, 0.0, 0.0);
+  float uCoord = dot(vFlat, horizT);
+
+  // Subtle architectural stone/metal panelling relief before lighting
+  float megaSeam = 1.0 - 0.14 * (1.0 - smoothstep(0.0, 0.06, abs(fract(wy / 22.0) - 0.5)));
+  float cofferX = fract(uCoord / 6.0);
+  float cofferY = fract(wy / 4.2);
+  float panelShade = (0.92 + 0.08 * step(0.09, cofferX) * step(cofferX, 0.91) * step(0.10, cofferY)) * megaSeam;
+  vec3 base = uCol * mix(panelShade, 1.0, uFlat * 0.7);
+
   float dif = max(dot(n, normalize(uSunDir)), 0.0);
+  float toonD = floor(dif * 3.0 + 0.5) / 3.0;
+  dif = mix(dif, toonD, uToon);
   vec3 amb = mix(uAmbG, uAmb, n.y * 0.5 + 0.5);
-  vec3 col = uCol * (amb + uSunCol * uSunK * dif);
+  vec3 lit = base * (amb + uSunCol * uSunK * dif);
+  vec3 col = mix(lit, base, uFlat);
+
+  // Warm/look-tinted street bounce on lower plinths, arches & grand staircases
+  float streetBounce = exp(-wy * 0.065) * max(uLightK, 0.14);
+  col += base * uPoolCol * streetBounce * 0.52 + uPoolCol * streetBounce * 0.04;
   col = saturate3(col, uSat);
 
-  if (abs(ln.y) < 0.72) {
-    float ang = atan(ln.z, ln.x);
-    vec2 g = vec2(ang * 18.0, max(vFlat.y, 0.0) / 4.2);
-    vec2 gid = floor(g);
-    vec2 f = fract(g);
-    float win = step(0.25, f.x) * step(f.x, 0.75) * step(0.28, f.y) * step(f.y, 0.76);
-    float r = hash12(gid + 11.7);
-    float on = step(r, uWinDensity * 0.75) * win;
-    vec3 wc = mix(uWinA, uWinB, step(0.55, hash12(gid + 3.3)));
-    col += saturate3(wc, uSat) * on * uWinGlow * 0.85;
+  if (uRole > 1.5 && uRole < 2.5) {
+    // Role 2: Glowing theme-accent structural rib / conduit / crown halo
+    float pulse = 0.88 + 0.12 * sin(uTime * 1.8 + wy * 0.045);
+    vec3 em = saturate3(uCol, uSat) * (0.72 + uBandGlow * 0.95 * max(uLightK, 0.32)) * pulse;
+    col = mix(col, em, 0.86);
+  } else if (uRole > 2.5) {
+    // Role 3: Panoramic illuminated sky-gallery / observation deck / atrium skylight
+    float colSil = step(0.18, fract(uCoord / 3.4));
+    float mull = step(0.14, fract(wy / 3.6));
+    vec3 galCol = saturate3(mix(uWinA, uWinB, 0.32), uSat);
+    float galK = (0.55 + uWinGlow * 0.82) * max(uLightK, 0.35);
+    col = mix(col * 0.45, galCol * galK, (0.35 + 0.65 * colSil * mull));
+  } else {
+    // Roles 0 & 1: Monumental architectural facades (vertical walls + sloped pyramid/ziggurat faces)
+    float densRole = (uRole > 0.5) ? 0.34 : 0.88;
+    float absY = abs(ln.y);
+    if (absY < 0.26) {
+      // Vertical walls (cantilever wings, arches, spires, towers, arenas, theatres)
+      float bayW = (uRole > 0.5) ? 5.8 : 4.2;
+      float flrH = (uRole > 0.5) ? 5.0 : 3.8;
+      vec2 g = vec2(uCoord / bayW, wy / flrH);
+      vec2 gid = floor(g);
+      vec2 f = fract(g);
+      float mullion = 1.0 - step(0.14, f.x) * step(f.x, 0.86);
+      col *= 1.0 - mullion * 0.14 * (1.0 - uFlat);
+
+      float win = step(0.20, f.x) * step(f.x, 0.80) * step(0.24, f.y) * step(f.y, 0.78);
+      // Every 8th floor on primary monumental structures carries a panoramic sky-lobby ribbon!
+      float skyRibbon = (uRole < 0.5 && mod(gid.y, 8.0) < 0.5) ? 1.0 : 0.0;
+      float r = hash12(gid + vec2(11.7, 5.3));
+      float litOn = mix(step(r, uWinDensity * densRole), step(r, min(0.92, uWinDensity * 1.35 + 0.25)), skyRibbon) * win;
+      float rCol = hash12(gid + vec2(3.3, 19.1));
+      vec3 wc = uWinA;
+      if (rCol > 0.56) wc = uWinB;
+      if (rCol > 0.86) wc = uWinC;
+      col += saturate3(wc, uSat) * litOn * uWinGlow * (0.85 + 0.30 * skyRibbon);
+    } else if (absY < 0.86) {
+      // Sloped monumental faces (Pyramids, Ziggurats, Buttresses, Geodesic Domes):
+      // Carved stepped stone/alloy courses + recessed glowing horizontal terrace galleries!
+      float course = fract(wy / 5.5);
+      float blockJoint = step(0.08, fract(uCoord / 7.5 + floor(wy / 5.5) * 0.5));
+      col *= 0.88 + 0.15 * smoothstep(0.0, 0.22, course) * blockJoint;
+
+      vec2 sg = vec2(uCoord / 4.8, wy / 11.0);
+      vec2 sgid = floor(sg);
+      vec2 sf = fract(sg);
+      // Horizontal recessed terrace slits along pyramid/dome courses
+      float slit = step(0.16, sf.x) * step(sf.x, 0.84) * step(0.62, sf.y) * step(sf.y, 0.86);
+      float sr = hash12(sgid + vec2(23.4, 9.1));
+      float sOn = step(sr, uWinDensity * densRole * 0.95) * slit;
+      vec3 swc = mix(uWinA, uWinB, step(0.58, hash12(sgid + 7.7)));
+      col += saturate3(swc, uSat) * sOn * uWinGlow * 0.92;
+    } else if (ln.y > 0.85 && uRole < 0.5) {
+      // Rooftop / terrace deck subtle paver grid + landing pad rim accent
+      vec2 rg = vFlat.xz / 8.0;
+      float seam = step(0.08, fract(rg.x)) * step(0.08, fract(rg.y));
+      col *= 0.90 + 0.10 * seam;
+    }
   }
 
-  float rim = pow(1.0 - max(dot(-vdir, n), 0.0), 2.6);
-  col += saturate3(uEdgeCol, uSat) * rim * uEdge * 0.55;
+  // Crisp silhouette & architectural edge highlight (honouring Tron/Outrun/Anime edge glow)
+  float rim = pow(1.0 - max(dot(-vdir, n), 0.0), 2.3);
+  vec3 boxAd = 0.5 - abs(vLocalP);
+  float minAd = min(min(abs(boxAd.x), abs(boxAd.y)), abs(boxAd.z));
+  float boxCrease = 1.0 - smoothstep(0.0, max(fwidth(minAd), 1e-4) * 1.7, minAd);
+  vec3 eCol = saturate3(uEdgeCol, uSat);
+  col += eCol * (rim * 0.55 + boxCrease * 0.45) * uEdge * (0.65 + 0.35 * uBandGlow);
 
   float dist = length(vWorld - cameraPosition);
-  float density = uFogDensity * exp(-max(vFlat.y, 0.0) * uFogHeight);
+  float density = uFogDensity * exp(-wy * uFogHeight);
   float fogF = 1.0 - exp(-density * dist);
   vec3 fogCol = mix(uFogCol, uSunFogCol, pow(max(dot(vdir, normalize(uSunDir)), 0.0), 6.0) * uHazeSun);
   gl_FragColor = vec4(mix(col, fogCol, clamp(fogF, 0.0, 1.0)), 1.0);
@@ -1224,9 +1495,9 @@ void main() {
 // directly on the GPU so 18,000+ vehicles across 6 vertical strata cost 0ms CPU!
 
 export const SWARM_VERT = /* glsl */ `
-attribute vec4 aCurveA; // x1, z1, yBase, rate
-attribute vec4 aCurveB; // cx, cz, yArch, phase
-attribute vec4 aCurveC; // x2, z2, scale, closedLoop
+attribute vec4 aCurveA; // x1, z1, y1 (flat deck 1), rate
+attribute vec4 aCurveB; // ix (corner/ctrl x), iz (corner/ctrl z), y2 (flat deck 2), phase
+attribute vec4 aCurveC; // x2, z2, scale, mode (>0.5 = 90-deg corner turn radius, <-0.5 = straight street + optional deck switch, 0 = closed ring arc)
 attribute vec3 aColor;
 uniform float uTime;
 uniform float uHeightScale;
@@ -1236,13 +1507,63 @@ varying float vFade;
 ${GLSL_CURVE}
 
 vec3 evalSwarmPos(float tt) {
-  float u = 1.0 - tt;
-  float px = u * u * aCurveA.x + 2.0 * u * tt * aCurveB.x + tt * tt * aCurveC.x;
-  float pz = u * u * aCurveA.y + 2.0 * u * tt * aCurveB.y + tt * tt * aCurveC.y;
-  float arch = sin(tt * 3.14159265) * aCurveB.z;
-  float bob = sin(uTime * 1.7 + aCurveB.w * 25.0) * 1.4;
-  float py = (aCurveA.z + arch + bob) * uHeightScale;
-  return vec3(px, py, pz);
+  float mode = aCurveC.w;
+  float px;
+  float pz;
+  float py;
+  float hover = sin(uTime * 1.6 + aCurveB.w * 25.0) * 0.16;
+
+  if (mode > 0.5) {
+    // Street-grid route: flat horizontal Street 1 -> crisp 90-deg corner turn + grade-separation ramp -> flat perpendicular Street 2!
+    vec2 pStart = aCurveA.xy;
+    vec2 pCorner = aCurveB.xy;
+    vec2 pEnd = aCurveC.xy;
+    vec2 v1 = pCorner - pStart;
+    vec2 v2 = pEnd - pCorner;
+    float L1 = max(length(v1), 1.0);
+    float L2 = max(length(v2), 1.0);
+    float turnR = min(mode, min(L1, L2) * 0.45);
+    vec2 cEnter = pCorner - (v1 / L1) * turnR;
+    vec2 cExit = pCorner + (v2 / L2) * turnR;
+
+    float s1 = max(1.0, L1 - turnR);
+    float sTurn = max(1.0, 1.5707963 * turnR);
+    float s2 = max(1.0, L2 - turnR);
+    float arcS = clamp(tt, 0.0, 1.0) * (s1 + sTurn + s2);
+
+    vec2 xz;
+    if (arcS < s1) {
+      xz = mix(pStart, cEnter, arcS / s1);
+      py = aCurveA.z;
+    } else if (arcS < s1 + sTurn) {
+      float uTurn = (arcS - s1) / sTurn;
+      float omT = 1.0 - uTurn;
+      xz = omT * omT * cEnter + 2.0 * omT * uTurn * pCorner + uTurn * uTurn * cExit;
+      // Smooth Hermite S-curve steps cleanly between N-S street elevation y1 and perpendicular E-W street elevation y2!
+      float hRamp = uTurn * uTurn * (3.0 - 2.0 * uTurn);
+      py = mix(aCurveA.z, aCurveB.z, hRamp);
+    } else {
+      xz = mix(cExit, pEnd, (arcS - s1 - sTurn) / s2);
+      py = aCurveB.z;
+    }
+    px = xz.x;
+    pz = xz.y;
+  } else if (mode < -0.5) {
+    // Straight horizontal street run (flat when y1 == y2, or occasional smooth S-curve elevation switch between decks!)
+    vec2 xz = mix(aCurveA.xy, aCurveC.xy, tt);
+    px = xz.x;
+    pz = xz.y;
+    float rampU = smoothstep(0.32, 0.68, tt);
+    py = mix(aCurveA.z, aCurveB.z, rampU);
+  } else {
+    // Horizontal orbital ring arc (flat constant deck height aCurveA.z)
+    float om = 1.0 - tt;
+    px = om * om * aCurveA.x + 2.0 * om * tt * aCurveB.x + tt * tt * aCurveC.x;
+    pz = om * om * aCurveA.y + 2.0 * om * tt * aCurveB.y + tt * tt * aCurveC.y;
+    py = mix(aCurveA.z, aCurveB.z, tt * tt * (3.0 - 2.0 * tt));
+  }
+
+  return vec3(px, (py + hover) * uHeightScale, pz);
 }
 
 void main() {
@@ -1250,13 +1571,13 @@ void main() {
   vLocalP = position;
   float rawT = aCurveB.w + uTime * aCurveA.w;
   float tt = fract(rawT);
-  // Smooth fade-in/out at open corridor portals so vehicles never pop at endpoints
-  float portal = aCurveC.w > 0.5 ? 1.0 : smoothstep(0.0, 0.045, tt) * smoothstep(1.0, 0.955, tt);
+  bool isRing = abs(aCurveC.w) <= 0.5;
+  float portal = isRing ? 1.0 : smoothstep(0.0, 0.045, tt) * smoothstep(1.0, 0.955, tt);
   vFade = portal;
 
-  float eps = 0.008;
-  float tPrev = aCurveC.w > 0.5 ? fract(tt - eps) : max(0.0, tt - eps);
-  float tNext = aCurveC.w > 0.5 ? fract(tt + eps) : min(1.0, tt + eps);
+  float eps = 0.006;
+  float tPrev = isRing ? fract(tt - eps) : max(0.0, tt - eps);
+  float tNext = isRing ? fract(tt + eps) : min(1.0, tt + eps);
   vec3 p0 = evalSwarmPos(tPrev);
   vec3 pC = evalSwarmPos(tt);
   vec3 p1 = evalSwarmPos(tNext);
@@ -1268,9 +1589,9 @@ void main() {
   vec3 right = normalize(cross(upRef, fwd) + vec3(1e-5, 0.0, 0.0));
   vec3 up = normalize(cross(fwd, right));
 
-  // Gentle coordinated banking into curve
+  // Crisp coordinated banking into 90-degree street-corner turns
   vec3 turnVec = (p1 - pC) - (pC - p0);
-  float bankAng = clamp(dot(turnVec, right) * 0.12, -0.42, 0.42);
+  float bankAng = clamp(dot(turnVec, right) * 0.22, -0.46, 0.46);
   float cb = cos(bankAng);
   float sb = sin(bankAng);
   vec3 bRight = right * cb + up * sb;

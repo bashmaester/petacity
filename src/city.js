@@ -23,15 +23,18 @@ const clamp01 = (x) => Math.max(0, Math.min(1, x));
 export const KIND = { WALL: 0, SLAB: 1, MAST: 2, BAND: 3 };
 
 /** Landmark (place of interest) silhouettes — built from three.js primitives in scene.js. */
-export const LM_KINDS = ['arch', 'spire', 'dome', 'mast', 'crown', 'needle'];
+export const LM_KINDS = ['arch', 'spire', 'dome', 'mast', 'crown', 'needle', 'pyramid', 'cantilever', 'ziggurat'];
 
 const LM_NAMES = {
   arch: ['Meridian Gate', 'Sunset Arc', 'Harbor Arch', 'The Gateway', 'Twin Curve', 'Old Mill Arch'],
   spire: ['Zenith Spire', 'Aurora Spire', 'Skyline Needle', 'Pillar of Dawn', 'Vantage Spire', 'The Obelisk'],
   dome: ['Atlas Dome', 'Civic Rotunda', 'Weather Dome', 'Grand Conservatory', 'Solarium', 'The Vault'],
   mast: ['Signal Crown', 'Broadcast One', 'Relay Tower', 'North Mast', 'Sky Radio', 'The Aerial'],
-  crown: ['Imperial Terrace', 'Regalia Tower', 'Stepped Palace', 'Court of Blocks', 'The Ziggurat', 'High Terrace'],
+  crown: ['Imperial Terrace', 'Regalia Tower', 'Stepped Palace', 'Court of Blocks', 'High Terrace', 'Sovereign Crown'],
   needle: ['Needle Nine', 'Orbital Needle', 'Slim Jim', 'The Lancet', 'Pin Tower', 'Vector Needle'],
+  pyramid: ['Tyrell Pyramid', 'Solaris Arcology', 'Obsidian Pyramid', 'Apex Tetrahedron', 'Giza Arcology', 'Sun Pyramid'],
+  cantilever: ['Skywing Cantilever', 'Overhang Citadel', 'Horizon Cantilever', 'Cloudbridge Wing', 'Aerie Overhang', 'Kestrel Tower'],
+  ziggurat: ['Babylon Ziggurat', 'Hanging Terraces', 'Nineveh Steps', 'Cascading Sanctum', 'Etemenanki Vault', 'Seven-Step Ziggurat'],
 };
 
 /** Public-space kinds — living, lit, low-rise places (geometry lives in scene.js). */
@@ -128,20 +131,35 @@ export function generateCity(seed = 4417, radius = 13, suburbReach = 1.0) {
     spireCells.add(bi + ',' + bj);
   }
 
-  // Named landmarks (places of interest): hero arch near the centre + a
-  // scattered handful. Their blocks are left empty of ordinary towers.
+  // Named landmarks (places of interest): hero monument near the centre +
+  // guaranteed signature structures (pyramid, cantilever, ziggurat) and classic spires/domes.
   const landmarks = [];
   const lmCells = new Map();
-  const heroKind = 'arch';
+  const heroPool = ['arch', 'pyramid', 'cantilever', 'ziggurat', 'crown'];
+  const heroKind = seed === 4417 ? 'arch' : heroPool[Math.floor(hash2i(2, 19, seed) * heroPool.length) % heroPool.length];
   addLandmarkData(landmarks, lmCells, heroKind, 0, 0, seed, true);
-  const lmCount = 4 + Math.floor(hash2i(3, 17, seed) * 3); // 4..6 more
-  for (let k = 0; k < lmCount; k++) {
-    const bi = Math.floor(hash2i(k, 101, seed) * (radius * 2)) - radius;
-    const bj = Math.floor(hash2i(k, 211, seed) * (radius * 2)) - radius;
-    const key = bi + ',' + bj;
-    if (lmCells.has(key) || spireCells.has(key) || (bi === 0 && bj === 0)) continue;
-    const kind = LM_KINDS[Math.floor(hash2i(k, 5, seed) * LM_KINDS.length) % LM_KINDS.length];
-    addLandmarkData(landmarks, lmCells, kind, bi, bj, seed, false);
+
+  const mustHaveLm = radius >= 3
+    ? ['pyramid', 'cantilever', 'ziggurat'].filter((k) => k !== heroKind)
+    : radius >= 2 ? ['pyramid', 'cantilever'].filter((k) => k !== heroKind) : [];
+  const extraLmCount = 3 + Math.floor(hash2i(3, 17, seed) * 4); // 3..6 more
+  const wantLmKinds = [...mustHaveLm];
+  for (let k = 0; k < extraLmCount; k++) {
+    wantLmKinds.push(LM_KINDS[Math.floor(hash2i(k, 5, seed) * LM_KINDS.length) % LM_KINDS.length]);
+  }
+  for (let k = 0; k < wantLmKinds.length; k++) {
+    const kind = wantLmKinds[k];
+    for (let attempt = 0; attempt < 24; attempt++) {
+      const bi = Math.floor(hash2i(k * 19 + attempt, 101, seed) * (radius * 2)) - radius;
+      const bj = Math.floor(hash2i(k * 19 + attempt, 211, seed) * (radius * 2)) - radius;
+      const key = bi + ',' + bj;
+      if (lmCells.has(key) || spireCells.has(key) || (bi === 0 && bj === 0)) continue;
+      const lcx = bi * CELL + CELL / 2;
+      const lcz = bj * CELL + CELL / 2;
+      if (attempt < 18 && (inWater(lcx, lcz) || nearBoulevard(lcx, lcz, 64))) continue;
+      addLandmarkData(landmarks, lmCells, kind, bi, bj, seed, false);
+      break;
+    }
   }
 
   // Public spaces & grand venues: guarantee an arena, movie theatre and stadium
@@ -157,14 +175,14 @@ export function generateCity(seed = 4417, radius = 13, suburbReach = 1.0) {
     const kind = wantKinds[k];
     const big = kind === 'arena' || kind === 'stadium' || kind === 'theatre';
     // try deterministic candidate blocks until we find an open spot off water/boulevards
-    for (let attempt = 0; attempt < 28; attempt++) {
+    for (let attempt = 0; attempt < 64; attempt++) {
       const spanB = Math.max(1, radius - 1);
       const bi = Math.floor(hash2i(k * 31 + attempt, 307, seed) * (spanB * 2)) - spanB;
       const bj = Math.floor(hash2i(k * 31 + attempt, 401, seed) * (spanB * 2)) - spanB;
       const key = bi + ',' + bj;
       if (lmCells.has(key) || spireCells.has(key) || (Math.abs(bi) <= 1 && Math.abs(bj) <= 1)) continue;
-      // big venues straddle a 2x2 superblock without crossing a 4th-street avenue
-      if (big && radius >= 4) {
+      // big venues prefer a 2x2 superblock without crossing a 4th-street avenue, with 1x1 fallback after 40 tries
+      if (big && radius >= 4 && attempt < 42) {
         if (((bi + 1) % 4 + 4) % 4 === 0 || ((bj + 1) % 4 + 4) % 4 === 0) continue;
         if (bi + 1 >= radius || bj + 1 >= radius) continue;
         const subKeys = [key, `${bi + 1},${bj}`, `${bi},${bj + 1}`, `${bi + 1},${bj + 1}`];
@@ -534,10 +552,15 @@ function addLandmarkData(landmarks, lmCells, kind, bi, bj, seed, hero) {
   else if (kind === 'dome') { r = Math.min(52, (34 + r0 * 16) * m); h = (120 + r1 * 120) * 1.15; }
   else if (kind === 'mast') { r = 9 + r0 * 5; h = (400 + r1 * 240) * 1.15; }
   else if (kind === 'crown') { r = Math.min(50, (30 + r0 * 16) * m); h = (280 + r1 * 230) * 1.2; }
+  else if (kind === 'pyramid') { r = Math.min(54, (38 + r0 * 14) * m); h = (195 + r1 * 155) * m; }
+  else if (kind === 'cantilever') { r = Math.min(48, (28 + r0 * 14) * m); h = (290 + r1 * 210) * 1.15; }
+  else if (kind === 'ziggurat') { r = Math.min(54, (36 + r0 * 15) * m); h = (210 + r1 * 170) * m; }
   else { r = (11 + r0 * 9) * 1.1; h = (430 + r1 * 300) * 1.15; }
+  const cardinal = kind === 'pyramid' || kind === 'ziggurat' || kind === 'cantilever';
+  const rot = cardinal ? Math.floor(rnd(71) * 4) * (Math.PI * 0.5) : rnd(71) * Math.PI * 2;
   landmarks.push({
     kind, name, x: cx, z: cz, r, h,
-    rot: rnd(71) * Math.PI * 2,
+    rot,
     hero: !!hero, bi, bj,
     colorSeed: rnd(83),
   });
@@ -609,143 +632,335 @@ function addPlaceData(places, lmCells, pushBeacon, pushSign, kind, bi, bj, seed,
 }
 
 /**
- * Traffic lanes as gentle quadratic béziers across multiple altitude layers:
- * ground streets, low/mid/high air corridors, sweeping ring loops and slow
- * blimp routes — plus diagonal boulevards on the ground.
+ * Multi-layer horizontal street-grid traffic network:
+ * - Vehicles travel predominantly along flat horizontal street corridors.
+ * - Perpendicular streets (N-S vs E-W) use grade-separated elevations at every
+ *   stratum so cross-traffic flows continuously without traffic lights.
+ * - Intersection connectors form tangent-exact 90-degree corner turns that
+ *   smoothly transition between perpendicular street elevations.
+ * - Occasional street-aligned S-curve ramps smoothly switch vehicles between
+ *   adjacent horizontal elevation layers.
  */
 function makeLanes(seed, radius, boulevards = [], collider = null) {
   const lanes = [];
   const span = radius * CELL + CELL * 0.85;
   const R = (a, b) => hash2i(a, b, seed ^ 0x2c1b3e5d);
+  const NS = 33;
 
-  const pushLane = (x1, z1, x2, z2, y, speed, layer, bow = 0, extra = null) => {
-    const mx = (x1 + x2) / 2;
-    const mz = (z1 + z2) / 2;
-    const dx = x2 - x1;
-    const dz = z2 - z1;
-    const len = Math.hypot(dx, dz) || 1;
-    const px = -dz / len;
-    const pz = dx / len;
-    const b = bow * len;
-    const rec = {
-      x1, z1,
-      cx: extra && extra.cx !== undefined ? extra.cx : mx + px * b,
-      cz: extra && extra.cz !== undefined ? extra.cz : mz + pz * b,
-      x2, z2, y, speed, layer,
-    };
-    if (extra && extra.ringId !== undefined) {
-      rec.ringId = extra.ringId;
-      rec.ringSeg = extra.ringSeg;
-      rec.ringSegs = extra.ringSegs;
+  const makeHermiteProf = (y1, y2) => {
+    const prof = new Array(NS);
+    if (Math.abs(y2 - y1) < 1e-4) {
+      prof.fill(y1);
+      return prof;
     }
+    for (let s = 0; s < NS; s++) {
+      const u = s / (NS - 1);
+      const h = u * u * (3 - 2 * u);
+      prof[s] = y1 + (y2 - y1) * h;
+    }
+    return prof;
+  };
+
+  const segmentClear = (x1, z1, cx, cz, x2, z2, y1, y2, pad = 4.8) => {
+    if (!collider) return true;
+    const steps = 22;
+    for (let s = 0; s <= steps; s++) {
+      const t = s / steps;
+      const om = 1 - t;
+      const px = om * om * x1 + 2 * om * t * cx + t * t * x2;
+      const pz = om * om * z1 + 2 * om * t * cz + t * t * z2;
+      const py = y1 + (y2 - y1) * (t * t * (3 - 2 * t));
+      if (collider.hitsPoint(px, py, pz, pad)) return false;
+      if (py > 10 && (collider.hitsPoint(px, py - 2.8, pz, pad) || collider.hitsPoint(px, py + 2.8, pz, pad))) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const classifyLayer = (x1, z1, cx, cz, x2, z2, y1, y2, nominalLayer) => {
+    if (nominalLayer === 'ground' || !collider) return nominalLayer;
+    for (let s = 0; s < NS; s++) {
+      const t = s / (NS - 1);
+      const om = 1 - t;
+      const px = om * om * x1 + 2 * om * t * cx + t * t * x2;
+      const pz = om * om * z1 + 2 * om * t * cz + t * t * z2;
+      const py = y1 + (y2 - y1) * (t * t * (3 - 2 * t));
+      if (collider.maxHeightNear(px, pz, 30.5) + 20.5 > py) {
+        // Horizontal corridor threads inside a skyscraper street canyon (clear of hitsPoint, flanked by taller towers)
+        return 'ground';
+      }
+    }
+    return nominalLayer;
+  };
+
+  const pushSeg = (x1, z1, cx, cz, x2, z2, y1, y2, speed, nominalLayer, meta = null) => {
+    const layer = classifyLayer(x1, z1, cx, cz, x2, z2, y1, y2, nominalLayer);
+    const rec = {
+      x1, z1, cx, cz, x2, z2,
+      y: Math.min(y1, y2),
+      y1, y2,
+      speed, layer,
+      nominalLayer,
+      directed: true,
+      prof: makeHermiteProf(y1, y2),
+      outs: [],
+    };
+    if (meta) Object.assign(rec, meta);
     lanes.push(rec);
     return lanes.length - 1;
   };
 
-  // Sweeping multi-strata skyway corridors across 6 distinct altitude tiers (44m -> 880m),
-  // extending well past the core out across the outskirts & horizon suburbs!
-  const bands = [
-    [48, 'air-low'], [76, 'air-low'], [104, 'air-low'],
-    [138, 'air-mid'], [176, 'air-mid'], [218, 'air-mid'], [262, 'air-mid'],
-    [310, 'air-high'], [365, 'air-high'], [425, 'air-high'],
-    [495, 'air-high'], [575, 'air-high'],
+  // 6 horizontal street strata: each stratum separates N-S streets (yNS) from
+  // perpendicular E-W streets (yEW) so streams never collide at intersections!
+  const DECKS = [
+    { yNS: 5.8,  yEW: 19.8, spd: 58,  layer: 'ground',   aveOnly: false },
+    { yNS: 44.0, yEW: 62.0, spd: 96,  layer: 'air-low',  aveOnly: false },
+    { yNS: 92.0, yEW: 114.0, spd: 118, layer: 'air-low',  aveOnly: false },
+    { yNS: 158.0, yEW: 184.0, spd: 142, layer: 'air-mid',  aveOnly: true },
+    { yNS: 248.0, yEW: 280.0, spd: 168, layer: 'air-mid',  aveOnly: true },
+    { yNS: 368.0, yEW: 406.0, spd: 195, layer: 'air-high', aveOnly: true },
   ];
-  for (let k = 0; k < bands.length; k++) {
-    const y = bands[k][0] + R(k, 1) * 28;
-    const layer = bands[k][1];
-    const ang = R(k, 2) * Math.PI * 2;
-    const spread = (R(k, 3) - 0.5) * span * 0.85;
-    const nx = -Math.sin(ang);
-    const nz = Math.cos(ang);
-    // Higher strata reach further out toward the horizon suburbs
-    const reachMul = 1.15 + (k / bands.length) * 0.95 + R(k, 17) * 0.35;
-    const rSpan = span * reachMul;
-    pushLane(
-      -Math.cos(ang) * rSpan + nx * spread, -Math.sin(ang) * rSpan + nz * spread,
-      Math.cos(ang) * rSpan - nx * spread * 0.35, Math.sin(ang) * rSpan - nz * spread * 0.35,
-      y, 88 + R(k, 4) * 165, layer, (R(k, 8) - 0.5) * 0.34
-    );
-    const ang2 = ang + 1.05 + R(k, 18) * 0.9;
-    pushLane(
-      -Math.cos(ang2) * rSpan, -Math.sin(ang2) * rSpan,
-      Math.cos(ang2) * rSpan, Math.sin(ang2) * rSpan,
-      y + 18, 96 + R(k, 5) * 160, layer, (R(k, 9) - 0.5) * 0.38
-    );
+
+  // 4 cardinal directions: 0 = +Z (S), 1 = -Z (N), 2 = +X (E), 3 = -X (W)
+  const DIRS = [
+    { dx: 0, dz: 1, axis: 'ns', perp: [2, 3] },
+    { dx: 0, dz: -1, axis: 'ns', perp: [2, 3] },
+    { dx: 1, dz: 0, axis: 'ew', perp: [0, 1] },
+    { dx: -1, dz: 0, axis: 'ew', perp: [0, 1] },
+  ];
+
+  const GATE = 30; // intersection apron half-span (m)
+  const OFF_AVE = 8.5; // right-hand lane offset on avenues
+  const OFF_ST = 5.5;  // right-hand lane offset on minor streets
+  const laneOffFor = (idx) => ((((idx % 4) + 4) % 4 === 0) ? OFF_AVE : OFF_ST);
+
+  // Right-hand lateral offset vector (-dz * off, +dx * off)
+  const gatePos = (ix, iz, dCode, isExit) => {
+    const D = DIRS[dCode];
+    const gx = ix * CELL;
+    const gz = iz * CELL;
+    const sIdx = D.axis === 'ns' ? ix : iz;
+    const off = laneOffFor(sIdx);
+    const signG = isExit ? 1 : -1;
+    return {
+      x: gx - D.dz * off + D.dx * GATE * signG,
+      z: gz + D.dx * off + D.dz * GATE * signG,
+      latX: gx - D.dz * off,
+      latZ: gz + D.dx * off,
+    };
+  };
+
+  const gLim = Math.max(4, Math.ceil((radius + 2) / 2) * 2);
+  // Map of outgoing block-cruise segments starting at exit gate `${dIdx}:${ix}:${iz}:${dCode}`
+  const startBlocks = new Map();
+  // Map of incoming block-cruise segments arriving at entry gate `${dIdx}:${ix}:${iz}:${dCode}`
+  const arriveBlocks = new Map();
+  const addMap = (mp, key, val) => {
+    let arr = mp.get(key);
+    if (!arr) { arr = []; mp.set(key, arr); }
+    arr.push(val);
+  };
+
+  for (let dIdx = 0; dIdx < DECKS.length; dIdx++) {
+    const dk = DECKS[dIdx];
+    const step = dk.aveOnly ? 4 : 2;
+    const startIdx = -Math.floor(gLim / step) * step;
+
+    for (let ix = startIdx; ix <= gLim; ix += step) {
+      for (let iz = startIdx; iz <= gLim; iz += step) {
+        for (let dCode = 0; dCode < 4; dCode++) {
+          const D = DIRS[dCode];
+          const nix = ix + D.dx * step;
+          const niz = iz + D.dz * step;
+          if (nix < startIdx || nix > gLim || niz < startIdx || niz > gLim) continue;
+
+          const pOut = gatePos(ix, iz, dCode, true);
+          const pIn = gatePos(nix, niz, dCode, false);
+          const yFlat = D.axis === 'ns' ? dk.yNS : dk.yEW;
+          const pad = dIdx === 0 ? 4.5 : 4.8;
+
+          if (!segmentClear(pOut.x, pOut.z, (pOut.x + pIn.x) * 0.5, (pOut.z + pIn.z) * 0.5, pIn.x, pIn.z, yFlat, yFlat, pad)) {
+            continue;
+          }
+
+          const segSpd = dk.spd * (0.88 + R(ix * 13 + dCode, iz * 17 + dIdx) * 0.28);
+          const idx = pushSeg(
+            pOut.x, pOut.z,
+            (pOut.x + pIn.x) * 0.5, (pOut.z + pIn.z) * 0.5,
+            pIn.x, pIn.z,
+            yFlat, yFlat,
+            segSpd, dk.layer,
+            { axis: D.axis, deck: dIdx, kind: 'street' }
+          );
+          addMap(startBlocks, `${dIdx}:${ix}:${iz}:${dCode}`, idx);
+          addMap(arriveBlocks, `${dIdx}:${nix}:${niz}:${dCode}`, idx);
+
+          // Occasional smooth street-aligned elevation-switch ramp (~16% of avenue segments):
+          // climbs or descends gently to an adjacent horizontal stratum along the street!
+          const onAve = ((((D.axis === 'ns' ? ix : iz) % 4) + 4) % 4 === 0)
+            && (((nix % 4) + 4) % 4 === 0) && (((niz % 4) + 4) % 4 === 0);
+          const rampRoll = R(ix * 31 + dIdx * 7, iz * 29 + dCode * 11);
+          if (onAve && rampRoll < 0.18) {
+            const targetDeck = (rampRoll < 0.09 && dIdx + 1 < DECKS.length)
+              ? dIdx + 1
+              : (dIdx > 0 ? dIdx - 1 : Math.min(DECKS.length - 1, dIdx + 1));
+            if (targetDeck !== dIdx) {
+              const dk2 = DECKS[targetDeck];
+              const yTarget = D.axis === 'ns' ? dk2.yNS : dk2.yEW;
+              if (Math.abs(yTarget - yFlat) <= 135 && segmentClear(pOut.x, pOut.z, (pOut.x + pIn.x) * 0.5, (pOut.z + pIn.z) * 0.5, pIn.x, pIn.z, yFlat, yTarget, 4.8)) {
+                const rIdx = pushSeg(
+                  pOut.x, pOut.z,
+                  (pOut.x + pIn.x) * 0.5, (pOut.z + pIn.z) * 0.5,
+                  pIn.x, pIn.z,
+                  yFlat, yTarget,
+                  (segSpd + dk2.spd) * 0.5, dk.layer,
+                  { axis: D.axis, deck: dIdx, targetDeck, kind: 'ramp' }
+                );
+                addMap(startBlocks, `${dIdx}:${ix}:${iz}:${dCode}`, rIdx);
+                addMap(arriveBlocks, `${targetDeck}:${nix}:${niz}:${dCode}`, rIdx);
+              }
+            }
+          }
+        }
+      }
+    }
   }
 
-  // Avenue air-canyons: low skimmers & pods threading smoothly above wide avenues.
-  for (let a = -radius; a <= radius; a += 4) {
-    const p = a * CELL;
-    const aveSpan = span * 1.35;
-    pushLane(p + 13, -aveSpan, p + 13, aveSpan, 46 + R(a, 51) * 28, 105 + R(a, 52) * 80, 'air-low', 0.02);
-    pushLane(-aveSpan, p - 13, aveSpan, p - 13, 62 + R(a, 53) * 32, 105 + R(a, 54) * 80, 'air-low', -0.02);
+  // Build intersection connectors:
+  // 1) Flat straight-through bridge (no stop, perpendicular cross-traffic is grade-separated!)
+  // 2) Tangent-exact 90-degree left & right corner turns ramping smoothly between yNS and yEW!
+  for (const [arrKey, inList] of arriveBlocks.entries()) {
+    const [dStr, ixStr, izStr, dCodeStr] = arrKey.split(':');
+    const dIdx = Number(dStr);
+    const ix = Number(ixStr);
+    const iz = Number(izStr);
+    const dCode = Number(dCodeStr);
+    const dk = DECKS[dIdx];
+    const D = DIRS[dCode];
+    const pIn = gatePos(ix, iz, dCode, false);
+    const yIn = D.axis === 'ns' ? dk.yNS : dk.yEW;
+    const connIndices = [];
+
+    // Straight-through across intersection
+    const straightNext = startBlocks.get(`${dIdx}:${ix}:${iz}:${dCode}`);
+    if (straightNext && straightNext.length) {
+      const pOutS = gatePos(ix, iz, dCode, true);
+      if (segmentClear(pIn.x, pIn.z, (pIn.x + pOutS.x) * 0.5, (pIn.z + pOutS.z) * 0.5, pOutS.x, pOutS.z, yIn, yIn, 5.5)) {
+        const sConn = pushSeg(
+          pIn.x, pIn.z,
+          (pIn.x + pOutS.x) * 0.5, (pIn.z + pOutS.z) * 0.5,
+          pOutS.x, pOutS.z,
+          yIn, yIn,
+          dk.spd, dk.layer,
+          { axis: D.axis, deck: dIdx, kind: 'thru' }
+        );
+        lanes[sConn].outs = straightNext.slice();
+        // Weight straight cruising ~2:1 over turning so corridors read as coherent horizontal streams
+        connIndices.push(sConn, sConn);
+      }
+    }
+
+    // 90-degree perpendicular corner turns (exact tangent intersection C = (latX_in, latZ_out) or (latX_out, latZ_in))
+    for (const turnCode of D.perp) {
+      const turnNext = startBlocks.get(`${dIdx}:${ix}:${iz}:${turnCode}`);
+      if (!turnNext || !turnNext.length) continue;
+      const DT = DIRS[turnCode];
+      const pOutT = gatePos(ix, iz, turnCode, true);
+      const yOut = DT.axis === 'ns' ? dk.yNS : dk.yEW;
+      const cx = D.axis === 'ns' ? pIn.latX : pOutT.latX;
+      const cz = D.axis === 'ns' ? pOutT.latZ : pIn.latZ;
+      if (!segmentClear(pIn.x, pIn.z, cx, cz, pOutT.x, pOutT.z, yIn, yOut, 5.5)) {
+        continue;
+      }
+      const tConn = pushSeg(
+        pIn.x, pIn.z, cx, cz, pOutT.x, pOutT.z,
+        yIn, yOut,
+        dk.spd * 0.86, dk.layer,
+        { axis: 'turn', deck: dIdx, kind: 'turn' }
+      );
+      lanes[tConn].outs = turnNext.slice();
+      connIndices.push(tConn);
+    }
+
+    if (connIndices.length) {
+      for (const inSegIdx of inList) {
+        lanes[inSegIdx].outs = connIndices.slice();
+      }
+    }
   }
 
-  // Tangent-exact 360-degree orbital ring skyways at 5 radii & strata (zero polygon corners!)
-  // Using 6 sextant arcs per ring with exact tangent control points: ctrlR = rr / cos(pi / 6).
-  for (let ring = 0; ring < 5; ring++) {
-    const rr = (0.30 + ring * 0.28) * span;
-    const y = 78 + ring * 112 + R(ring, 31) * 32;
-    const layer = ring === 0 ? 'air-low' : ring <= 2 ? 'air-mid' : 'air-high';
+  // Flat horizontal 360-degree orbital ring skyways for high cruisers & blimps (constant deck altitude!)
+  const ringConfigs = [
+    { rr: 0.58 * span, y: 455, layer: 'air-high', spd: 128 },
+    { rr: 0.82 * span, y: 515, layer: 'air-high', spd: 138 },
+    { rr: 1.08 * span, y: 575, layer: 'blimp',    spd: 46 },
+    { rr: 1.34 * span, y: 645, layer: 'blimp',    spd: 52 },
+  ];
+  for (let ring = 0; ring < ringConfigs.length; ring++) {
+    const rc = ringConfigs[ring];
+    let yRing = rc.y + R(ring, 31) * 24;
+    // Ensure entire horizontal ring sits cleanly above any spire along its circumference
+    if (collider) {
+      for (let aIdx = 0; aIdx < 36; aIdx++) {
+        const a = (aIdx / 36) * Math.PI * 2;
+        const top = collider.maxHeightNear(Math.cos(a) * rc.rr, Math.sin(a) * rc.rr, 32);
+        if (top + 36 > yRing) yRing = top + 36;
+      }
+    }
     const segs = 6;
     const dAng = (Math.PI * 2) / segs;
     const ctrlScale = 1 / Math.cos(dAng * 0.5);
-    const eX = 0.88 + R(ring, 33) * 0.24;
-    const eZ = 0.88 + R(ring, 34) * 0.24;
     const phase0 = ring * 0.52;
-    const ringSpd = 84 + R(ring, 32) * 88;
     const indices = [];
     for (let s = 0; s < segs; s++) {
       const a0 = s * dAng + phase0;
       const a1 = (s + 1) * dAng + phase0;
       const aMid = (a0 + a1) * 0.5;
-      const idx = pushLane(
-        Math.cos(a0) * rr * eX, Math.sin(a0) * rr * eZ,
-        Math.cos(a1) * rr * eX, Math.sin(a1) * rr * eZ,
-        y, ringSpd, layer, 0,
-        {
-          cx: Math.cos(aMid) * rr * ctrlScale * eX,
-          cz: Math.sin(aMid) * rr * ctrlScale * eZ,
-          ringId: ring,
-          ringSeg: s,
-          ringSegs: segs,
-        }
+      const idx = pushSeg(
+        Math.cos(a0) * rc.rr, Math.sin(a0) * rc.rr,
+        Math.cos(aMid) * rc.rr * ctrlScale, Math.sin(aMid) * rc.rr * ctrlScale,
+        Math.cos(a1) * rc.rr, Math.sin(a1) * rc.rr,
+        yRing, yRing,
+        rc.spd, rc.layer,
+        { ringId: ring, ringSeg: s, ringSegs: segs, axis: 'ring', deck: 5, kind: 'ring' }
       );
       indices.push(idx);
     }
     for (let s = 0; s < segs; s++) {
-      lanes[indices[s]].nextIdx = indices[(s + 1) % segs];
+      const nextI = indices[(s + 1) % segs];
+      lanes[indices[s]].nextIdx = nextI;
       lanes[indices[s]].prevIdx = indices[(s - 1 + segs) % segs];
+      lanes[indices[s]].outs = [nextI];
     }
   }
 
-  // Blimp & stratospheric cruiser arcs — grand high-altitude trajectories up to 880m.
-  for (let k = 0; k < 7; k++) {
-    const y = 510 + k * 58 + R(k, 21) * 40;
-    const a = R(k, 26) * Math.PI * 2;
-    const off = (R(k, 22) - 0.5) * span * 1.05;
-    const bSpan = span * (1.35 + k * 0.12);
-    pushLane(
-      -Math.cos(a) * bSpan - Math.sin(a) * off, -Math.sin(a) * bSpan + Math.cos(a) * off,
-      Math.cos(a) * bSpan - Math.sin(a) * off * 0.45, Math.sin(a) * bSpan + Math.cos(a) * off * 0.45,
-      y, 32 + R(k, 24) * 32, 'blimp', (R(k, 25) - 0.5) * 0.36
-    );
-  }
-
-  // Ground traffic on every 4th street (avenues), extending out into the suburbs.
-  const groundSpan = span * 1.45;
-  for (let a = -radius; a <= radius; a += 4) {
-    const p = a * CELL;
-    if (R(a, 11) < 0.18) continue;
-    pushLane(p + 9, -groundSpan, p + 9, groundSpan, 5.5, 48 + R(a, 12) * 52, 'ground');
-    pushLane(p - 9, groundSpan, p - 9, -groundSpan, 5.5, 48 + R(a, 13) * 52, 'ground');
-    if (R(a, 14) < 0.65) {
-      pushLane(-groundSpan, p + 9, groundSpan, p + 9, 5.5, 48 + R(a, 15) * 52, 'ground');
-      pushLane(groundSpan, p - 9, -groundSpan, p - 9, 5.5, 48 + R(a, 16) * 52, 'ground');
+  // High-altitude horizontal blimp avenues cruising flat across the skyline
+  for (let k = 0; k < 4; k++) {
+    const isNS = k % 2 === 0;
+    const aveIdx = (k < 2 ? -4 : 4);
+    const coord = (Math.abs(aveIdx) <= radius ? aveIdx : 0) * CELL;
+    const bSpan = span * 1.45;
+    let yB = (isNS ? 520 : 570) + k * 28;
+    if (collider) {
+      for (let s = 0; s <= 16; s++) {
+        const u = (s / 16) * 2 - 1;
+        const px = isNS ? coord : u * bSpan;
+        const pz = isNS ? u * bSpan : coord;
+        const top = collider.maxHeightNear(px, pz, 40);
+        if (top + 38 > yB) yB = top + 38;
+      }
     }
+    const x1 = isNS ? coord + 14 : -bSpan;
+    const z1 = isNS ? -bSpan : coord - 14;
+    const x2 = isNS ? coord + 14 : bSpan;
+    const z2 = isNS ? bSpan : coord - 14;
+    pushSeg(x1, z1, (x1 + x2) * 0.5, (z1 + z2) * 0.5, x2, z2, yB, yB, 38 + R(k, 24) * 22, 'blimp', {
+      axis: isNS ? 'ns' : 'ew', deck: 5, kind: 'street',
+    });
   }
 
-  // Diagonal boulevards — long fast ground + low-air runs cutting the grid.
+  // Flat diagonal ground boulevards (broken into clear segments inside the core so suburb buildings are never clipped)
   for (let k = 0; k < boulevards.length; k++) {
     const b = boulevards[k];
     const dx = b.x2 - b.x1;
@@ -753,96 +968,34 @@ function makeLanes(seed, radius, boulevards = [], collider = null) {
     const len = Math.hypot(dx, dz) || 1;
     const nx = -dz / len;
     const nz = dx / len;
-    pushLane(b.x1 + nx * 9, b.z1 + nz * 9, b.x2 + nx * 9, b.z2 + nz * 9, 5.5, 85 + R(k, 41) * 55, 'ground', 0);
-    pushLane(b.x2 - nx * 9, b.z2 - nz * 9, b.x1 - nx * 9, b.z1 - nz * 9, 5.5, 85 + R(k, 42) * 55, 'ground', 0);
-    pushLane(b.x1, b.z1, b.x2, b.z2, 58 + R(k, 43) * 30, 135 + R(k, 44) * 70, 'air-low', 0.03);
+    const yG = 5.8;
+    const chunks = 6;
+    for (const side of [1, -1]) {
+      const prevSegs = [];
+      for (let cIdx = 1; cIdx < chunks - 1; cIdx++) {
+        const u0 = (side > 0 ? cIdx : (chunks - cIdx)) / chunks;
+        const u1 = (side > 0 ? (cIdx + 1) : (chunks - cIdx - 1)) / chunks;
+        const sx1 = b.x1 + dx * u0 + nx * 8.5 * side;
+        const sz1 = b.z1 + dz * u0 + nz * 8.5 * side;
+        const sx2 = b.x1 + dx * u1 + nx * 8.5 * side;
+        const sz2 = b.z1 + dz * u1 + nz * 8.5 * side;
+        const scx = (sx1 + sx2) * 0.5;
+        const scz = (sz1 + sz2) * 0.5;
+        if (segmentClear(sx1, sz1, scx, scz, sx2, sz2, yG, yG, 6.5)) {
+          const bIdx = pushSeg(
+            sx1, sz1, scx, scz, sx2, sz2,
+            yG, yG, 78 + R(k, side > 0 ? 41 : 42) * 42, 'ground',
+            { axis: 'diag', deck: 0, kind: 'boulevard' }
+          );
+          if (prevSegs.length > 0 && prevSegs[prevSegs.length - 1].uEnd === u0) {
+            lanes[prevSegs[prevSegs.length - 1].idx].outs = [bIdx];
+          }
+          prevSegs.push({ idx: bIdx, uEnd: u1 });
+        }
+      }
+    }
   }
 
-  // Glide nodes: every lane carries a 33-node vertical profile guaranteed to
-  // clear all building rooftops, landmarks and venues along its route (including
-  // wide lateral weave margin), dilated +-3 + 8-pass smoothed for silky C1 arcs!
-  const NS = 33;
-  for (const L of lanes) {
-    const floor = new Array(NS).fill(L.y);
-    if (collider) {
-      const margin = L.layer === 'ground' ? 14 : L.layer === 'blimp' ? 72 : 60;
-      const clearH = L.layer === 'ground' ? 16 : 36;
-      for (let s = 0; s < NS; s++) {
-        const t = s / (NS - 1);
-        const u = 1 - t;
-        const px = u * u * L.x1 + 2 * u * t * L.cx + t * t * L.x2;
-        const pz = u * u * L.z1 + 2 * u * t * L.cz + t * t * L.z2;
-        let maxTop = collider.maxHeightNear(px, pz, margin);
-        if (s + 1 < NS) {
-          const tm = (s + 0.5) / (NS - 1);
-          const um = 1 - tm;
-          const mx = um * um * L.x1 + 2 * um * tm * L.cx + tm * tm * L.x2;
-          const mz = um * um * L.z1 + 2 * um * tm * L.cz + tm * tm * L.z2;
-          maxTop = Math.max(maxTop, collider.maxHeightNear(mx, mz, margin));
-        }
-        if (L.layer === 'ground') {
-          floor[s] = maxTop > 4 ? maxTop + clearH : L.y;
-        } else {
-          floor[s] = Math.max(L.y, maxTop + clearH);
-        }
-      }
-    }
-    const dil = new Array(NS);
-    for (let s = 0; s < NS; s++) {
-      let m = floor[s];
-      for (let j = Math.max(0, s - 2); j <= Math.min(NS - 1, s + 2); j++) {
-        if (floor[j] > m) m = floor[j];
-      }
-      dil[s] = m;
-    }
-    // Two-pass bounded-slope upper envelope: guarantees |dY / dS| <= 0.24 (~13.5 deg)
-    // everywhere while strictly >= dil[s] (no 80-degree spire cliffs, zero building hits!)
-    const approxLen = Math.hypot(L.cx - L.x1, L.cz - L.z1) + Math.hypot(L.x2 - L.cx, L.z2 - L.cz);
-    const stepDist = Math.max(45, approxLen / (NS - 1));
-    const maxDelta = stepDist * 0.24;
-    for (let s = 1; s < NS; s++) {
-      if (dil[s - 1] - maxDelta > dil[s]) dil[s] = dil[s - 1] - maxDelta;
-    }
-    for (let s = NS - 2; s >= 0; s--) {
-      if (dil[s + 1] - maxDelta > dil[s]) dil[s] = dil[s + 1] - maxDelta;
-    }
-    // Smooth curvature transitions and add uniform sag lift so clearance remains 100% strict
-    let sm = dil.slice();
-    for (let pass = 0; pass < 5; pass++) {
-      const next = new Array(NS);
-      for (let s = 0; s < NS; s++) {
-        const a = sm[Math.max(0, s - 1)];
-        const b = sm[s];
-        const c = sm[Math.min(NS - 1, s + 1)];
-        next[s] = (a + b * 2 + c) / 4;
-      }
-      sm = next;
-    }
-    let sag = 0;
-    for (let s = 0; s < NS; s++) {
-      if (dil[s] - sm[s] > sag) sag = dil[s] - sm[s];
-    }
-    L.prof = sm.map((v) => v + sag);
-  }
-  // Stitch ring loop arc endpoints so altitude & slope are continuous across ring handoffs!
-  for (let pass = 0; pass < 2; pass++) {
-    for (const L of lanes) {
-      if (L.nextIdx !== undefined) {
-        const N = lanes[L.nextIdx];
-        const joinY = Math.max(L.prof[NS - 1], N.prof[0]);
-        L.prof[NS - 1] = joinY;
-        N.prof[0] = joinY;
-        const approxLen = Math.hypot(L.cx - L.x1, L.cz - L.z1) + Math.hypot(L.x2 - L.cx, L.z2 - L.cz);
-        const maxDelta = Math.max(45, approxLen / (NS - 1)) * 0.24;
-        for (let s = NS - 2; s >= 0; s--) {
-          if (L.prof[s + 1] - maxDelta > L.prof[s]) L.prof[s] = L.prof[s + 1] - maxDelta;
-        }
-        for (let s = 1; s < NS; s++) {
-          if (N.prof[s - 1] - maxDelta > N.prof[s]) N.prof[s] = N.prof[s - 1] - maxDelta;
-        }
-      }
-    }
-  }
   return lanes;
 }
 
@@ -1104,6 +1257,80 @@ function addTower(push, pushBeacon, pushBill, pushSign, rand, x0, x1, z0, z1, h0
     const ah = 20 + rand() * 50;
     push(cx, sh + 3 + ah / 2, cz, 1.4, ah, 1.4, rand(), KIND.MAST, 1, rot);
     pushBeacon(cx, sh + 3 + ah + 1, cz, rand());
+    return;
+  }
+
+  // ---- variant: stepped arcology pyramid (theme-reactive courses, corner buttresses & glowing terrace rims) ----
+  if (rand() < 0.085 && w > 28 && dp > 28) {
+    const tiers = 7 + Math.floor(rand() * 3);
+    const pH = Math.max(46, Math.min(340, H * (0.78 + rand() * 0.36)));
+    let py = 0;
+    addStreetBase(push, pushSign, rand, cx, cz, w, dp, d, rot);
+    for (let t = 0; t < tiers; t++) {
+      const f = t / (tiers - 1);
+      const scale = 0.96 - f * 0.72;
+      const th = (pH / tiers) * (1.12 - f * 0.24);
+      const tw = w * scale;
+      const td = dp * scale;
+      push(cx, py + th / 2, cz, tw, th, td, rand(), KIND.WALL, style, rot);
+      // Corner arcology buttress ribs along X and Z axes
+      push(cx, py + th * 0.48, cz, tw * 1.05, th * 0.92, td * 0.22, rand(), KIND.SLAB, style, rot);
+      push(cx, py + th * 0.48, cz, tw * 0.22, th * 0.92, td * 1.05, rand(), KIND.SLAB, style, rot);
+      py += th;
+      if (t % 2 === 1 || t === tiers - 1) {
+        push(cx, py + 0.7, cz, tw * 1.03, 1.4, td * 1.03, rand(), KIND.BAND, style, rot);
+      }
+    }
+    const capW = w * 0.16;
+    const capD = dp * 0.16;
+    push(cx, py + 3.2, cz, capW, 5.2, capD, rand(), KIND.SLAB, style, rot);
+    push(cx, py + 6.4, cz, capW * 1.2, 1.3, capD * 1.2, rand(), KIND.BAND, style, rot);
+    if (pH > 110) pushBeacon(cx, py + 9, cz, rand());
+    addGrit(push, rand, cx, cz, w, dp, d, 0.85, rot);
+    return;
+  }
+
+  // ---- variant: cantilevered sky-wing tower (offset shear core + dramatic mid-air overhanging wings) ----
+  if (rand() < 0.095 && w > 26 && dp > 26 && H > 75) {
+    const ch = H * (0.92 + rand() * 0.30);
+    const coreW = w * 0.40;
+    const coreD = dp * 0.44;
+    const [coreX, coreZ] = rotOff(cx, cz, -w * 0.18, -dp * 0.10, rot);
+    addStreetBase(push, pushSign, rand, cx, cz, w, dp, d, rot);
+    // Main vertical elevator & shear-wall core
+    push(coreX, ch / 2, coreZ, coreW, ch, coreD, rand(), KIND.WALL, style, rot);
+    push(coreX, ch + 1.4, coreZ, coreW * 0.9, 2.8, coreD * 0.9, rand(), KIND.SLAB, style, rot);
+
+    // 2–3 staggered horizontal cantilevered wings projecting boldly out into mid-air
+    const wingCount = ch > 165 ? 3 : 2;
+    for (let k = 0; k < wingCount; k++) {
+      const frac = wingCount === 3 ? [0.40, 0.66, 0.88][k] : [0.48, 0.80][k];
+      const wy = ch * frac;
+      const wh = Math.max(10, Math.min(24, ch * (0.11 + rand() * 0.05)));
+      const alongZ = k % 2 === 1;
+      const spanLen = (alongZ ? dp : w) * (0.92 + rand() * 0.22);
+      const wingT = (alongZ ? w : dp) * 0.42;
+      const jut = (alongZ ? dp : w) * 0.18;
+      const [wx, wz] = alongZ
+        ? rotOff(coreX, coreZ, 0, jut, rot)
+        : rotOff(coreX, coreZ, jut + w * 0.12, 0, rot);
+      const ww = alongZ ? wingT : spanLen;
+      const wd = alongZ ? spanLen : wingT;
+      push(wx, wy, wz, ww, wh, wd, rand(), KIND.WALL, style, rot);
+      // Stepped structural under-belly support bracket + glowing soffit band
+      const [bx, bz] = alongZ
+        ? rotOff(coreX, coreZ, 0, jut * 0.55, rot)
+        : rotOff(coreX, coreZ, (jut + w * 0.12) * 0.55, 0, rot);
+      push(bx, wy - wh * 0.62, bz, ww * 0.58, wh * 0.34, wd * 0.58, rand(), KIND.SLAB, style, rot);
+      push(wx, wy - wh * 0.5 - 0.55, wz, ww * 0.96, 1.1, wd * 0.96, rand(), KIND.BAND, style, rot);
+      push(wx, wy + wh * 0.5 + 0.6, wz, ww * 0.98, 1.2, wd * 0.98, rand(), KIND.SLAB, style, rot);
+    }
+    if (ch > 135) {
+      const ah = 14 + rand() * 28;
+      push(coreX, ch + 2.8 + ah / 2, coreZ, 1.5, ah, 1.5, rand(), KIND.MAST, style, rot);
+      pushBeacon(coreX, ch + 2.8 + ah + 1.5, coreZ, rand());
+    }
+    addGrit(push, rand, cx, cz, w, dp, d, 0.9, rot);
     return;
   }
 
