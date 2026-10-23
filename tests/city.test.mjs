@@ -5,6 +5,7 @@ import {
   generateCity, makeCityCollider, streetWidth, AVENUE, STREET, KIND,
   LM_KINDS, PLACE_KINDS, DISTRICT_KINDS, CELL,
   WATER_MODE_NAMES, TERRAIN_MODE_NAMES, evalTerrainHeight, evalCoastSignedDist,
+  evalRoadWeb, roadWebToWorld, isPointInWater,
 } from '../src/city.js';
 import { mulberry32, hash2i, makeNoise2D, fbm2D } from '../src/prng.js';
 
@@ -511,6 +512,74 @@ test('Phase-10 macro-environment: water/shoreline modes, distant mountains/deser
   assert.ok(coastal.places.some((p) => p.kind === 'park'), 'city guarantees at least one botanical/cyber park');
   assert.ok(coastal.trees.length >= 90, `expected lush park & avenue tree count >=90, got ${coastal.trees.length}`);
   assert.ok(Array.isArray(coastal.treeLinks) && coastal.treeLinks.length >= 18, `expected >=18 inter-tree canopy links, got ${coastal.treeLinks?.length}`);
+});
+
+test('Phase-11: strict water-body exclusion, road-web trapezoid subdivision, dense far suburbs & organic arterial highway growth', () => {
+  // 1) Never build inside water bodies across all 4 wet water modes (Harbor+River, Coastal Ocean, Archipelago, Crater Lake)
+  for (const wm of [0, 1, 2, 3]) {
+    const c = generateCity({ seed: 4417 + wm * 31, radius: 5, suburbReach: 1.0, waterMode: wm, terrainMode: 0 });
+    let wetBoxes = 0;
+    for (let i = 0; i < c.count; i++) {
+      const cx = c.x[i], cz = c.z[i];
+      const hw = c.w[i] * 0.5, hd = c.d[i] * 0.5;
+      const cs = Math.cos(c.rot[i]), sn = Math.sin(c.rot[i]);
+      if (
+        isPointInWater(c, cx, cz, 0) ||
+        isPointInWater(c, cx + hw * cs + hd * sn, cz - hw * sn + hd * cs, 0) ||
+        isPointInWater(c, cx - hw * cs - hd * sn, cz + hw * sn - hd * cs, 0)
+      ) {
+        wetBoxes++;
+      }
+    }
+    assert.equal(wetBoxes, 0, `waterMode=${wm} must place 0 building boxes in water, got ${wetBoxes}`);
+    for (const lm of c.landmarks) {
+      assert.equal(isPointInWater(c, lm.x, lm.z, 0), false, `landmark ${lm.name} in water on waterMode=${wm}`);
+    }
+    for (const pl of c.places) {
+      assert.equal(isPointInWater(c, pl.x, pl.z, 0), false, `place ${pl.name} in water on waterMode=${wm}`);
+    }
+    for (const lp of c.lamps) {
+      assert.equal(isPointInWater(c, lp.x, lp.z, 0), false, `street lamp in water on waterMode=${wm}`);
+    }
+  }
+
+  // 2) Curvilinear trapezoid road-web inverse & parallel road-aligned suburban lots
+  const city = generateCity({ seed: 4417, radius: 5, suburbReach: 1.0, waterMode: 0, terrainMode: 2 });
+  for (let cellU = 0; cellU < 12; cellU += 3) {
+    for (const cellV of [3, 8, 14]) {
+      const p = roadWebToWorld(cellU, 0.37, cellV, 0.61, city.terrainSeedX, city.terrainSeedZ);
+      const rw = evalRoadWeb(p.x, p.z, city.terrainSeedX, city.terrainSeedZ);
+      assert.equal(rw.cellU, cellU, 'roadWebToWorld round-trips radial sector');
+      assert.equal(rw.cellV, cellV, 'roadWebToWorld round-trips collector ring');
+      assert.ok(Math.abs(rw.fu - 0.37) < 0.01 && Math.abs(rw.fv - 0.61) < 0.01, 'roadWebToWorld round-trips trapezoid (fu,fv)');
+    }
+  }
+
+  // 3) Denser & farther-stretching suburban sprawl (out to ~8 km at default r=5)
+  assert.ok(city.suburbSpan >= 7500, `expected suburbSpan >= 7500m, got ${city.suburbSpan}`);
+  assert.ok(city.suburbCount >= 10000, `expected dense suburban/rural sprawl >= 10000 boxes, got ${city.suburbCount}`);
+  let farBeyond4500 = 0;
+  for (let i = city.towers; i < city.count; i++) {
+    if (Math.hypot(city.x[i], city.z[i]) > 4500) farBeyond4500++;
+  }
+  assert.ok(farBeyond4500 > 1200, `expected >1200 structures stretching past 4.5 km, got ${farBeyond4500}`);
+
+  // 4) Organic ribbon/finger city growth along major radial arterial highways
+  const coreSpan = 5 * CELL;
+  let corrTowers = 0;
+  let wedgeTowers = 0;
+  for (let i = 0; i < city.towers; i++) {
+    const dist = Math.hypot(city.x[i], city.z[i]);
+    if (dist < coreSpan * 1.45 || city.h[i] < 22) continue;
+    const rw = evalRoadWeb(city.x[i], city.z[i], city.terrainSeedX, city.terrainSeedZ);
+    if (rw.dArt < 95) corrTowers++;
+    else if (rw.dArt > 145) wedgeTowers++;
+  }
+  assert.ok(corrTowers > 60 && corrTowers > wedgeTowers * 3.0, `arterial highway fingers grow out organically (corr=${corrTowers} vs wedge=${wedgeTowers})`);
+
+  // 5) Dedicated closed railLoop monorail rings exist for smooth 5-car Sky-Trains
+  const railLoops = city.lanes.filter((L) => L.railLoop);
+  assert.ok(railLoops.length >= 16, `expected >=16 closed railLoop segments, got ${railLoops.length}`);
 });
 
 

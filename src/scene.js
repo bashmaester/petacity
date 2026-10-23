@@ -10,6 +10,7 @@ import {
   SKY_VERT, SKY_FRAG, CLOUD_VERT, CLOUD_FRAG,
   GROUND_VERT, GROUND_FRAG, TOWER_VERT, TOWER_FRAG,
   LANDMARK_VERT, LANDMARK_FRAG, SOLID_CURVED_VERT, SOLID_CURVED_FRAG,
+  VEHICLE_VERT, VEHICLE_FRAG,
   BEACON_VERT, BEACON_FRAG, TRAIL_VERT, TRAIL_FRAG, SWARM_VERT, SWARM_FRAG,
   BEAM_VERT, BEAM_FRAG, POOL_VERT, POOL_FRAG,
   WATER_VERT, WATER_FRAG, TREE_LINK_VERT, TREE_LINK_FRAG,
@@ -109,6 +110,7 @@ export function makeUniforms() {
     uHeightScale: { value: 1 },
     uWetness: { value: 0 },
     uLightK: { value: 1 },
+    uDayPhase: { value: 22.2 },
     uBeaconCol: { value: col('#ff3b30') },
     uLampCol: { value: col('#ffd9a0') },
     uSunGlow: { value: 0.65 },
@@ -320,7 +322,7 @@ export function makeWorld(U) {
       'uSunDir', 'uSunCol', 'uSunK', 'uAmb', 'uAmbG', 'uBaseA', 'uBaseB',
       'uPal', 'uUsePal', 'uWinDensity', 'uWinGlow', 'uWinA', 'uWinB', 'uWinC',
       'uEdge', 'uEdgeCol', 'uBandGlow', 'uToon', 'uFlat',
-      'uFogCol', 'uSunFogCol', 'uFogDensity', 'uFogHeight', 'uHazeSun', 'uTime', 'uSat',
+      'uFogCol', 'uSunFogCol', 'uFogDensity', 'uFogHeight', 'uHazeSun', 'uTime', 'uDayPhase', 'uSat',
       'uBillA', 'uBillB', 'uBillK', 'uBillMono', 'uPoolCol', 'uLightK',
       'uWorldCurve', 'uPlanetR',
     ]),
@@ -417,7 +419,7 @@ export function makeWorld(U) {
   const swarmMat = new THREE.ShaderMaterial({
     vertexShader: SWARM_VERT,
     fragmentShader: SWARM_FRAG,
-    uniforms: pick(U, ['uTime', 'uHeightScale', 'uLightK', 'uWorldCurve', 'uPlanetR']),
+    uniforms: pick(U, ['uTime', 'uHeightScale', 'uLightK', 'uBillMono', 'uWorldCurve', 'uPlanetR']),
   });
 
   return {
@@ -438,7 +440,7 @@ export function makeLandmarkMaterial(U, hex = '#4a5568', role = 0) {
         'uSunDir', 'uSunCol', 'uSunK', 'uAmb', 'uAmbG', 'uWinDensity', 'uWinGlow',
         'uWinA', 'uWinB', 'uWinC', 'uEdge', 'uEdgeCol', 'uBandGlow', 'uToon', 'uFlat',
         'uPoolCol', 'uLightK',
-        'uFogCol', 'uSunFogCol', 'uFogDensity', 'uFogHeight', 'uHazeSun', 'uTime', 'uSat',
+        'uFogCol', 'uSunFogCol', 'uFogDensity', 'uFogHeight', 'uHazeSun', 'uTime', 'uDayPhase', 'uSat',
         'uWorldCurve', 'uPlanetR',
       ]),
     },
@@ -1300,24 +1302,36 @@ function mergeParts(parts) {
     g.applyMatrix4(m);
     const n = g.getAttribute('position').count;
     const cols = new Float32Array(n * 3);
+    const roles = new Float32Array(n);
+    const roleVal = pt.role !== undefined ? pt.role
+      : (pt.c === HEAD || pt.c === XENON) ? 3
+      : (pt.c === TAIL) ? 4
+      : (pt.c === GLASS) ? 2
+      : (pt.c === TRIM) ? 1
+      : (pt.c === GLOW || pt.c === TAXI || pt.c === WIN_GLOW) ? 5
+      : 0;
     for (let i = 0; i < n; i++) {
       cols[i * 3] = pt.c[0];
       cols[i * 3 + 1] = pt.c[1];
       cols[i * 3 + 2] = pt.c[2];
+      roles[i] = roleVal;
     }
     g.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+    g.setAttribute('aRole', new THREE.BufferAttribute(roles, 1));
     built.push(g);
     total += n;
   }
   const pos = new Float32Array(total * 3);
   const nrm = new Float32Array(total * 3);
   const col = new Float32Array(total * 3);
+  const rol = new Float32Array(total);
   let off = 0;
   for (const g of built) {
     const n = g.getAttribute('position').count;
     pos.set(g.getAttribute('position').array, off * 3);
     nrm.set(g.getAttribute('normal').array, off * 3);
     col.set(g.getAttribute('color').array, off * 3);
+    rol.set(g.getAttribute('aRole').array, off);
     off += n;
     g.dispose();
   }
@@ -1325,321 +1339,342 @@ function mergeParts(parts) {
   out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   out.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
   out.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  out.setAttribute('aRole', new THREE.BufferAttribute(rol, 1));
   return out;
 }
 
 /**
- * Fake-volumetric shaft: two crossed quads along +Y with soft falloff
- * attributes (aBeamT 0→1 along the beam, aBeamW 0→1 across it).
+ * Volumetric spotlight cone: two crossed tapered quads along +Y flaring from a
+ * tight lens aperture at y=0 to a wide shaft at y=length, carrying both `uv`
+ * (read by BEAM_VERT) and `aBeamT`/`aBeamW` falloff attributes.
  */
 function beamGeometry(length, width) {
-  const hw = width / 2;
+  const hw0 = Math.max(0.25, width * 0.085);
+  const hw1 = width * 0.54;
   const pos = [];
+  const uvs = [];
   const bt = [];
   const bw = [];
   const quad = (corners) => {
-    // corners: [p0, p1, p2, p3] ccw; t0/t1 along, w at each corner
     const idx = [0, 1, 2, 0, 2, 3];
     for (const k of idx) {
       pos.push(...corners[k].p);
+      uvs.push(corners[k].w, corners[k].t);
       bt.push(corners[k].t);
       bw.push(corners[k].w);
     }
   };
-  // quad A: spans z (width)
+  // quad A: spans z (flared spotlight cone)
   quad([
-    { p: [0, 0, -hw], t: 0, w: 0 },
-    { p: [0, 0, hw], t: 0, w: 1 },
-    { p: [0, length, hw], t: 1, w: 1 },
-    { p: [0, length, -hw], t: 1, w: 0 },
+    { p: [0, 0, -hw0], t: 0, w: 0 },
+    { p: [0, 0, hw0], t: 0, w: 1 },
+    { p: [0, length, hw1], t: 1, w: 1 },
+    { p: [0, length, -hw1], t: 1, w: 0 },
   ]);
-  // quad B: spans x (width)
+  // quad B: spans x (flared spotlight cone)
   quad([
-    { p: [-hw, 0, 0], t: 0, w: 0 },
-    { p: [hw, 0, 0], t: 0, w: 1 },
-    { p: [hw, length, 0], t: 1, w: 1 },
-    { p: [-hw, length, 0], t: 1, w: 0 },
+    { p: [-hw0, 0, 0], t: 0, w: 0 },
+    { p: [hw0, 0, 0], t: 0, w: 1 },
+    { p: [hw1, length, 0], t: 1, w: 1 },
+    { p: [-hw1, length, 0], t: 1, w: 0 },
   ]);
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
   g.setAttribute('aBeamT', new THREE.BufferAttribute(new Float32Array(bt), 1));
   g.setAttribute('aBeamW', new THREE.BufferAttribute(new Float32Array(bw), 1));
   return g;
 }
 
-// vehicle part colours (multiplied by per-instance tint)
+// Vehicle part colours & material roles:
+// - HULL/HULL2/TRIM/GLASS receive per-instance body tinting (roles 0..2).
+// - HEAD/XENON (role 3 = front headlights) & TAIL (role 4 = rear taillights) stay pure untinted lamp colours!
+// - GLOW/TAXI/WIN_GLOW (role 5) emit self-luminous accent/cabin light.
 const HULL = [1, 1, 1];
-const HULL2 = [0.72, 0.75, 0.82];
-const GLASS = [0.14, 0.17, 0.23];
-const TRIM = [0.52, 0.55, 0.65];
-const HEAD = [1, 0.97, 0.82];
-const TAIL = [1, 0.16, 0.12];
-const GLOW = [0.32, 0.7, 1];
+const HULL2 = [0.76, 0.79, 0.86];
+const GLASS = [0.12, 0.16, 0.24];
+const TRIM = [0.42, 0.45, 0.54];
+const HEAD = [1.0, 0.96, 0.80];     // warm-white halogen/quartz front headlights (+X)
+const XENON = [0.78, 0.95, 1.0];    // cool ice-xenon front headlights (+X)
+const TAIL = [1.0, 0.08, 0.13];     // vivid crimson-red rear taillights/brake bars (-X)
+const GLOW = [0.28, 0.76, 1.0];     // cyan hover-pad / plasma thruster glow
+const TAXI = [1.0, 0.76, 0.12];     // illuminated amber cab roof sign
+const WIN_GLOW = [1.0, 0.86, 0.52]; // warm lit passenger cabin windows
 
 const VEHICLE_CLASSES = [
   {
-    name: 'pod', len: 22, layers: ['air-low', 'air-mid', 'ground'], parts: podParts, beam: true, thruster: true,
-    beamLen: 26, beamW: 5.5, spd: 0.0062, spdJit: 0.0007, scale: 0.85,
-    bobA: 0.9, bobF: 1.35, weaveA: 12, weaveF: 1.1, spinSpeed: 8,
+    // 0: DeLorean DMC-12 Hover-Coupe — wedge nose, gullwing greenhouse, rear louvers, folded hover-wheel pods (~30%)
+    name: 'delorean', len: 18, layers: ['ground', 'air-low', 'air-mid'], parts: deloreanParts, beam: true, thruster: true,
+    beamLen: 26, beamW: 5.5, spd: 0.0056, spdJit: 0.0006, scale: 0.86,
+    bobA: 0.35, bobF: 1.25, weaveA: 2.2, weaveF: 0.85, spinSpeed: 8, isCar: true,
   },
   {
-    name: 'skimmer', len: 26, layers: ['air-mid', 'air-high'], parts: skimmerParts, beam: true, rotor: rotorParts,
-    beamLen: 30, beamW: 7, spd: 0.0052, spdJit: 0.0006, scale: 0.9,
-    bobA: 1.5, bobF: 1.05, weaveA: 13, weaveF: 0.9, spinSpeed: 8,
+    // 1: Fifth-Element Retro-Cab — cab-forward body, side hover-pontoons, amber TAXI roof crest (~24%)
+    name: 'cab', len: 20, layers: ['ground', 'air-low', 'air-mid'], parts: cabParts, beam: true,
+    beamLen: 28, beamW: 6.0, spd: 0.0052, spdJit: 0.0006, scale: 0.88,
+    bobA: 0.42, bobF: 1.10, weaveA: 2.4, weaveF: 0.80, spinSpeed: 8, isCar: true,
   },
   {
-    name: 'hauler', len: 46, layers: ['ground', 'air-low'], parts: haulerParts, beam: true, trailers: 2,
-    beamLen: 40, beamW: 9, spd: 0.0022, spdJit: 0.0003, scale: 0.92,
-    bobA: 0.3, bobF: 0.8, weaveA: 2.5, weaveF: 0.5, trailerLag: 0.016,
+    // 2: Streamlined Maglev Sky-Train — bullet locomotive + 4 articulated coaches on dedicated rail loops (~4.8%)
+    name: 'train', len: 30, layers: ['air-low', 'air-mid'], parts: trainLocoParts, beam: true, trailers: 4,
+    beamLen: 42, beamW: 8.5, spd: 0.0024, spdJit: 0.00018, scale: 0.90,
+    bobA: 0.0, bobF: 0.5, weaveA: 0.0, weaveF: 0.3, coachSpacing: 24.5, isTrain: true,
   },
   {
-    name: 'drone', len: 8, layers: ['air-low', 'air-mid'], parts: droneParts, beam: false, rotor: droneRotorParts,
-    beamLen: 12, beamW: 3, spd: 0.0092, spdJit: 0.0015, scale: 1,
-    bobA: 1.5, bobF: 2.4, weaveA: 22, weaveF: 2.1, spinSpeed: 22, hover: true,
+    // 3: Cyber-Wedge GT Coupe — needle wedge nose, side strakes, xenon headlamps & full-width crimson tailbar (~16%)
+    name: 'coupe', len: 19, layers: ['ground', 'air-low', 'air-mid', 'air-high'], parts: coupeParts, beam: true,
+    beamLen: 28, beamW: 5.4, spd: 0.0066, spdJit: 0.0007, scale: 0.84,
+    bobA: 0.32, bobF: 1.35, weaveA: 2.0, weaveF: 0.95, isCar: true,
   },
   {
-    name: 'heli', len: 18, layers: ['air-mid', 'air-low'], parts: heliParts, beam: true, rotor: heliRotorParts,
-    beamLen: 36, beamW: 8.5, spd: 0.0038, spdJit: 0.0005, scale: 1,
-    bobA: 1.1, bobF: 0.9, weaveA: 8, weaveF: 0.7, spinSpeed: 14, hover: true,
+    // 4: Patrol Tilt-Helicopter — rare aerial patrol craft with spinning main rotor & chin searchlight (~1.8%)
+    name: 'heli', len: 19, layers: ['air-mid', 'air-high'], parts: heliParts, beam: true, rotor: heliRotorParts,
+    beamLen: 36, beamW: 8.5, spd: 0.0030, spdJit: 0.00035, scale: 1.0,
+    bobA: 0.85, bobF: 0.82, weaveA: 3.5, weaveF: 0.55, spinSpeed: 15, hover: true, isAir: true,
   },
   {
-    name: 'blimp', len: 110, layers: ['blimp'], parts: blimpParts, beam: true,
-    beamLen: 85, beamW: 20, spd: 0.0010, spdJit: 0.00018, scale: 1,
-    bobA: 6.5, bobF: 0.22, weaveA: 34, weaveF: 0.18,
+    // 5: Heavy Off-World Broadcast Blimp — very rare 112m dirigible with twin animated sweeping searchlights (~1.0%)
+    name: 'blimp', len: 112, layers: ['blimp'], parts: blimpParts, beam: true,
+    beamLen: 95, beamW: 22, spd: 0.00085, spdJit: 0.00012, scale: 1.0,
+    bobA: 3.2, bobF: 0.18, weaveA: 6.0, weaveF: 0.14, isBlimp: true,
   },
   {
-    name: 'shuttle', len: 34, layers: ['air-low', 'air-mid', 'ground'], parts: shuttleParts, beam: true,
-    beamLen: 34, beamW: 7.5, spd: 0.0034, spdJit: 0.0004, scale: 0.95,
-    bobA: 0.55, bobF: 0.72, weaveA: 5, weaveF: 0.45,
+    // 6: Executive Art-Deco Hover-Cruiser — long luxury saloon with chrome pontoons & warm cabin glass (~10%)
+    name: 'limo', len: 25, layers: ['ground', 'air-low', 'air-mid'], parts: limoParts, beam: true,
+    beamLen: 30, beamW: 6.4, spd: 0.0046, spdJit: 0.00045, scale: 0.88,
+    bobA: 0.28, bobF: 0.90, weaveA: 1.8, weaveF: 0.65, isCar: true,
   },
   {
-    name: 'spinner', len: 20, layers: ['air-low', 'air-mid', 'air-high'], parts: spinnerParts, beam: true,
-    beamLen: 32, beamW: 6, spd: 0.0076, spdJit: 0.001, scale: 0.88,
-    bobA: 1.1, bobF: 1.6, weaveA: 17, weaveF: 1.45,
+    // 7: Blade Runner Twin-Mandible Spinner — split forward prongs, bubble canopy & vectored nacelles (~12.4%)
+    name: 'spinner', len: 19, layers: ['air-low', 'air-mid', 'air-high', 'ground'], parts: spinnerParts, beam: true,
+    beamLen: 30, beamW: 5.8, spd: 0.0062, spdJit: 0.0007, scale: 0.86,
+    bobA: 0.45, bobF: 1.30, weaveA: 2.5, weaveF: 0.90, isCar: true,
   },
 ];
 
-/** Sleek pod — the common commuter. ~22 m, hover-bobbing. */
-function podParts() {
+/** Class 0: DeLorean DMC-12 Hover-Coupe — wedge hood, gullwing cabin, rear louvers, 4 folded hover-wheel pods. */
+function deloreanParts() {
   return [
-    { w: 22, h: 1.6, d: 4.2, y: -0.5, c: HULL2 },
-    { w: 18, h: 1.4, d: 3.6, y: 0.7, c: HULL },
-    { w: 6.5, h: 1.2, d: 2.8, x: 12.8, y: 0.3, c: HULL },
-    { w: 5, h: 1.2, d: 2.6, x: 8, y: 1.55, c: GLASS },
-    { w: 7, h: 1.3, d: 2.8, x: 1, y: 1.95, c: GLASS },
-    { w: 10, h: 0.6, d: 1.2, x: -4, y: 1.9, c: TRIM },
-    { w: 6, h: 1, d: 0.9, x: 3, y: 0.4, z: 2.35, c: TRIM },
-    { w: 6, h: 1, d: 0.9, x: 3, y: 0.4, z: -2.35, c: TRIM },
-    { w: 7, h: 0.35, d: 1.5, x: -7, y: 0.7, z: 2.6, c: TRIM, rz: 0.1 },
-    { w: 7, h: 0.35, d: 1.5, x: -7, y: 0.7, z: -2.6, c: TRIM, rz: -0.1 },
-    { w: 4, h: 1.6, d: 0.3, x: -8, y: 1.7, c: TRIM },
-    { w: 1.2, h: 0.7, d: 0.9, x: 16, y: 0.15, z: 1.3, c: HEAD },
-    { w: 1.2, h: 0.7, d: 0.9, x: 16, y: 0.15, z: -1.3, c: HEAD },
-    { w: 0.7, h: 0.5, d: 0.7, x: 15.6, y: 0.3, z: 2.3, c: HEAD },
-    { w: 0.7, h: 0.5, d: 0.7, x: 15.6, y: 0.3, z: -2.3, c: HEAD },
-    { w: 0.9, h: 0.7, d: 3, x: -11.1, y: 0.15, c: TAIL },
-    { w: 0.7, h: 0.7, d: 0.7, x: -10.9, y: 0.4, z: 1.6, c: TAIL },
-    { w: 0.7, h: 0.7, d: 0.7, x: -10.9, y: 0.4, z: -1.6, c: TAIL },
-    { w: 15, h: 0.22, d: 3, x: -1, y: -1.32, c: GLOW },
-    { w: 0.25, h: 1.4, d: 0.25, x: -3, y: 2.9, c: TRIM },
+    // Brushed wedge lower tub & raked front hood
+    { w: 17.6, h: 1.35, d: 6.8, x: 0.0, y: -0.15, c: HULL },
+    { w: 7.4, h: 1.05, d: 6.5, x: 6.0, y: 0.12, c: HULL, rz: -0.11 },
+    { w: 16.8, h: 0.35, d: 7.1, x: -0.2, y: -0.45, c: TRIM },
+    // Gullwing trapezoid cabin + raked windshield
+    { w: 6.6, h: 1.45, d: 5.4, x: -0.4, y: 1.15, c: HULL2 },
+    { w: 3.6, h: 1.25, d: 5.0, x: 2.8, y: 0.95, c: GLASS, rz: -0.36 },
+    { w: 4.8, h: 1.05, d: 5.55, x: -0.3, y: 1.18, c: GLASS },
+    // Iconic stepped black rear sun-louvers & twin Mr.-Fusion flux vents
+    { w: 5.4, h: 0.42, d: 5.1, x: -5.4, y: 1.32, c: TRIM, rz: 0.18 },
+    { w: 4.2, h: 0.36, d: 4.9, x: -6.8, y: 0.96, c: TRIM, rz: 0.18 },
+    { w: 2.6, h: 1.15, d: 1.65, x: -7.8, y: 0.82, z: 1.75, c: TRIM },
+    { w: 2.6, h: 1.15, d: 1.65, x: -7.8, y: 0.82, z: -1.75, c: TRIM },
+    // 4 horizontally folded hover-conversion wheel pods with cyan thruster undersides
+    { w: 3.4, h: 0.55, d: 1.55, x: 5.6, y: -0.68, z: 3.85, c: TRIM },
+    { w: 3.4, h: 0.55, d: 1.55, x: 5.6, y: -0.68, z: -3.85, c: TRIM },
+    { w: 3.6, h: 0.55, d: 1.65, x: -5.8, y: -0.68, z: 3.95, c: TRIM },
+    { w: 3.6, h: 0.55, d: 1.65, x: -5.8, y: -0.68, z: -3.95, c: TRIM },
+    { w: 2.6, h: 0.20, d: 1.25, x: 5.6, y: -0.98, z: 3.85, c: GLOW },
+    { w: 2.6, h: 0.20, d: 1.25, x: 5.6, y: -0.98, z: -3.85, c: GLOW },
+    { w: 2.8, h: 0.20, d: 1.35, x: -5.8, y: -0.98, z: 3.95, c: GLOW },
+    { w: 2.8, h: 0.20, d: 1.35, x: -5.8, y: -0.98, z: -3.95, c: GLOW },
+    // Distinct quad rectangular warm-white FRONT headlights (+X)
+    { w: 0.85, h: 0.52, d: 1.15, x: 9.45, y: -0.05, z: 2.25, c: HEAD },
+    { w: 0.85, h: 0.52, d: 1.00, x: 9.45, y: -0.05, z: 0.95, c: HEAD },
+    { w: 0.85, h: 0.52, d: 1.00, x: 9.45, y: -0.05, z: -0.95, c: HEAD },
+    { w: 0.85, h: 0.52, d: 1.15, x: 9.45, y: -0.05, z: -2.25, c: HEAD },
+    // Distinct wide crimson-red REAR taillight grille (-X)
+    { w: 0.85, h: 0.68, d: 2.65, x: -8.95, y: 0.08, z: 1.85, c: TAIL },
+    { w: 0.85, h: 0.68, d: 2.65, x: -8.95, y: 0.08, z: -1.85, c: TAIL },
   ];
 }
 
-/** Flat skimmer — the fast courier. ~26 m, spinning rotor ring. */
-function skimmerParts() {
+/** Class 1: Fifth-Element Korben Dallas Retro-Cab — rounded cab-forward body, side pontoons & illuminated TAXI sign. */
+function cabParts() {
   return [
-    { w: 26, h: 1.6, d: 6.4, y: 0, c: HULL },
-    { w: 14, h: 1.2, d: 4.6, x: -4, y: 1.3, c: HULL2 },
-    { w: 7, h: 1.1, d: 3.4, x: 12, y: 0.25, c: HULL },
-    { w: 5.5, h: 1.1, d: 2.4, x: 7.5, y: 1.35, c: GLASS },
-    { w: 5, h: 1.2, d: 2.4, x: 1, y: 1.7, c: GLASS },
-    { w: 7, h: 0.28, d: 2.6, x: -2, y: 0.15, z: 4.3, c: TRIM, rz: 0.08 },
-    { w: 7, h: 0.28, d: 2.6, x: -2, y: 0.15, z: -4.3, c: TRIM, rz: -0.08 },
-    { w: 5, h: 1.2, d: 1.6, x: -8, y: 0.3, z: 3.2, c: TRIM },
-    { w: 5, h: 1.2, d: 1.6, x: -8, y: 0.3, z: -3.2, c: TRIM },
-    { w: 1, h: 0.8, d: 1.2, x: -10.7, y: 0.3, z: 3.2, c: GLOW },
-    { w: 1, h: 0.8, d: 1.2, x: -10.7, y: 0.3, z: -3.2, c: GLOW },
-    { w: 1.6, h: 0.7, d: 1.6, x: -1, y: 2.6, c: TRIM },
-    { w: 0.6, h: 0.6, d: 0.6, x: -2, y: 0.35, z: 5.6, c: HEAD },
-    { w: 0.6, h: 0.6, d: 0.6, x: -2, y: 0.35, z: -5.6, c: TAIL },
-    { w: 1, h: 0.55, d: 0.9, x: 13.2, y: 0.15, z: 2.1, c: HEAD },
-    { w: 1, h: 0.55, d: 0.9, x: 13.2, y: 0.15, z: -2.1, c: HEAD },
-    { w: 0.8, h: 0.6, d: 3.6, x: -13.2, y: 0.2, c: TAIL },
-    { w: 18, h: 0.2, d: 4.4, x: -1, y: -1.05, c: GLOW },
+    // Deep cab-forward hull + rounded 1950s aero nose
+    { w: 18.8, h: 2.45, d: 6.4, x: -0.4, y: 0.15, c: HULL },
+    { w: 5.6, h: 2.25, d: 5.8, x: 8.6, y: 0.05, c: HULL, sphere: true, seg: 10 },
+    { w: 12.2, h: 1.65, d: 5.4, x: 0.4, y: 1.85, c: HULL },
+    { w: 4.4, h: 1.45, d: 5.1, x: 5.6, y: 1.72, c: GLASS, rz: -0.22 },
+    { w: 8.4, h: 1.25, d: 5.55, x: -0.2, y: 1.88, c: GLASS },
+    // Illuminated amber roof TAXI crest + chrome grille bars
+    { w: 3.4, h: 0.85, d: 2.5, x: 2.8, y: 3.05, c: TAXI },
+    { w: 0.9, h: 0.95, d: 4.4, x: 10.6, y: -0.35, c: TRIM },
+    // Stepped side hover-pontoons + twin tail fins
+    { w: 14.6, h: 1.05, d: 1.75, x: -0.6, y: -0.65, z: 3.85, c: HULL2 },
+    { w: 14.6, h: 1.05, d: 1.75, x: -0.6, y: -0.65, z: -3.85, c: HULL2 },
+    { w: 12.0, h: 0.22, d: 1.35, x: -0.6, y: -1.22, z: 3.85, c: GLOW },
+    { w: 12.0, h: 0.22, d: 1.35, x: -0.6, y: -1.22, z: -3.85, c: GLOW },
+    { w: 4.4, h: 1.45, d: 0.45, x: -7.8, y: 1.85, z: 2.65, c: TRIM },
+    { w: 4.4, h: 1.45, d: 0.45, x: -7.8, y: 1.85, z: -2.65, c: TRIM },
+    // Twin round warm-white FRONT headlamps + pontoon fog lamps (+X)
+    { w: 1.05, h: 0.85, d: 1.05, x: 10.9, y: 0.20, z: 2.05, c: HEAD },
+    { w: 1.05, h: 0.85, d: 1.05, x: 10.9, y: 0.20, z: -2.05, c: HEAD },
+    { w: 0.75, h: 0.55, d: 0.95, x: 6.8, y: -0.60, z: 3.85, c: XENON },
+    { w: 0.75, h: 0.55, d: 0.95, x: 6.8, y: -0.60, z: -3.85, c: XENON },
+    // Twin crimson-red REAR brake thruster rings & tailbar (-X)
+    { w: 0.95, h: 1.05, d: 1.55, x: -9.95, y: 0.25, z: 2.05, c: TAIL },
+    { w: 0.95, h: 1.05, d: 1.55, x: -9.95, y: 0.25, z: -2.05, c: TAIL },
+    { w: 0.75, h: 0.50, d: 4.8, x: -9.90, y: -0.45, z: 0.0, c: TAIL },
   ];
 }
 
-/** Heavy hauler — the freight backbone. ~88 m, articulated trailers. */
-function haulerParts() {
+/** Class 2 Lead: Streamlined Bullet-Nose Maglev Sky-Train Locomotive (~28 m). */
+function trainLocoParts() {
+  const parts = [
+    // Maglev bogie skirt + streamlined carbody + bullet nose cone
+    { w: 23.0, h: 1.35, d: 5.8, x: -1.5, y: -1.35, c: TRIM },
+    { w: 22.4, h: 3.6, d: 6.2, x: -1.2, y: 0.95, c: HULL },
+    { w: 9.5, h: 3.2, d: 5.8, x: 10.8, y: 0.65, c: HULL, sphere: true, seg: 12 },
+    { w: 5.5, h: 1.55, d: 4.8, x: 10.4, y: 1.75, c: GLASS, rz: -0.24 },
+    // Roof HV conduit & pantograph fairing + underside maglev rail glow
+    { w: 18.0, h: 0.55, d: 2.6, x: -2.0, y: 3.0, c: HULL2 },
+    { w: 20.0, h: 0.24, d: 4.4, x: -1.2, y: -2.05, c: GLOW },
+    // Bright white nose headlight cluster (+X) & rear coupler diaphragm (-X)
+    { w: 1.3, h: 0.85, d: 1.4, x: 15.1, y: 0.35, z: 0.0, c: HEAD },
+    { w: 1.0, h: 0.65, d: 1.1, x: 14.4, y: -0.15, z: 1.85, c: XENON },
+    { w: 1.0, h: 0.65, d: 1.1, x: 14.4, y: -0.15, z: -1.85, c: XENON },
+    { w: 2.2, h: 3.1, d: 4.8, x: -12.8, y: 0.9, c: TRIM },
+  ];
+  for (let wx = -9.5; wx <= 5.5; wx += 3.75) {
+    parts.push({ w: 2.5, h: 1.15, d: 6.38, x: wx, y: 1.35, c: WIN_GLOW });
+  }
+  return parts;
+}
+
+/** Articulated passenger coach coupled into a smooth 5-car Maglev Sky-Train consist (~22.5 m). */
+function trainCoachParts(isTailCar = false) {
+  const parts = [
+    { w: 21.6, h: 1.3, d: 5.8, y: -1.35, c: TRIM },
+    { w: 21.8, h: 3.55, d: 6.2, y: 0.95, c: HULL },
+    { w: 18.5, h: 0.5, d: 2.6, y: 2.95, c: HULL2 },
+    { w: 2.2, h: 3.05, d: 4.8, x: 11.4, y: 0.9, c: TRIM },
+    { w: 2.0, h: 3.05, d: 4.8, x: -11.2, y: 0.9, c: TRIM },
+    { w: 19.0, h: 0.22, d: 4.4, y: -2.05, c: GLOW },
+  ];
+  for (let wx = -8.4; wx <= 8.4; wx += 3.36) {
+    parts.push({ w: 2.35, h: 1.15, d: 6.38, x: wx, y: 1.35, c: WIN_GLOW });
+  }
+  if (isTailCar) {
+    // Distinct crimson end-of-train marker lights (-X)
+    parts.push({ w: 0.85, h: 0.75, d: 1.35, x: -11.95, y: 1.15, z: 2.0, c: TAIL });
+    parts.push({ w: 0.85, h: 0.75, d: 1.35, x: -11.95, y: 1.15, z: -2.0, c: TAIL });
+    parts.push({ w: 0.75, h: 0.45, d: 4.6, x: -11.95, y: 2.35, z: 0.0, c: TAIL });
+  }
+  return parts;
+}
+
+/** Class 3: Cyber-Wedge Testarossa Hover-GT — needle nose, side strakes, xenon headlamps & full-width crimson tailbar. */
+function coupeParts() {
   return [
-    { w: 88, h: 1.4, d: 8, y: -1.6, c: HULL2 },
-    { w: 86, h: 4.2, d: 8.6, y: 0.6, c: HULL },
-    { w: 80, h: 1.2, d: 0.5, y: -1, z: 4.5, c: TRIM },
-    { w: 80, h: 1.2, d: 0.5, y: -1, z: -4.5, c: TRIM },
-    { w: 12, h: 4.6, d: 8, x: 41, y: 3.6, c: TRIM },
-    { w: 3.5, h: 1.6, d: 6.4, x: 46, y: 5, c: GLASS },
-    { w: 1.2, h: 1.4, d: 8.4, x: 47, y: 1.6, c: HULL2 },
-    { w: 1, h: 5, d: 1, x: 33, y: 6, z: 3.4, c: TRIM },
-    { w: 1, h: 5, d: 1, x: 33, y: 6, z: -3.4, c: TRIM },
-    { w: 22, h: 4.4, d: 8, x: -26, y: 5, c: TRIM },
-    { w: 22, h: 0.5, d: 8.4, x: -26, y: 3.6, c: HULL2 },
-    { w: 22, h: 0.5, d: 8.4, x: -26, y: 6.3, c: HULL2 },
-    { w: 22, h: 4.4, d: 8, x: -2, y: 5, c: HULL },
-    { w: 22, h: 0.5, d: 8.4, x: -2, y: 3.6, c: TRIM },
-    { w: 22, h: 0.5, d: 8.4, x: -2, y: 6.3, c: TRIM },
-    { w: 22, h: 4.4, d: 8, x: 22, y: 5, c: TRIM },
-    { w: 22, h: 0.5, d: 8.4, x: 22, y: 3.6, c: HULL2 },
-    { w: 22, h: 0.5, d: 8.4, x: 22, y: 6.3, c: HULL2 },
-    { w: 1.4, h: 0.8, d: 1.4, x: 41, y: 6.7, c: HEAD },
-    { w: 1.2, h: 1, d: 1.2, x: 45, y: 1.4, z: 3.2, c: HEAD },
-    { w: 1.2, h: 1, d: 1.2, x: 45, y: 1.4, z: -3.2, c: HEAD },
-    { w: 0.6, h: 0.6, d: 0.6, x: 44, y: 1.2, z: 4, c: HEAD },
-    { w: 0.6, h: 0.6, d: 0.6, x: 44, y: 1.2, z: -4, c: HEAD },
-    { w: 1, h: 1, d: 2, x: -43.5, y: 1.6, z: 3.2, c: TAIL },
-    { w: 1, h: 1, d: 2, x: -43.5, y: 1.6, z: -3.2, c: TAIL },
-    { w: 3, h: 0.6, d: 3, x: 34, y: -2.4, z: 3, c: HULL2 },
-    { w: 3, h: 0.6, d: 3, x: 34, y: -2.4, z: -3, c: HULL2 },
-    { w: 3, h: 0.6, d: 3, x: -34, y: -2.4, z: 3, c: HULL2 },
-    { w: 3, h: 0.6, d: 3, x: -34, y: -2.4, z: -3, c: HULL2 },
-    { w: 78, h: 0.28, d: 0.35, x: -2, y: 2.4, z: 4.45, c: GLOW },
-    { w: 78, h: 0.28, d: 0.35, x: -2, y: 2.4, z: -4.45, c: GLOW },
+    { w: 18.6, h: 1.25, d: 7.2, x: -0.2, y: -0.15, c: HULL },
+    { w: 8.2, h: 0.95, d: 6.8, x: 5.8, y: 0.02, c: HULL, rz: -0.13 },
+    { w: 7.4, h: 1.25, d: 5.2, x: -0.6, y: 0.98, c: GLASS, sphere: true, seg: 10 },
+    { w: 9.2, h: 0.75, d: 7.8, x: -2.2, y: 0.05, c: HULL2 },
+    { w: 4.8, h: 0.32, d: 7.4, x: -8.2, y: 1.25, c: TRIM },
+    { w: 1.2, h: 0.95, d: 0.45, x: -8.0, y: 0.75, z: 3.35, c: TRIM },
+    { w: 1.2, h: 0.95, d: 0.45, x: -8.0, y: 0.75, z: -3.35, c: TRIM },
+    { w: 13.5, h: 0.20, d: 4.8, x: -0.5, y: -0.86, c: GLOW },
+    // Ice-xenon front headlamps (+X) & full-width crimson laser tailbar (-X)
+    { w: 1.05, h: 0.45, d: 1.65, x: 9.65, y: -0.08, z: 2.25, c: XENON },
+    { w: 1.05, h: 0.45, d: 1.65, x: 9.65, y: -0.08, z: -2.25, c: XENON },
+    { w: 0.85, h: 0.55, d: 6.8, x: -9.55, y: 0.22, z: 0.0, c: TAIL },
   ];
 }
 
-/** One articulated trailer section behind a hauler (~22 m). */
-function trailerParts() {
-  return [
-    { w: 22, h: 4.2, d: 7.6, y: 0.5, c: TRIM },
-    { w: 22, h: 0.5, d: 8, y: -0.9, c: HULL2 },
-    { w: 22, h: 0.5, d: 8, y: 1.9, c: HULL2 },
-    { w: 20, h: 1, d: 0.4, y: -1, z: 3.9, c: HULL2 },
-    { w: 20, h: 1, d: 0.4, y: -1, z: -3.9, c: HULL2 },
-    { w: 3, h: 1.2, d: 3, x: 11.5, y: 0.2, c: HULL2 },
-    { w: 0.8, h: 0.7, d: 1, x: -11.2, y: 0.6, z: 3, c: TAIL },
-    { w: 0.8, h: 0.7, d: 1, x: -11.2, y: 0.6, z: -3, c: TAIL },
-    { w: 18, h: 0.22, d: 0.3, y: 2.2, z: 3.85, c: GLOW },
-    { w: 18, h: 0.22, d: 0.3, y: 2.2, z: -3.85, c: GLOW },
-  ];
-}
-
-/** Pulsing thruster block at a pod's tail. */
+/** Pulsing plasma thruster block at the DeLorean's rear deck. */
 function thrusterParts() {
   return [
-    { w: 1.7, h: 1, d: 2.8, x: -11.8, y: 0.15, c: GLOW },
+    { w: 1.5, h: 0.85, d: 3.2, x: -9.15, y: 0.55, c: GLOW },
   ];
 }
 
-/** Crossed rotor blades on a skimmer's mast — spun about the yaw axis. */
-function rotorParts() {
-  return [
-    { w: 9, h: 0.22, d: 0.9, x: -1, y: 3, c: TRIM },
-    { w: 0.9, h: 0.22, d: 9, x: -1, y: 3, c: TRIM },
-    { w: 1.2, h: 0.5, d: 1.2, x: -1, y: 3, c: HEAD },
-  ];
-}
-
-/** Tiny courier drone — quad arms, spinning blades, running lights. */
-function droneParts() {
-  return [
-    { w: 4.2, h: 1.3, d: 3.4, y: 0, c: HULL, sphere: true, seg: 10 },
-    { w: 2.2, h: 0.9, d: 1.8, x: 1.6, y: 0.35, c: GLASS },
-    { w: 6.4, h: 0.28, d: 0.5, y: 0.15, c: TRIM, ry: 0.78 },
-    { w: 6.4, h: 0.28, d: 0.5, y: 0.15, c: TRIM, ry: -0.78 },
-    { w: 0.7, h: 0.55, d: 0.7, x: 2.4, y: 0, z: 0.9, c: HEAD },
-    { w: 0.7, h: 0.55, d: 0.7, x: 2.4, y: 0, z: -0.9, c: HEAD },
-    { w: 0.6, h: 0.6, d: 0.6, x: -2.1, y: 0.15, c: TAIL },
-    { w: 2.6, h: 0.18, d: 1.8, y: -0.85, c: GLOW },
-  ];
-}
-
-/** Helicopter — ellipsoid hull, tail boom, skids, big rotor. */
+/** Class 4: Patrol Tilt-Helicopter — tadpole fuselage, glass bubble nose, skids, tail boom & spinning main rotor. */
 function heliParts() {
   return [
-    { w: 11, h: 3.6, d: 3.8, y: 0, c: HULL, sphere: true, seg: 12 },
-    { w: 5.2, h: 2.2, d: 3, x: 3.4, y: 0.75, c: GLASS, sphere: true, seg: 10 },
-    { w: 8, h: 0.7, d: 0.7, x: -8.5, y: 0.9, c: HULL2 },
-    { w: 0.5, h: 2.6, d: 1.7, x: -11.8, y: 1.7, c: TRIM },
-    { w: 2.2, h: 0.9, d: 0.35, x: -11.5, y: 2.9, c: TAIL },
-    { w: 0.55, h: 0.55, d: 5.6, x: 1, y: -2.3, z: 2, c: TRIM },
-    { w: 0.55, h: 0.55, d: 5.6, x: 1, y: -2.3, z: -2, c: TRIM },
-    { w: 1.1, h: 1.3, d: 1.1, x: 0, y: 2.4, c: TRIM },
-    { w: 0.8, h: 0.6, d: 0.8, x: 5.6, y: 0.2, z: 1.1, c: HEAD },
-    { w: 0.8, h: 0.6, d: 0.8, x: 5.6, y: 0.2, z: -1.1, c: HEAD },
-    { w: 0.7, h: 0.7, d: 0.7, x: -6, y: 0.4, z: 1.5, c: TAIL },
-    { w: 7, h: 0.2, d: 2.6, y: -1.6, c: GLOW },
+    { w: 11.5, h: 3.6, d: 3.9, y: 0, c: HULL, sphere: true, seg: 12 },
+    { w: 5.4, h: 2.3, d: 3.1, x: 3.5, y: 0.65, c: GLASS, sphere: true, seg: 10 },
+    { w: 8.6, h: 0.75, d: 0.75, x: -8.8, y: 0.9, c: HULL2 },
+    { w: 5.2, h: 0.35, d: 7.6, x: -0.4, y: 0.35, c: TRIM },
+    { w: 0.55, h: 2.8, d: 1.8, x: -12.2, y: 1.75, c: TRIM },
+    { w: 0.55, h: 0.55, d: 5.8, x: 0.8, y: -2.3, z: 2.0, c: TRIM },
+    { w: 0.55, h: 0.55, d: 5.8, x: 0.8, y: -2.3, z: -2.0, c: TRIM },
+    { w: 1.1, h: 1.35, d: 1.1, x: 0, y: 2.4, c: TRIM },
+    // White nose spotlamps (+X) & crimson tail anti-collision beacons (-X)
+    { w: 0.9, h: 0.65, d: 0.9, x: 5.9, y: 0.05, z: 1.15, c: HEAD },
+    { w: 0.9, h: 0.65, d: 0.9, x: 5.9, y: 0.05, z: -1.15, c: HEAD },
+    { w: 0.85, h: 0.85, d: 0.85, x: -12.3, y: 3.25, z: 0.0, c: TAIL },
+    { w: 0.75, h: 0.65, d: 0.85, x: -6.2, y: 0.4, z: 1.5, c: TAIL },
   ];
 }
 
 function heliRotorParts() {
   return [
-    { w: 26, h: 0.32, d: 1.3, y: 3.2, c: TRIM },
-    { w: 1.3, h: 0.32, d: 26, y: 3.2, c: TRIM },
-    { w: 1.7, h: 0.7, d: 1.7, y: 3.2, c: HEAD },
+    { w: 26, h: 0.30, d: 1.25, y: 3.2, c: TRIM },
+    { w: 1.25, h: 0.30, d: 26, y: 3.2, c: TRIM },
+    { w: 1.6, h: 0.65, d: 1.6, y: 3.2, c: HULL2 },
   ];
 }
 
-function droneRotorParts() {
-  return [
-    { w: 7.2, h: 0.18, d: 0.55, y: 0.85, c: TRIM },
-    { w: 0.55, h: 0.18, d: 7.2, y: 0.85, c: TRIM },
-    { w: 0.8, h: 0.35, d: 0.8, y: 0.85, c: HEAD },
-  ];
-}
-
-/** Blimp — the slow giant of the high lanes. ~110 m. */
+/** Class 5: Heavy Off-World Broadcast Blimp (~112 m) — fluted envelope, illuminated gondola & searchlight pods. */
 function blimpParts() {
   return [
-    { w: 110, h: 28, d: 28, c: HULL, sphere: true, seg: 14 },
-    { w: 26, h: 22, d: 22, x: -42, c: HULL2, sphere: true, seg: 10 },
-    { w: 24, h: 6, d: 6, x: 8, y: -13, c: TRIM },
-    { w: 8, h: 5, d: 4.4, x: 14, y: -15.2, c: GLASS },
-    { w: 2, h: 16, d: 22, x: -50, y: 4, c: TRIM },
-    { w: 2, h: 20, d: 2.4, x: -50, y: 2, c: TRIM },
-    { w: 22, h: 1.6, d: 1.6, y: 10, c: TRIM },
-    { w: 1.6, h: 1.6, d: 1.6, x: 54, y: 2, c: HEAD },
-    { w: 1.6, h: 1.6, d: 1.6, x: -56, y: 8, c: TAIL },
-    { w: 1.1, h: 7, d: 1.1, x: 20, y: 16, c: TRIM },
-    { w: 84, h: 1, d: 1, y: -8, z: 13.2, c: GLOW },
-    { w: 84, h: 1, d: 1, y: -8, z: -13.2, c: GLOW },
-    { w: 6, h: 4, d: 4, x: -8, y: -13.5, c: HULL2 },
-    { w: 6, h: 4, d: 4, x: 28, y: -13.5, c: HULL2 },
+    { w: 112, h: 28, d: 28, c: HULL, sphere: true, seg: 14 },
+    { w: 28, h: 22, d: 22, x: -42, c: HULL2, sphere: true, seg: 10 },
+    { w: 28, h: 6.2, d: 6.4, x: 8, y: -13.2, c: TRIM },
+    { w: 18, h: 2.4, d: 6.6, x: 7, y: -13.0, c: WIN_GLOW },
+    { w: 8.5, h: 4.8, d: 4.8, x: 18, y: -15.0, c: GLASS },
+    { w: 2.2, h: 17, d: 23, x: -50, y: 4, c: TRIM },
+    { w: 2.2, h: 21, d: 2.5, x: -50, y: 2, c: TRIM },
+    { w: 82, h: 1.4, d: 1.1, y: -7.5, z: 13.4, c: GLOW },
+    { w: 82, h: 1.4, d: 1.1, y: -7.5, z: -13.4, c: GLOW },
+    { w: 6.5, h: 4.2, d: 4.2, x: -8, y: -13.6, c: HULL2 },
+    { w: 6.5, h: 4.2, d: 4.2, x: 28, y: -13.6, c: HULL2 },
+    // White bow beacon (+X), twin underside searchlight turrets, & crimson stern beacon (-X)
+    { w: 2.0, h: 2.0, d: 2.0, x: 55.5, y: 1.5, c: HEAD },
+    { w: 1.8, h: 1.4, d: 1.8, x: 20.0, y: -16.8, c: HEAD },
+    { w: 1.8, h: 1.4, d: 1.8, x: -3.0, y: -16.8, c: XENON },
+    { w: 2.2, h: 2.2, d: 2.2, x: -56.5, y: 8.5, c: TAIL },
   ];
 }
 
-/** Long streamlined transit shuttle / sky-tram with lit passenger windows. */
-function shuttleParts() {
-  const parts = [
-    { w: 34, h: 3.4, d: 5.4, y: 0.2, c: HULL },
-    { w: 28, h: 1.2, d: 4.4, y: 2.3, c: HULL2 },
-    { w: 6, h: 2.6, d: 4.6, x: 18.2, y: -0.1, c: HULL, sphere: true, seg: 10 },
-    { w: 4.5, h: 1.5, d: 3.8, x: 18.8, y: 0.8, c: GLASS },
-    { w: 5, h: 2.8, d: 0.5, x: -15, y: 3.2, c: TRIM },
-    { w: 26, h: 0.28, d: 3.8, y: -1.65, c: GLOW },
-    { w: 1.2, h: 0.8, d: 1.1, x: 20.6, y: -0.4, z: 1.6, c: HEAD },
-    { w: 1.2, h: 0.8, d: 1.1, x: 20.6, y: -0.4, z: -1.6, c: HEAD },
-    { w: 0.9, h: 0.9, d: 4.4, x: -17.1, y: 0.2, c: TAIL },
+/** Class 6: Executive Art-Deco Hover-Cruiser — elongated luxury saloon with wrap-around cabin & chrome pontoons. */
+function limoParts() {
+  return [
+    { w: 24.6, h: 1.75, d: 6.2, y: -0.05, c: HULL },
+    { w: 7.2, h: 1.55, d: 5.6, x: 10.4, y: -0.10, c: HULL, sphere: true, seg: 10 },
+    { w: 13.6, h: 1.45, d: 5.1, x: -1.2, y: 1.35, c: HULL2 },
+    { w: 12.2, h: 1.10, d: 5.3, x: -1.0, y: 1.38, c: GLASS },
+    { w: 9.6, h: 0.85, d: 5.4, x: -1.2, y: 1.38, c: WIN_GLOW },
+    { w: 21.0, h: 0.75, d: 1.35, x: -0.4, y: -0.55, z: 3.55, c: TRIM },
+    { w: 21.0, h: 0.75, d: 1.35, x: -0.4, y: -0.55, z: -3.55, c: TRIM },
+    { w: 18.0, h: 0.20, d: 4.2, x: -0.5, y: -1.02, c: GLOW },
+    // Warm-white dual front headlamps (+X) & crimson vertical tailfin lamps (-X)
+    { w: 1.15, h: 0.72, d: 1.25, x: 13.6, y: 0.05, z: 1.95, c: HEAD },
+    { w: 1.15, h: 0.72, d: 1.25, x: 13.6, y: 0.05, z: -1.95, c: HEAD },
+    { w: 0.90, h: 1.15, d: 1.10, x: -12.4, y: 0.55, z: 2.45, c: TAIL },
+    { w: 0.90, h: 1.15, d: 1.10, x: -12.4, y: 0.55, z: -2.45, c: TAIL },
+    { w: 0.75, h: 0.48, d: 4.8, x: -12.4, y: -0.10, z: 0.0, c: TAIL },
   ];
-  for (let w = -11; w <= 11; w += 4.4) {
-    parts.push({ w: 2.6, h: 1.1, d: 5.6, x: w, y: 0.7, c: HEAD });
-  }
-  return parts;
 }
 
-/** Asymmetric twin-prong spinner interceptor with vectored thruster pods. */
+/** Class 7: Blade Runner Twin-Mandible Spinner — split forward prongs, bubble canopy & vectored side nacelles. */
 function spinnerParts() {
   return [
-    { w: 13, h: 1.8, d: 4.6, x: -2, y: 0.2, c: HULL },
-    { w: 6.5, h: 1.7, d: 3.2, x: 1.5, y: 1.35, c: GLASS, sphere: true, seg: 10 },
-    { w: 11, h: 1.1, d: 1.35, x: 6.5, y: 0.0, z: 2.1, c: HULL2 },
-    { w: 11, h: 1.1, d: 1.35, x: 6.5, y: 0.0, z: -2.1, c: HULL2 },
-    { w: 5.5, h: 1.5, d: 1.8, x: -6.5, y: 0.3, z: 3.2, c: TRIM },
-    { w: 5.5, h: 1.5, d: 1.8, x: -6.5, y: 0.3, z: -3.2, c: TRIM },
-    { w: 1.4, h: 1.0, d: 1.3, x: -9.5, y: 0.3, z: 3.2, c: GLOW },
-    { w: 1.4, h: 1.0, d: 1.3, x: -9.5, y: 0.3, z: -3.2, c: GLOW },
-    { w: 1.1, h: 0.65, d: 0.9, x: 12.1, y: 0.0, z: 2.1, c: HEAD },
-    { w: 1.1, h: 0.65, d: 0.9, x: 12.1, y: 0.0, z: -2.1, c: HEAD },
-    { w: 0.8, h: 0.7, d: 3.6, x: -8.6, y: 0.4, c: TAIL },
-    { w: 9, h: 0.22, d: 2.8, x: -1, y: -0.9, c: GLOW },
+    { w: 13.2, h: 1.75, d: 4.8, x: -2.0, y: 0.15, c: HULL },
+    { w: 6.8, h: 1.75, d: 3.4, x: 1.4, y: 1.30, c: GLASS, sphere: true, seg: 10 },
+    { w: 10.8, h: 1.05, d: 1.55, x: 6.2, y: -0.05, z: 2.15, c: HULL2 },
+    { w: 10.8, h: 1.05, d: 1.55, x: 6.2, y: -0.05, z: -2.15, c: HULL2 },
+    { w: 5.8, h: 1.50, d: 1.85, x: -6.2, y: 0.25, z: 3.30, c: TRIM },
+    { w: 5.8, h: 1.50, d: 1.85, x: -6.2, y: 0.25, z: -3.30, c: TRIM },
+    { w: 2.2, h: 0.42, d: 2.4, x: 0.5, y: 2.22, c: GLOW },
+    { w: 9.0, h: 0.20, d: 3.0, x: -1.0, y: -0.88, c: GLOW },
+    // Ice-xenon mandible headlights (+X) & twin crimson rear nacelle brake bars (-X)
+    { w: 1.15, h: 0.65, d: 1.15, x: 11.75, y: -0.05, z: 2.15, c: XENON },
+    { w: 1.15, h: 0.65, d: 1.15, x: 11.75, y: -0.05, z: -2.15, c: XENON },
+    { w: 0.90, h: 0.85, d: 1.55, x: -9.20, y: 0.25, z: 3.30, c: TAIL },
+    { w: 0.90, h: 0.85, d: 1.55, x: -9.20, y: 0.25, z: -3.30, c: TAIL },
+    { w: 0.80, h: 0.60, d: 3.8, x: -8.65, y: 0.30, z: 0.0, c: TAIL },
   ];
 }
 
@@ -1664,14 +1699,15 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     return ((x ^ (x >>> 16)) >>> 0) / 4294967296;
   };
 
-  // Weighted non-periodic class assignment; guarantee all 8 classes appear when total >= 16
-  const weights = [0.22, 0.16, 0.11, 0.16, 0.09, 0.04, 0.10, 0.12];
+  // Realistic fleet density weights: ~92.4% sci-fi cars (DeLoreans, Fifth Element cabs, Cyber-Wedges,
+  // Hover-Limos, Spinners), ~4.8% 5-car Maglev Sky-Train chains, ~1.8% patrol helicopters, ~1.0% giant blimps.
+  const weights = [0.30, 0.24, 0.048, 0.16, 0.018, 0.010, 0.10, 0.124];
   const classOf = new Int32Array(total);
   const local = new Int32Array(total);
   const classCount = new Array(nCls).fill(0);
   for (let i = 0; i < total; i++) {
     let cc = 0;
-    if (i === 0) cc = 0; // instance 0 is always a pod so veh.mesh[0] is active
+    if (i === 0) cc = 0; // instance 0 is always a DeLorean so veh.mesh[0] is active
     else if (i < nCls && total >= nCls * 2) cc = i;
     else {
       const r = h01(i, 11);
@@ -1686,15 +1722,25 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
   }
 
   const curveU = trailMat && trailMat.uniforms ? trailMat.uniforms : null;
-  const bodyMat = makeCurvedBasicMaterial(curveU, '#ffffff', { vertexColors: true });
+  const bodyMat = new THREE.ShaderMaterial({
+    vertexShader: VEHICLE_VERT,
+    fragmentShader: VEHICLE_FRAG,
+    uniforms: {
+      uLightK: (curveU && curveU.uLightK) || { value: 1 },
+      uBillMono: { value: 0 },
+      uWorldCurve: (curveU && curveU.uWorldCurve) || { value: 0 },
+      uPlanetR: (curveU && curveU.uPlanetR) || { value: 2100 },
+    },
+    vertexColors: true,
+  });
   const beamMat = new THREE.ShaderMaterial({
     vertexShader: BEAM_VERT,
     fragmentShader: BEAM_FRAG,
     uniforms: {
-      uBeamCol: { value: col('#fff3d8') },
-      uBeamK: { value: 0.52 },
+      uBeamCol: { value: col('#fff4dc') },
+      uBeamK: { value: 0.56 },
       uTime: { value: 0 },
-      uLightK: { value: 1 },
+      uLightK: (curveU && curveU.uLightK) || { value: 1 },
       uWorldCurve: (curveU && curveU.uWorldCurve) || { value: 0 },
       uPlanetR: (curveU && curveU.uPlanetR) || { value: 2100 },
     },
@@ -1704,12 +1750,28 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     side: THREE.DoubleSide,
   });
 
-  // Store integer indices into `lanes` so ring-loop & street-intersection `L.outs` handoffs stay O(1) & exact!
+  // Store integer indices into `lanes` so rail-loop, orbital-ring & street-intersection `L.outs` handoffs stay O(1)!
   const allIndices = lanes.map((_, idx) => idx);
-  const lanePoolIdx = VEHICLE_CLASSES.map((V) => {
+  const railIndices = [];
+  for (let idx = 0; idx < lanes.length; idx++) {
+    if (lanes[idx].railLoop) railIndices.push(idx);
+  }
+  const lanePoolIdx = VEHICLE_CLASSES.map((V, cc) => {
+    if (cc === 2 && railIndices.length > 0) return railIndices; // Sky-Trains lock strictly onto dedicated rail loops!
+    if (cc === 4 || cc === 5) {
+      // Helicopters & giant 112m Blimps prefer smooth wide-radius aerial orbital rings (zero tight street corners!)
+      const airRings = [];
+      for (let idx = 0; idx < lanes.length; idx++) {
+        const L = lanes[idx];
+        const effLayer = L.nominalLayer || L.layer;
+        if (L.ringId !== undefined && !L.railLoop && V.layers.includes(effLayer)) airRings.push(idx);
+      }
+      if (airRings.length > 0) return airRings;
+    }
     const pool = [];
     for (let idx = 0; idx < lanes.length; idx++) {
       const L = lanes[idx];
+      if (L.railLoop) continue; // keep express monorail tracks clear for Sky-Trains
       const effLayer = L.nominalLayer || L.layer;
       if (V.layers.includes(effLayer)) pool.push(idx);
     }
@@ -1728,9 +1790,19 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
 
     let beam = null;
     if (V.beam) {
-      const bgeo = beamGeometry(V.beamLen, V.beamW).rotateZ(-Math.PI / 2);
-      const first = V.parts().reduce((mx, pt) => Math.max(mx, (pt.x || 0) + (pt.w || 0) / 2), 0);
-      bgeo.translate(first + 1.5, 0, 0);
+      let bgeo;
+      if (cc === 4) {
+        // Patrol Helicopter gimbal chin searchlight (+Y shaft rotated downward dynamically in update)
+        bgeo = beamGeometry(110, 24);
+      } else if (cc === 5) {
+        // Blimp forward gondola sweeping searchlight (+Y shaft rotated downward dynamically in update)
+        bgeo = beamGeometry(285, 50);
+      } else {
+        // Forward headlight beam cone projecting from front nose (+X)
+        bgeo = beamGeometry(V.beamLen, V.beamW).rotateZ(-Math.PI / 2);
+        const first = V.parts().reduce((mx, pt) => Math.max(mx, (pt.x || 0) + (pt.w || 0) / 2), 0);
+        bgeo.translate(first + 0.8, 0, 0);
+      }
       beam = new THREE.InstancedMesh(bgeo, beamMat, Math.max(1, classCount[cc]));
       beam.frustumCulled = false;
       group.add(beam);
@@ -1746,12 +1818,26 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     rotors.push(rotor);
   }
 
+  // Twin aft sweeping searchlight on every Blimp gondola so blimps sweep dual crossed cones over the city!
+  const blimpAftBeams = new THREE.InstancedMesh(beamGeometry(265, 46), beamMat, Math.max(1, classCount[5]));
+  blimpAftBeams.frustumCulled = false;
+  group.add(blimpAftBeams);
+
   const thrusters = new THREE.InstancedMesh(mergeParts(thrusterParts()), bodyMat, Math.max(1, classCount[0]));
   thrusters.frustumCulled = false;
   group.add(thrusters);
-  const trailerGeo = mergeParts(trailerParts());
+
+  // 5-car Maglev Sky-Train consist: lead locomotive (bodies[2]) + 2 front coaches (trailers[0..1]) + 2 rear coaches (extraCoaches[0..1])
+  const midCoachGeo = mergeParts(trainCoachParts(false));
+  const tailCoachGeo = mergeParts(trainCoachParts(true));
   const trailers = [0, 1].map(() => {
-    const tr = new THREE.InstancedMesh(trailerGeo, bodyMat, Math.max(1, classCount[2]));
+    const tr = new THREE.InstancedMesh(midCoachGeo, bodyMat, Math.max(1, classCount[2]));
+    tr.frustumCulled = false;
+    group.add(tr);
+    return tr;
+  });
+  const extraCoaches = [midCoachGeo, tailCoachGeo].map((geo) => {
+    const tr = new THREE.InstancedMesh(geo, bodyMat, Math.max(1, classCount[2]));
     tr.frustumCulled = false;
     group.add(tr);
     return tr;
@@ -1906,7 +1992,7 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
             y1 = deck.yEW + yJitter;
             y2 = deck.yNS + yJitter;
           }
-          const turnR = (g1 % 4 === 0 && g2 % 4 === 0) ? 33.0 : 25.0;
+          const turnR = (g1 % 4 === 0 && g2 % 4 === 0) ? 54.0 : 42.0;
           if (stratum <= 3 && attempt < 4 && !isSwarmPathClear(x1, z1, ix, iz, x2, z2, y1, y2, turnR)) continue;
           const totalLen = Math.max(220, leg1 + leg2);
           const worldSpd = 56 + stratum * 24 + h01(i, 149) * 68;
@@ -1990,6 +2076,11 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
   const spin = new Float32Array(total);
   const latOf = new Float32Array(total);
   const vOf = new Float32Array(total);
+  // Smooth continuous orientation state per vehicle (eliminates sudden heading snaps on all cars & airships)
+  const curYaw = new Float32Array(total);
+  const curPitch = new Float32Array(total);
+  const curBank = new Float32Array(total);
+  const poseInit = new Uint8Array(total);
   let elapsed = 0;
   let curHeightScale = 1;
   let lastActiveCount = 0;
@@ -2055,26 +2146,44 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
   };
 
   const assignRoute = (i, lap) => {
-    const pool = lanePoolIdx[classOf[i]];
-    const V = VEHICLE_CLASSES[classOf[i]];
-    laneIdx[i] = pool[Math.floor(h01(i + lap * 997, 23) * pool.length) % pool.length];
+    const cc = classOf[i];
+    const pool = lanePoolIdx[cc];
+    const V = VEHICLE_CLASSES[cc];
+    const oldL = lap > 0 ? lanes[laneIdx[i]] : null;
+    let usePool = pool;
+    if (oldL && pool.length > 4) {
+      const sameAlt = [];
+      for (let pIdx = 0; pIdx < pool.length; pIdx++) {
+        const cand = lanes[pool[pIdx]];
+        if (Math.abs((cand.y1 ?? cand.y) - (oldL.y2 ?? oldL.y)) < 28) sameAlt.push(pool[pIdx]);
+      }
+      if (sameAlt.length > 0) usePool = sameAlt;
+    }
+    laneIdx[i] = usePool[Math.floor(h01(i + lap * 997, 23) * usePool.length) % usePool.length];
     const L = lanes[laneIdx[i]];
     prevLane[i] = L.prevIdx !== undefined ? L.prevIdx : -1;
-    if (L.directed) {
+    poseInit[i] = 0; // re-seed smoothed heading cleanly on route teleport
+    if (L.railLoop) {
+      // Dedicated Maglev Sky-Train monorail track: fixed rail centerline, deterministic loop direction
+      dir[i] = ((L.ringId || 0) % 2 === 0) ? 1 : -1;
+      nextLane[i] = dir[i] > 0 && L.nextIdx !== undefined ? L.nextIdx : (dir[i] < 0 && L.prevIdx !== undefined ? L.prevIdx : -1);
+      latOf[i] = 0;
+      vOf[i] = 0;
+    } else if (L.directed) {
       dir[i] = 1;
       nextLane[i] = pickOutLane(i, laneIdx[i], lap);
       // Tight lateral & vertical trim so street-grid handoffs across turns & ramps stay 100% seamless
-      latOf[i] = (h01(i, 41) - 0.5) * 1.6;
+      latOf[i] = (h01(i, 41) - 0.5) * 1.4;
       const isDeck0 = (L.nominalLayer || L.layer) === 'ground';
-      vOf[i] = isDeck0 ? 0 : (h01(i, 43) - 0.5) * 2.2;
+      vOf[i] = isDeck0 ? 0 : (h01(i, 43) - 0.5) * 1.8;
     } else {
       dir[i] = h01(i + lap * 613, 31) < 0.5 ? 1 : -1;
       nextLane[i] = dir[i] > 0 && L.nextIdx !== undefined ? L.nextIdx : (dir[i] < 0 && L.prevIdx !== undefined ? L.prevIdx : -1);
-      const sideSpread = L.layer === 'ground' ? 2.0 : 5.5;
+      const sideSpread = L.layer === 'ground' ? 1.8 : 4.6;
       latOf[i] = dir[i] * sideSpread * 0.5 + (h01(i + lap * 317, 41) - 0.5) * sideSpread;
-      vOf[i] = L.layer === 'ground' ? 0 : (h01(i + lap * 419, 43) - 0.5) * 4.5;
+      vOf[i] = L.layer === 'ground' ? 0 : (h01(i + lap * 419, 43) - 0.5) * 3.8;
     }
-    baseSpd[i] = V.spd * (0.74 + h01(i + lap * 733, 53) * 0.62);
+    baseSpd[i] = V.spd * (0.78 + h01(i + lap * 733, 53) * 0.48);
     spd[i] = baseSpd[i];
   };
 
@@ -2084,6 +2193,9 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
       ? (lookOrCols.signals && lookOrCols.signals.vehicles) || VEHICLE_COLORS
       : (Array.isArray(lookOrCols) && lookOrCols.length ? lookOrCols : VEHICLE_COLORS);
     const mono = isLook && lookOrCols.signals && lookOrCols.signals.billMono > 0.5;
+    if (bodyMat.uniforms && bodyMat.uniforms.uBillMono) {
+      bodyMat.uniforms.uBillMono.value = mono ? 1 : 0;
+    }
     if (isLook && lookOrCols.signals && lookOrCols.signals.beam && beamMat.uniforms && beamMat.uniforms.uBeamCol) {
       beamMat.uniforms.uBeamCol.value.set(lookOrCols.signals.beam);
     }
@@ -2094,7 +2206,10 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
       bodies[cc].setColorAt(local[i], c);
       if (rotors[cc]) rotors[cc].setColorAt(local[i], c);
       if (cc === 0) thrusters.setColorAt(local[i], c);
-      if (cc === 2) for (const tr of trailers) tr.setColorAt(local[i], c);
+      if (cc === 2) {
+        for (const tr of trailers) tr.setColorAt(local[i], c);
+        for (const tr of extraCoaches) tr.setColorAt(local[i], c);
+      }
       aColor[i * 3] = c.r;
       aColor[i * 3 + 1] = c.g;
       aColor[i * 3 + 2] = c.b;
@@ -2103,6 +2218,7 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     for (const r of rotors) if (r && r.instanceColor) r.instanceColor.needsUpdate = true;
     if (thrusters.instanceColor) thrusters.instanceColor.needsUpdate = true;
     for (const tr of trailers) if (tr.instanceColor) tr.instanceColor.needsUpdate = true;
+    for (const tr of extraCoaches) if (tr.instanceColor) tr.instanceColor.needsUpdate = true;
     trailGeo.getAttribute('aColor').needsUpdate = true;
 
     if (swarmColors && swarmGeo) {
@@ -2172,11 +2288,11 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
   const posPrev = { x: 0, y: 0, z: 0, len: 1, tt: 0, closed: false, isGround: false };
   const posNext = { x: 0, y: 0, z: 0, len: 1, tt: 0, closed: false, isGround: false };
 
-  // Smooth C1 position + true 3D velocity-aligned yaw/pitch + curvature-driven aerodynamic banking
+  // Smooth C1 position + damped velocity-aligned yaw/pitch + curvature-driven aerodynamic banking
   const composeAt = (i, tVal, o = {}) => {
     const L = lanes[laneIdx[i]];
     samplePos3(i, tVal, elapsed, o.bob || 0, posCur);
-    const dtLook = 0.05;
+    const dtLook = 0.055;
     const worldSpdEst = Math.max(36, L.speed) * (0.85 + 0.55 * spd[i]);
     const dParam = (worldSpdEst * dtLook * dir[i]) / Math.max(45, posCur.len);
     samplePos3(i, tVal - dParam, elapsed - dtLook, o.bob || 0, posPrev);
@@ -2186,30 +2302,56 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     const vy = posNext.y - posPrev.y;
     const vz = posNext.z - posPrev.z;
     const hLen = Math.hypot(vx, vz) || 1e-4;
-    const yaw = Math.atan2(-vz, vx) + (o.sway || 0);
-    const pitch = posCur.isGround ? 0 : Math.max(-0.42, Math.min(0.42, Math.atan2(vy, hLen)));
+    const rawYaw = Math.atan2(-vz, vx);
+    const rawPitch = (posCur.isGround || L.railLoop) ? 0 : Math.max(-0.34, Math.min(0.34, Math.atan2(vy, hLen)));
 
     // Aerodynamic banking proportional to horizontal turn curvature
     const v1x = posCur.x - posPrev.x, v1z = posCur.z - posPrev.z;
     const v2x = posNext.x - posCur.x, v2z = posNext.z - posCur.z;
     const l1 = Math.hypot(v1x, v1z) || 1, l2 = Math.hypot(v2x, v2z) || 1;
     const turnCross = (v1x * v2z - v1z * v2x) / (l1 * l2);
-    const curveBank = posCur.isGround ? 0 : Math.max(-0.42, Math.min(0.42, -turnCross * 6.5));
-    const bank = curveBank + (o.roll || 0);
+    const rawBank = (posCur.isGround || L.railLoop) ? 0 : Math.max(-0.36, Math.min(0.36, -turnCross * 5.2));
+
+    let yaw = rawYaw;
+    let pitch = rawPitch;
+    let bank = rawBank;
+    if (o.smoothDt !== undefined) {
+      if (!poseInit[i]) {
+        curYaw[i] = rawYaw;
+        curPitch[i] = rawPitch;
+        curBank[i] = rawBank;
+        poseInit[i] = 1;
+      } else if (o.smoothDt > 0) {
+        const dtS = Math.min(0.12, o.smoothDt);
+        const kTurn = 1 - Math.exp(-dtS * 6.8);
+        let dYaw = Math.atan2(Math.sin(rawYaw - curYaw[i]), Math.cos(rawYaw - curYaw[i]));
+        const maxStep = dtS * 2.8; // bounded angular turn rate — zero sudden snaps!
+        dYaw = Math.max(-maxStep, Math.min(maxStep, dYaw * kTurn));
+        curYaw[i] += dYaw;
+        curPitch[i] += (rawPitch - curPitch[i]) * (1 - Math.exp(-dtS * 6.0));
+        curBank[i] += (rawBank - curBank[i]) * (1 - Math.exp(-dtS * 5.5));
+      }
+      yaw = curYaw[i];
+      pitch = curPitch[i];
+      bank = curBank[i];
+    } else if (poseInit[i]) {
+      yaw = curYaw[i];
+      pitch = curPitch[i];
+      bank = curBank[i];
+    }
+    yaw += (o.sway || 0);
+    bank += (o.roll || 0);
 
     const portal = posCur.closed
       ? 1
       : smoothstep(0, 0.035, posCur.tt) * smoothstep(1, 0.965, posCur.tt);
 
     p.set(posCur.x, posCur.y, posCur.z);
-    // Note: in YXZ Euler order, e.y rotates yaw around world Y, then e.z pitches nose (+X) up/down,
-    // and we compose roll around local +X via quaternion multiplication so forward (+X) NEVER skews!
     e.set(0, yaw + (o.spinY || 0), pitch, 'YXZ');
     q.setFromEuler(e);
     if (bank !== 0) {
       const hb = bank * 0.5;
       const sx = Math.sin(hb), cx = Math.cos(hb);
-      // Post-multiply q * quatX(bank) -> rolls strictly around local forward +X axis!
       const qx = q.x, qy = q.y, qz = q.z, qw = q.w;
       q.set(
         qw * sx + qx * cx,
@@ -2220,6 +2362,65 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     }
     const sc = scl[i] * (o.pulse || 1) * (0.15 + 0.85 * portal);
     s.set(sc * (o.stretch || 1), sc, sc * (o.wMul || 1));
+    m.compose(p, q, s);
+  };
+
+  // Exact arc-length rail-loop walker so every coupled Maglev Sky-Train coach tracks the rail curve seamlessly!
+  const composeRailCoach = (i, metersBack) => {
+    let idx = laneIdx[i];
+    let curL = lanes[idx];
+    let curT = Math.max(0, Math.min(1, t[i]));
+    const sign = dir[i];
+    let rem = metersBack * scl[i];
+    for (let guard = 0; guard < 12 && rem > 0.05; guard++) {
+      evalLane(curL, curT, tmp);
+      const segLen = Math.max(60, tmp.len);
+      const distAvail = sign > 0 ? curT * segLen : (1 - curT) * segLen;
+      if (rem <= distAvail + 1e-4) {
+        curT -= (sign * rem) / segLen;
+        rem = 0;
+        break;
+      }
+      rem -= distAvail;
+      const prevI = sign > 0 ? curL.prevIdx : curL.nextIdx;
+      if (prevI === undefined || prevI < 0) {
+        curT = sign > 0 ? 0 : 1;
+        break;
+      }
+      idx = prevI;
+      curL = lanes[idx];
+      curT = sign > 0 ? 1 : 0;
+    }
+    curT = Math.max(0, Math.min(1, curT));
+    evalLane(curL, curT, tmp);
+    const tx = tmp.dx * sign;
+    const tz = tmp.dz * sign;
+    const nx = -tz;
+    const nz = tx;
+    const px = tmp.x + nx * latOf[i];
+    const pz = tmp.z + nz * latOf[i];
+    const py = (laneY(curL, curT) + vOf[i]) * curHeightScale;
+    const yaw = Math.atan2(-tz, tx);
+    p.set(px, py, pz);
+    e.set(0, yaw, 0, 'YXZ');
+    q.setFromEuler(e);
+    const sc = scl[i];
+    s.set(sc, sc, sc);
+    m.compose(p, q, s);
+  };
+
+  // Animated gimbal-sweeping downward searchlight mounted under Blimp gondolas & Patrol Helicopters
+  const composeGimbalBeam = (craftX, craftY, craftZ, craftYaw, craftScale, localX, localY, sweepPan, tiltFromNadir) => {
+    const cy = Math.cos(craftYaw), sy = Math.sin(craftYaw);
+    p.set(
+      craftX + cy * localX * craftScale,
+      craftY + localY * craftScale,
+      craftZ - sy * localX * craftScale
+    );
+    // e.z = -(PI - tiltFromNadir) aims the +Y beam cone downward & forward along (craftYaw + sweepPan)
+    e.set(0, craftYaw + sweepPan, -(Math.PI - tiltFromNadir), 'YXZ');
+    q.setFromEuler(e);
+    s.set(craftScale, craftScale, craftScale);
     m.compose(p, q, s);
   };
 
@@ -2286,10 +2487,16 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
       const V = VEHICLE_CLASSES[cc];
       const L = lanes[laneIdx[i]];
       const ph = phase[i];
-      let throttle = 1 + 0.14 * Math.sin(elapsed * 0.42 + ph * 1.7);
+      let throttle = cc === 2 ? 1.0 : (1 + 0.10 * Math.sin(elapsed * 0.42 + ph * 1.7));
+      // Natural corner braking before & through 90-degree intersection turns
+      if (L.kind === 'turn') {
+        throttle *= 0.68;
+      } else if (L.directed && t[i] > 0.76 && nextLane[i] >= 0 && lanes[nextLane[i]] && lanes[nextLane[i]].kind === 'turn') {
+        throttle *= 1.0 - 0.30 * smoothstep(0.76, 1.0, t[i]);
+      }
       if (V.hover) {
         const hv = Math.sin(elapsed * 0.31 + ph * 3.1);
-        if (hv > 0.82) throttle *= 0.28;
+        if (hv > 0.84) throttle *= 0.35;
       }
       if (!collision) spd[i] = baseSpd[i];
 
@@ -2328,13 +2535,37 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
 
       const curL = lanes[laneIdx[i]];
       const isDeck0 = (curL.nominalLayer || curL.layer) === 'ground';
-      const bob = isDeck0 ? 0 : Math.sin(elapsed * V.bobF + ph) * V.bobA * (curL.directed ? 0.28 : 0.65);
-      const roll = isDeck0 ? 0 : Math.sin(elapsed * 0.75 + ph) * 0.03;
+      const bob = (isDeck0 || curL.railLoop) ? 0 : Math.sin(elapsed * V.bobF + ph) * V.bobA * (curL.directed ? 0.25 : 0.55);
+      const roll = (isDeck0 || curL.railLoop) ? 0 : Math.sin(elapsed * 0.72 + ph) * 0.025;
       const li = local[i];
 
-      composeAt(i, t[i], { bob, roll });
+      composeAt(i, t[i], { bob, roll, smoothDt: dt });
       bodies[cc].setMatrixAt(li, m);
-      if (beams[cc]) beams[cc].setMatrixAt(li, m);
+      const craftX = posCur.x, craftY = posCur.y, craftZ = posCur.z;
+      const craftYaw = curYaw[i];
+
+      if (beams[cc]) {
+        if (cc === 5) {
+          // Animated twin Blimp searchlights sweeping independent Lissajous arcs over skyscrapers & streets!
+          const pan1 = Math.sin(elapsed * 0.54 + ph) * 0.92;
+          const tilt1 = 0.58 + 0.26 * Math.cos(elapsed * 0.39 + ph * 1.6);
+          composeGimbalBeam(craftX, craftY, craftZ, craftYaw, scl[i], 20.0, -16.8, pan1, tilt1);
+          beams[5].setMatrixAt(li, m);
+
+          const pan2 = Math.cos(elapsed * 0.47 + ph * 2.1 + 1.3) * 0.96;
+          const tilt2 = 0.54 + 0.28 * Math.sin(elapsed * 0.33 + ph * 1.3);
+          composeGimbalBeam(craftX, craftY, craftZ, craftYaw, scl[i], -3.0, -16.8, pan2, tilt2);
+          blimpAftBeams.setMatrixAt(li, m);
+        } else if (cc === 4) {
+          // Patrol Helicopter sweeping chin searchlight
+          const panH = Math.sin(elapsed * 0.88 + ph) * 0.78;
+          const tiltH = 0.62 + 0.22 * Math.cos(elapsed * 0.61 + ph * 1.4);
+          composeGimbalBeam(craftX, craftY, craftZ, craftYaw, scl[i], 4.2, -1.8, panH, tiltH);
+          beams[4].setMatrixAt(li, m);
+        } else {
+          beams[cc].setMatrixAt(li, m);
+        }
+      }
 
       if (cc === 0) {
         composeAt(i, t[i], { bob, roll, pulse: 0.82 + 0.28 * Math.sin(elapsed * 7 + ph) });
@@ -2346,16 +2577,20 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
         rotors[cc].setMatrixAt(li, m);
       }
       if (cc === 2) {
-        const lag = Math.min(0.06, 22 / Math.max(180, tmp.len));
-        composeAt(i, t[i] - dir[i] * lag, { bob: bob * 0.7, roll: roll * 0.6, sway: Math.sin(elapsed * 0.8 + ph) * 0.035 });
+        const sp = V.coachSpacing || 24.5;
+        composeRailCoach(i, sp * 1);
         trailers[0].setMatrixAt(li, m);
-        composeAt(i, t[i] - dir[i] * lag * 2, { bob: bob * 0.55, roll: roll * 0.4, sway: Math.sin(elapsed * 0.8 + ph - 0.7) * 0.06 });
+        composeRailCoach(i, sp * 2);
         trailers[1].setMatrixAt(li, m);
+        composeRailCoach(i, sp * 3);
+        extraCoaches[0].setMatrixAt(li, m);
+        composeRailCoach(i, sp * 4);
+        extraCoaches[1].setMatrixAt(li, m);
       }
       active[cc]++;
 
-      const trailLag = Math.min(0.025, 10 / Math.max(150, tmp.len));
-      composeAt(i, t[i] - dir[i] * trailLag, { bob: bob * 0.5, stretch: 2.4, wMul: 0.75 });
+      const trailLag = Math.min(0.024, 9.5 / Math.max(150, tmp.len));
+      composeAt(i, t[i] - dir[i] * trailLag, { bob: bob * 0.5, stretch: 2.2, wMul: 0.72 });
       trails.setMatrixAt(i, m);
     }
     for (let cIdx = 0; cIdx < nCls; cIdx++) {
@@ -2370,10 +2605,18 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
         rotors[cIdx].instanceMatrix.needsUpdate = true;
       }
     }
+    blimpAftBeams.count = active[5];
+    blimpAftBeams.instanceMatrix.needsUpdate = true;
     thrusters.count = active[0];
     thrusters.instanceMatrix.needsUpdate = true;
-    for (const tr of trailers) tr.count = active[2];
-    for (const tr of trailers) tr.instanceMatrix.needsUpdate = true;
+    for (const tr of trailers) {
+      tr.count = active[2];
+      tr.instanceMatrix.needsUpdate = true;
+    }
+    for (const tr of extraCoaches) {
+      tr.count = active[2];
+      tr.instanceMatrix.needsUpdate = true;
+    }
     trails.count = n;
     trails.instanceMatrix.needsUpdate = true;
     beamMat.uniforms.uTime.value = elapsed;
@@ -2386,9 +2629,11 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     mesh: bodies[0],
     bodies,
     beams,
+    blimpSearchlights: blimpAftBeams,
     rotors,
     thrusters,
     trailers,
+    extraCoaches,
     trails,
     swarm: swarmMesh,
     swarmGeo,
@@ -2404,23 +2649,26 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
 /* ------------------------------------------------- searchlights & pools */
 
 /**
- * Animated volumetric searchlight shafts rising from landmarks and the
- * tallest towers: slow yaw sweeps, breathing tilt oscillation and a gentle
- * shared intensity pulse.
+ * Animated volumetric searchlight shafts rising from landmarks, venues, and
+ * downtown/corridor skyscrapers: Lissajous yaw + tilt sweeps and breathing pulse.
  */
-export function makeSearchlights(city, beamMat, count = 20) {
+export function makeSearchlights(city, beamMat, count = 34) {
   const group = new THREE.Group();
   const spots = [];
   for (const lm of city.landmarks) {
-    spots.push({ x: lm.x, y: lm.h * 0.86, z: lm.z, r: lm.colorSeed, len: 850 + lm.colorSeed * 800, w: 120 + lm.colorSeed * 130, tilt: 0.06 + lm.colorSeed * 0.28 });
+    spots.push({
+      x: lm.x, y: lm.h * 0.88, z: lm.z, r: lm.colorSeed,
+      len: 920 + lm.colorSeed * 820, w: 125 + lm.colorSeed * 135,
+      tilt: 0.10 + lm.colorSeed * 0.30, fast: 1.15,
+    });
   }
-  // Venue volumetric shafts: movie-premiere twin searchlights, arena rim beams & stadium floodbeams
+  // Venue volumetric shafts: movie-premiere twin scissor-beams, arena rim beams & stadium floodbeams
   for (const pl of city.places || []) {
     if (pl.kind === 'theatre') {
       for (const sx of [-1, 1]) {
         spots.push({
           x: pl.x + sx * pl.r * 0.38, y: 14, z: pl.z + pl.r * 0.48,
-          r: (pl.seed + (sx > 0 ? 0.31 : 0.71)) % 1, len: 780, w: 82, tilt: 0.24, fast: 2.1,
+          r: (pl.seed + (sx > 0 ? 0.31 : 0.71)) % 1, len: 820, w: 86, tilt: 0.28, fast: 2.2,
         });
       }
     } else if (pl.kind === 'arena' || pl.kind === 'stadium') {
@@ -2428,19 +2676,35 @@ export function makeSearchlights(city, beamMat, count = 20) {
         const a = (k / 3) * Math.PI * 2 + pl.rot;
         spots.push({
           x: pl.x + Math.cos(a) * pl.r * 0.82, y: 38, z: pl.z + Math.sin(a) * pl.r * 0.62,
-          r: (pl.seed + k * 0.29) % 1, len: 720, w: 96, tilt: 0.16, fast: 1.3,
+          r: (pl.seed + k * 0.29) % 1, len: 760, w: 98, tilt: 0.20, fast: 1.4,
         });
       }
     }
   }
-  const step = Math.max(11, Math.floor(city.count / 24));
-  for (let i = 0; i < city.count && spots.length < count + 8; i += step) {
+  // Sample strictly across core & arterial towers (`city.towers`), NOT low-rise suburbs at the tail of `city`!
+  const towerLim = Math.max(1, city.towers || city.count);
+  const tall = [];
+  const scanStep = Math.max(1, Math.floor(towerLim / 180));
+  for (let i = 0; i < towerLim; i += scanStep) {
     const top = city.y[i] + city.h[i] / 2;
-    if (top > 180) spots.push({ x: city.x[i], y: top, z: city.z[i], r: city.s[i] });
+    if (top > 85) {
+      tall.push({ x: city.x[i], y: top, z: city.z[i], r: city.s[i], top });
+    }
+  }
+  tall.sort((a, b) => b.top - a.top);
+  const needTowers = Math.max(8, count - spots.length + 6);
+  const pickStep = Math.max(1, Math.floor(tall.length / needTowers));
+  for (let k = 0; k < tall.length && spots.length < count + 8; k += pickStep) {
+    const sp = tall[k];
+    spots.push({
+      x: sp.x, y: sp.y, z: sp.z, r: sp.r,
+      len: 720 + sp.r * 760, w: 96 + sp.r * 115,
+      tilt: 0.12 + sp.r * 0.34, fast: 1.0 + sp.r * 0.6,
+    });
   }
   const pivots = [];
   const use = spots.slice(0, Math.max(2, count));
-  const baseK = beamMat.uniforms && beamMat.uniforms.uBeamK ? beamMat.uniforms.uBeamK.value : 0.16;
+  const baseK = beamMat.uniforms && beamMat.uniforms.uBeamK ? beamMat.uniforms.uBeamK.value : 0.22;
   let elapsed = 0;
   for (let k = 0; k < use.length; k++) {
     const sp = use[k];
@@ -2450,33 +2714,36 @@ export function makeSearchlights(city, beamMat, count = 20) {
     const len = sp.len || (750 + sp.r * 750);
     const geo = beamGeometry(len, sp.w || (110 + sp.r * 130));
     const mesh = new THREE.Mesh(geo, beamMat);
-    const tilt = sp.tilt ?? (0.04 + sp.r * 0.3);
+    const tilt = sp.tilt ?? (0.10 + sp.r * 0.32);
     mesh.rotation.z = tilt;
     mesh.frustumCulled = false;
     pivot.add(mesh);
     group.add(pivot);
     const fm = sp.fast || 1;
+    const dirSign = (k % 2 === 0 ? 1 : -1);
     pivots.push({
       pivot,
       mesh,
       tilt,
-      speed: (sp.r - 0.48) * 0.22 * fm,
-      wob: (0.14 + sp.r * 0.24) * fm,
-      phase: sp.r * Math.PI * 2,
+      speed: dirSign * (0.14 + sp.r * 0.26) * fm,
+      wob: (0.22 + sp.r * 0.34) * fm,
+      nod: (0.17 + sp.r * 0.25) * fm,
+      phase: sp.r * Math.PI * 2 + k * 0.7,
     });
   }
   function update(dt) {
     elapsed += dt;
     for (const pv of pivots) {
       pv.pivot.rotation.y += pv.speed * dt;
-      pv.mesh.rotation.z = pv.tilt + Math.sin(elapsed * pv.wob + pv.phase) * 0.22;
+      pv.mesh.rotation.z = pv.tilt + Math.sin(elapsed * pv.wob + pv.phase) * 0.28;
+      pv.mesh.rotation.x = Math.cos(elapsed * pv.nod + pv.phase * 1.3) * 0.18;
     }
     // gentle shared intensity pulse — the beams "breathe"
     if (beamMat.uniforms && beamMat.uniforms.uBeamK) {
-      beamMat.uniforms.uBeamK.value = baseK * (0.82 + 0.18 * Math.sin(elapsed * 0.5));
+      beamMat.uniforms.uBeamK.value = baseK * (0.84 + 0.16 * Math.sin(elapsed * 0.55));
     }
   }
-  return { group, update };
+  return { group, pivots, update };
 }
 
 /** Soft warm light pools lying on the ground under the street lamps. */
@@ -3587,6 +3854,7 @@ export function applyLook(U, look, tune = { win: 1, glow: 1, fog: 1 }) {
  */
 export function applyTime(U, look, hours = 12, tune = { lights: 1, glow: 1 }) {
   const h = ((hours % 24) + 24) % 24;
+  if (U.uDayPhase) U.uDayPhase.value = h;
 
   const model = (hour) => {
     const elevRaw = Math.sin(((hour - 6) / 12) * Math.PI); // +1 noon, 0 at 06/18, -1 midnight

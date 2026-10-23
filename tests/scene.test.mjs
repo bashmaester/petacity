@@ -1243,5 +1243,140 @@ test('Phase-10 scene: ocean/lake/river water, procedural botanical & cyber park 
   assert.equal(dec.post.artStrength, 1.15);
 });
 
+test('Phase-11: sci-fi vehicle designs, realistic fleet ratios, smooth rail-locked trains, distinct front/rear lamps, animated blimp & skyscraper searchlights, and 24h circadian windows', () => {
+  const U = makeUniforms();
+  const world = makeWorld(U);
+  const { city, collider } = growCity(4417, 5, world.towerMat, 0.5, { waterMode: 0, terrainMode: 0, U });
+
+  // 1) Realistic fleet density distribution: lots of sci-fi cars, few 5-car train chains, very few helicopters & blimps
+  const veh = makeVehicles(city, world.trailMat, 420, collider);
+  veh.update(0, 1, 1);
+  const counts = veh.bodies.map((b) => b.count);
+  const totalHero = counts.reduce((a, b) => a + b, 0);
+  const cars = counts[0] + counts[1] + counts[3] + counts[6] + counts[7];
+  const trains = counts[2];
+  const helis = counts[4];
+  const blimps = counts[5];
+  assert.ok(cars / totalHero > 0.85, `expected >85% cars, got ${(100 * cars / totalHero).toFixed(1)}%`);
+  assert.ok(trains >= 1 && trains / totalHero < 0.08, `expected few train chains, got ${trains}/${totalHero}`);
+  assert.ok(helis >= 1 && helis / totalHero < 0.04, `expected very few helicopters, got ${helis}/${totalHero}`);
+  assert.ok(blimps >= 1 && blimps / totalHero < 0.03, `expected very few blimps, got ${blimps}/${totalHero}`);
+
+  // 2) Distinct untinted front headlights (+X, aRole=3) vs crimson rear taillights (-X, aRole=4) on all cars
+  for (const cc of [0, 1, 3, 6, 7]) {
+    const geo = veh.bodies[cc].geometry;
+    const pos = geo.getAttribute('position');
+    const role = geo.getAttribute('aRole');
+    assert.ok(role, `vehicle class ${cc} carries aRole attribute`);
+    assert.ok(pos.count > 200, `vehicle class ${cc} is a detailed multi-part sci-fi silhouette (${pos.count} verts)`);
+    let headCount = 0, tailCount = 0;
+    for (let v = 0; v < pos.count; v++) {
+      const r = role.getX(v);
+      const vx = pos.getX(v);
+      if (Math.abs(r - 3) < 0.1) {
+        headCount++;
+        assert.ok(vx > 0, `class ${cc} front headlight vertex must sit at +X, got x=${vx}`);
+      } else if (Math.abs(r - 4) < 0.1) {
+        tailCount++;
+        assert.ok(vx < 0, `class ${cc} rear taillight vertex must sit at -X, got x=${vx}`);
+      }
+    }
+    assert.ok(headCount >= 24 && tailCount >= 24, `class ${cc} has both front headlights (${headCount}) and rear taillights (${tailCount})`);
+  }
+
+  // 3) Smooth car heading (no sudden turns) + 5-car rail-locked Sky-Train consist
+  assert.equal(veh.extraCoaches.length, 2, '5-car Sky-Train has lead loco + 2 trailers + 2 extraCoaches');
+  const m = new THREE.Matrix4();
+  const p0 = new THREE.Vector3();
+  const p1 = new THREE.Vector3();
+  const q0 = new THREE.Quaternion();
+  const q1 = new THREE.Quaternion();
+  const sDummy = new THREE.Vector3();
+  const e0 = new THREE.Euler(0, 0, 0, 'YXZ');
+
+  // Check coupled 5-car train spacing on frame 0
+  veh.bodies[2].getMatrixAt(0, m);
+  m.decompose(p0, q0, sDummy);
+  const consistMeshes = [veh.trailers[0], veh.trailers[1], veh.extraCoaches[0], veh.extraCoaches[1]];
+  let prevCoachPos = p0.clone();
+  for (let k = 0; k < consistMeshes.length; k++) {
+    consistMeshes[k].getMatrixAt(0, m);
+    m.decompose(p1, q1, sDummy);
+    const gap = prevCoachPos.distanceTo(p1);
+    assert.ok(gap > 16 && gap < 34, `Sky-Train car ${k + 1} coupled smoothly at ${gap.toFixed(1)}m behind previous car`);
+    prevCoachPos = p1.clone();
+  }
+
+  // Step 60 frames and ensure car yaw never snaps abruptly
+  const checkCars = Math.min(20, veh.bodies[0].count);
+  const prevYaws = new Float32Array(checkCars);
+  const prevPosX = new Float32Array(checkCars);
+  for (let i = 0; i < checkCars; i++) {
+    veh.bodies[0].getMatrixAt(i, m);
+    m.decompose(p0, q0, sDummy);
+    e0.setFromQuaternion(q0, 'YXZ');
+    prevYaws[i] = e0.y;
+    prevPosX[i] = p0.x;
+  }
+  for (let step = 0; step < 60; step++) {
+    veh.update(1 / 60, 1, 1);
+    for (let i = 0; i < checkCars; i++) {
+      veh.bodies[0].getMatrixAt(i, m);
+      m.decompose(p0, q0, sDummy);
+      e0.setFromQuaternion(q0, 'YXZ');
+      if (Math.abs(p0.x - prevPosX[i]) < 80) {
+        const dYaw = Math.abs(Math.atan2(Math.sin(e0.y - prevYaws[i]), Math.cos(e0.y - prevYaws[i])));
+        assert.ok(dYaw < 0.09, `car ${i} turned smoothly without snap (dYaw=${dYaw.toFixed(4)} rad in 16ms)`);
+      }
+      prevYaws[i] = e0.y;
+      prevPosX[i] = p0.x;
+    }
+  }
+
+  // 4) Animated searchlights on BOTH blimps & skyscraper rooftops, with valid `uv` attributes so BEAM_VERT/FRAG renders visibly
+  const blimpBeamGeo = veh.beams[5].geometry;
+  const beamUV = blimpBeamGeo.getAttribute('uv');
+  assert.ok(beamUV && beamUV.count >= 12, 'beamGeometry populates uv attribute for BEAM_VERT');
+  let hasInteriorWidth = false;
+  for (let v = 0; v < beamUV.count; v++) {
+    if (beamUV.getX(v) > 0.5) hasInteriorWidth = true;
+  }
+  assert.ok(hasInteriorWidth, 'beam uv.x spans [0..1] so sin(pi*vW) renders volumetric core');
+
+  veh.beams[5].getMatrixAt(0, m);
+  m.decompose(p0, q0, sDummy);
+  veh.blimpSearchlights.getMatrixAt(0, m);
+  const qAft0 = new THREE.Quaternion();
+  m.decompose(p1, qAft0, sDummy);
+  veh.update(1.2, 1, 1);
+  veh.beams[5].getMatrixAt(0, m);
+  m.decompose(p0, q1, sDummy);
+  const qAft1 = new THREE.Quaternion();
+  veh.blimpSearchlights.getMatrixAt(0, m);
+  m.decompose(p1, qAft1, sDummy);
+  assert.ok(1 - Math.abs(q0.dot(q1)) > 1e-4, 'blimp forward searchlight sweeps dynamically');
+  assert.ok(1 - Math.abs(qAft0.dot(qAft1)) > 1e-4, 'blimp aft searchlight sweeps dynamically');
+
+  const sl = makeSearchlights(city, world.beamMat);
+  assert.ok(sl.pivots.length >= 24, `expected >=24 building/venue/landmark searchlights, got ${sl.pivots.length}`);
+  const yaws0 = sl.pivots.map((pv) => pv.pivot.rotation.y);
+  const tilts0 = sl.pivots.map((pv) => pv.mesh.rotation.z);
+  sl.update(1.5);
+  assert.ok(sl.pivots.some((pv, idx) => Math.abs(pv.pivot.rotation.y - yaws0[idx]) > 0.05), 'building searchlights sweep in azimuth');
+  assert.ok(sl.pivots.some((pv, idx) => Math.abs(pv.mesh.rotation.z - tilts0[idx]) > 0.02), 'building searchlights nod in elevation');
+
+  // 5) 24-hour dynamic circadian building & landmark window schedules (`uDayPhase`)
+  const look = LOOKS[0];
+  applyLook(U, look);
+  for (const hr of [3.5, 8.2, 12.5, 18.4, 22.8]) {
+    applyTime(U, look, hr);
+    assert.ok(Math.abs(U.uDayPhase.value - hr) < 1e-6, `applyTime syncs uDayPhase=${hr}`);
+  }
+  assert.equal(world.towerMat.uniforms.uDayPhase, U.uDayPhase, 'towerMat shares live uDayPhase uniform');
+  const lmMat = makeLandmarkMaterial(U, '#445566', 0);
+  assert.equal(lmMat.uniforms.uDayPhase, U.uDayPhase, 'landmarkMat shares live uDayPhase uniform');
+  assert.ok(SHADERS.TOWER_FRAG.includes('isElevShaft') && SHADERS.TOWER_FRAG.includes('duskOn'), 'TOWER_FRAG animates circadian dusk waves & exterior glass elevators');
+});
+
 
 

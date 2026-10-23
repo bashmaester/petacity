@@ -331,6 +331,79 @@ export function evalVoronoiField(px, pz, sx = 0, sz = 0) {
   };
 }
 
+function smoothstep(e0, e1, x) {
+  const t = clamp01((x - e0) / (e1 - e0 || 1));
+  return t * t * (3 - 2 * t);
+}
+
+function distToPolyEdges(px, pz, pts) {
+  let best = Infinity;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const d = distToSeg(px, pz, pts[j][0], pts[j][1], pts[i][0], pts[i][1]);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+/**
+ * Shared analytical curvilinear road-web & surveyor trapezoid subdivision
+ * (matches `evalRoadWeb` in `src/shaders.js` 1-to-1 so highways, collector
+ * rings, trapezoid parcels, corridor towers, suburban house rows & furrows align!).
+ */
+export function evalRoadWeb(px, pz, sx = 0, sz = 0) {
+  const r = Math.hypot(px, pz);
+  const ang = Math.atan2(pz, px);
+  const angWarp = ang
+    + 0.135 * Math.sin(r * 0.00062 + sx) * Math.cos(ang * 2.0 - sz)
+    + 0.075 * Math.cos(r * 0.00125 - sz * 0.7) * Math.sin(ang * 3.0 + sx);
+  const uRoad = angWarp * (12.0 / (Math.PI * 2));
+  const flU = Math.floor(uRoad);
+  const fu = uRoad - flU;
+  const cellU = ((flU % 12) + 12) % 12;
+
+  const spanU = (Math.PI * 2 * Math.max(r, 180.0)) / 12.0;
+  const dArt = Math.min(fu, 1.0 - fu) * spanU;
+
+  const rUndul = r
+    + 135.0 * Math.sin(ang * 3.0 + sx * 1.1)
+    + 78.0 * Math.cos(ang * 5.0 - sz * 1.3 + r * 0.00055)
+    + 65.0 * Math.sin(ang * 4.0 - sx * 0.6 + r * 0.0004);
+  const vRoad = rUndul / 380.0;
+  const cellV = Math.floor(vRoad);
+  const fv = vRoad - cellV;
+  const dRing = Math.min(fv, 1.0 - fv) * 380.0;
+
+  const secHash = fract(Math.sin(cellU * 19.31 + sx * 2.17) * 43758.5453);
+  const corrProm = smoothstep(0.32, 0.88, secHash);
+  const corrMask = Math.exp(-((dArt / (115.0 + 95.0 * corrProm)) ** 2)) * corrProm;
+
+  return { cellU, cellV, fu, fv, dArt, dRing, spanU, r, ang, corrProm, corrMask };
+}
+
+/**
+ * Exact water-body test covering BOTH analytical macro shorelines (ocean, bay,
+ * archipelago channels, crater lake) AND polygonal water bodies (harbor lagoons
+ * and meandering rivers), with optional safety shoreline margin `pad` (metres).
+ */
+export function isPointInWater(city, x, z, pad = 0) {
+  if (!city) return false;
+  const coreSpan = (city.radius || 5) * CELL;
+  const coastDist = evalCoastSignedDist(
+    x, z, coreSpan,
+    city.coastAngle ?? 0, city.waterMode ?? 0,
+    city.terrainSeedX ?? 0, city.terrainSeedZ ?? 0
+  );
+  if (coastDist < pad) return true;
+  const waters = city.water || [];
+  for (let k = 0; k < waters.length; k++) {
+    const w = waters[k];
+    if (w.analytical || !w.pts || w.pts.length < 3) continue;
+    if (pointInPoly(x, z, w.pts)) return true;
+    if (pad > 0 && distToPolyEdges(x, z, w.pts) < pad) return true;
+  }
+  return false;
+}
+
 /**
  * Grow the city.
  * Accepts either positional `(seed, radius, suburbReach, waterMode, terrainMode, terrainScale)`
@@ -361,13 +434,6 @@ export function generateCity(
   const beacons = [];
   let towers = 0;
 
-  const push = (x, y, z, w, h, d, s, kind, style = 0, rot = 0) => {
-    items.push(x, y, z, w, h, d, s, kind, style, rot);
-  };
-  const pushBeacon = (x, y, z, r = 0) => beacons.push({ x, y, z, phase: r, r });
-  const bills = [];
-  const signs = [];
-
   const coreSpan = radius * CELL;
   const coastDistAt = (x, z) => evalCoastSignedDist(x, z, coreSpan, coastAngle, waterMode, terrainSeedX, terrainSeedZ);
 
@@ -376,7 +442,85 @@ export function generateCity(
   const sites = makeSites(seed, radius);
   const water = makeWaters(seed, sites, radius, waterMode, coastAngle, terrainSeedX, terrainSeedZ);
   const boulevards = makeBoulevards(seed, radius);
-  const inWater = (x, z) => coastDistAt(x, z) < 18.0 || water.some((w) => !w.analytical && pointInPoly(x, z, w.pts));
+
+  // Precompute bounding boxes + 280m spatial edge grid for polygonal water bodies (harbors + rivers)
+  // Any point inside a river/harbor or within `pad` of its bank is <260m from a bank edge,
+  // giving O(1) water rejection across 95% of the 16km countryside!
+  const polyWaters = [];
+  const WG = 280;
+  const waterCells = new Set();
+  for (let k = 0; k < water.length; k++) {
+    const w = water[k];
+    if (w.analytical || !w.pts || w.pts.length < 3) continue;
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (let p = 0; p < w.pts.length; p++) {
+      const px = w.pts[p][0], pz = w.pts[p][1];
+      if (px < minX) minX = px;
+      if (px > maxX) maxX = px;
+      if (pz < minZ) minZ = pz;
+      if (pz > maxZ) maxZ = pz;
+    }
+    polyWaters.push({ pts: w.pts, minX, maxX, minZ, maxZ });
+    for (let i = 0, j = w.pts.length - 1; i < w.pts.length; j = i++) {
+      const x0 = Math.min(w.pts[j][0], w.pts[i][0]) - WG;
+      const x1 = Math.max(w.pts[j][0], w.pts[i][0]) + WG;
+      const z0 = Math.min(w.pts[j][1], w.pts[i][1]) - WG;
+      const z1 = Math.max(w.pts[j][1], w.pts[i][1]) + WG;
+      const gx0 = Math.floor(x0 / WG), gx1 = Math.floor(x1 / WG);
+      const gz0 = Math.floor(z0 / WG), gz1 = Math.floor(z1 / WG);
+      for (let gx = gx0; gx <= gx1; gx++) {
+        for (let gz = gz0; gz <= gz1; gz++) {
+          waterCells.add(`${gx},${gz}`);
+        }
+      }
+    }
+  }
+
+  const inWater = (x, z, pad = 24) => {
+    if (coastDistAt(x, z) < pad) return true;
+    if (polyWaters.length === 0) return false;
+    if (pad <= 140 && !waterCells.has(`${Math.floor(x / WG)},${Math.floor(z / WG)}`)) return false;
+    for (let k = 0; k < polyWaters.length; k++) {
+      const pw = polyWaters[k];
+      if (x < pw.minX - pad || x > pw.maxX + pad || z < pw.minZ - pad || z > pw.maxZ + pad) continue;
+      if (pointInPoly(x, z, pw.pts)) return true;
+      if (pad > 0 && distToPolyEdges(x, z, pw.pts) < pad) return true;
+    }
+    return false;
+  };
+
+  const boxTouchesWater = (cx, cz, bw, bd, rot = 0) => {
+    const hw = bw * 0.5 + 3.5;
+    const hd = bd * 0.5 + 3.5;
+    if (inWater(cx, cz, 5.0)) return true;
+    const c = Math.cos(rot);
+    const s = Math.sin(rot);
+    return (
+      inWater(cx + hw * c + hd * s, cz - hw * s + hd * c, 3.0) ||
+      inWater(cx + hw * c - hd * s, cz - hw * s - hd * c, 3.0) ||
+      inWater(cx - hw * c + hd * s, cz + hw * s + hd * c, 3.0) ||
+      inWater(cx - hw * c - hd * s, cz + hw * s - hd * c, 3.0)
+    );
+  };
+
+  // Hard water-exclusion gate on every pushed architectural box & beacon!
+  const push = (x, y, z, w, h, d, s, kind, style = 0, rot = 0) => {
+    if (boxTouchesWater(x, z, w, d, rot)) return;
+    items.push(x, y, z, w, h, d, s, kind, style, rot);
+  };
+  const pushBeacon = (x, y, z, r = 0) => {
+    if (inWater(x, z, 5.0)) return;
+    beacons.push({ x, y, z, phase: r, r });
+  };
+  const bills = [];
+  const signs = [];
+  const pushSignDry = (sg) => {
+    if (!inWater(sg.x, sg.z, 8.0)) signs.push(sg);
+  };
+  const pushBillDry = (bl) => {
+    if (!inWater(bl.x, bl.z, 8.0)) bills.push(bl);
+  };
+
   const nearBoulevard = (x, z, hw = 52) => boulevards.some((b) => distToSeg(x, z, b.x1, b.z1, b.x2, b.z2) < hw);
 
   // Districts: coherent quarters via a smooth noise field + hash jitter.
@@ -412,11 +556,34 @@ export function generateCity(
 
   // Named landmarks (places of interest): hero monument near the centre +
   // guaranteed signature structures (pyramid, cantilever, ziggurat) and classic spires/domes.
+  // Every landmark checks full block footprint against water bodies!
   const landmarks = [];
   const lmCells = new Map();
+  const cellDryFor = (cx, cz, halfSpan) => (
+    !inWater(cx, cz, halfSpan + 10) &&
+    !inWater(cx - halfSpan, cz - halfSpan, 10) &&
+    !inWater(cx + halfSpan, cz - halfSpan, 10) &&
+    !inWater(cx - halfSpan, cz + halfSpan, 10) &&
+    !inWater(cx + halfSpan, cz + halfSpan, 10)
+  );
   const heroPool = ['arch', 'pyramid', 'cantilever', 'ziggurat', 'crown'];
   const heroKind = seed === 4417 ? 'arch' : heroPool[Math.floor(hash2i(2, 19, seed) * heroPool.length) % heroPool.length];
-  addLandmarkData(landmarks, lmCells, heroKind, 0, 0, seed, true);
+  let heroBi = 0, heroBj = 0;
+  if (!cellDryFor(CELL * 0.5, CELL * 0.5, 58)) {
+    for (let rad = 1; rad <= Math.max(2, radius - 1); rad++) {
+      let found = false;
+      for (let dx = -rad; dx <= rad && !found; dx++) {
+        for (let dz = -rad; dz <= rad && !found; dz++) {
+          if (Math.max(Math.abs(dx), Math.abs(dz)) !== rad) continue;
+          if (cellDryFor(dx * CELL + CELL * 0.5, dz * CELL + CELL * 0.5, 58)) {
+            heroBi = dx; heroBj = dz; found = true;
+          }
+        }
+      }
+      if (found) break;
+    }
+  }
+  addLandmarkData(landmarks, lmCells, heroKind, heroBi, heroBj, seed, true);
 
   const mustHaveLm = radius >= 3
     ? ['pyramid', 'cantilever', 'ziggurat'].filter((k) => k !== heroKind)
@@ -428,14 +595,15 @@ export function generateCity(
   }
   for (let k = 0; k < wantLmKinds.length; k++) {
     const kind = wantLmKinds[k];
-    for (let attempt = 0; attempt < 24; attempt++) {
+    for (let attempt = 0; attempt < 48; attempt++) {
       const bi = Math.floor(hash2i(k * 19 + attempt, 101, seed) * (radius * 2)) - radius;
       const bj = Math.floor(hash2i(k * 19 + attempt, 211, seed) * (radius * 2)) - radius;
       const key = bi + ',' + bj;
-      if (lmCells.has(key) || spireCells.has(key) || (bi === 0 && bj === 0)) continue;
+      if (lmCells.has(key) || spireCells.has(key) || (bi === heroBi && bj === heroBj)) continue;
       const lcx = bi * CELL + CELL / 2;
       const lcz = bj * CELL + CELL / 2;
-      if (attempt < 18 && (inWater(lcx, lcz) || nearBoulevard(lcx, lcz, 64))) continue;
+      if (!cellDryFor(lcx, lcz, 56)) continue;
+      if (attempt < 24 && nearBoulevard(lcx, lcz, 64)) continue;
       addLandmarkData(landmarks, lmCells, kind, bi, bj, seed, false);
       break;
     }
@@ -456,12 +624,12 @@ export function generateCity(
     const kind = wantKinds[k];
     const big = kind === 'arena' || kind === 'stadium' || kind === 'theatre';
     // try deterministic candidate blocks until we find an open spot off water/boulevards
-    for (let attempt = 0; attempt < 64; attempt++) {
+    for (let attempt = 0; attempt < 80; attempt++) {
       const spanB = Math.max(1, radius - 1);
       const bi = Math.floor(hash2i(k * 31 + attempt, 307, seed) * (spanB * 2)) - spanB;
       const bj = Math.floor(hash2i(k * 31 + attempt, 401, seed) * (spanB * 2)) - spanB;
       const key = bi + ',' + bj;
-      if (lmCells.has(key) || spireCells.has(key) || (Math.abs(bi) <= 1 && Math.abs(bj) <= 1)) continue;
+      if (lmCells.has(key) || spireCells.has(key) || (Math.abs(bi - heroBi) <= 1 && Math.abs(bj - heroBj) <= 1)) continue;
       // big venues prefer a 2x2 superblock without crossing a 4th-street avenue, with 1x1 fallback after 40 tries
       if (big && radius >= 4 && attempt < 42) {
         if (((bi + 1) % 4 + 4) % 4 === 0 || ((bj + 1) % 4 + 4) % 4 === 0) continue;
@@ -470,14 +638,14 @@ export function generateCity(
         if (subKeys.some((sk) => lmCells.has(sk) || spireCells.has(sk))) continue;
         const scx = (bi + 1) * CELL;
         const scz = (bj + 1) * CELL;
-        if (inWater(scx, scz) || nearBoulevard(scx, scz, 110)) continue;
-        addPlaceData(places, lmCells, pushBeacon, (s) => signs.push(s), kind, bi, bj, seed, true);
+        if (!cellDryFor(scx, scz, 108) || nearBoulevard(scx, scz, 110)) continue;
+        addPlaceData(places, lmCells, pushBeacon, pushSignDry, kind, bi, bj, seed, true);
         break;
       } else {
         const scx = bi * CELL + CELL / 2;
         const scz = bj * CELL + CELL / 2;
-        if (inWater(scx, scz) || nearBoulevard(scx, scz, 76)) continue;
-        addPlaceData(places, lmCells, pushBeacon, (s) => signs.push(s), kind, bi, bj, seed, false);
+        if (!cellDryFor(scx, scz, 54) || (attempt < 56 && nearBoulevard(scx, scz, 76))) continue;
+        addPlaceData(places, lmCells, pushBeacon, pushSignDry, kind, bi, bj, seed, false);
         break;
       }
     }
@@ -512,31 +680,33 @@ export function generateCity(
       const rand = mulberry32(hash2i(i, j, seed ^ 0x51ed270b) * 4294967296);
       const h01 = fbm2D(noise, cx / 1150, cz / 1150, 3); // district height field
       const d = districtOf(i, j);
-      // Organic radial + noise-warped boundary so the city silhouette is never a square box
+      // Organic radial + corridor-boosted boundary so the city swells naturally along major highways!
+      const rwCore = evalRoadWeb(cx, cz, terrainSeedX, terrainSeedZ);
       const warp = (fbm2D(noise, cx / 580 + 7.3, cz / 580 - 4.1, 2) - 0.5) * CELL * 2.8;
-      const rNorm = (Math.hypot(cx, cz) + warp) / Math.max(CELL, coreSpan);
+      const effCoreSpan = Math.max(CELL, coreSpan * (1.0 + 0.36 * rwCore.corrMask));
+      const rNorm = (Math.hypot(cx, cz) + warp) / effCoreSpan;
       const edgeT = clamp01(1.18 - rNorm * 0.92);
       const blockInMedia = mediaZone && Math.hypot(cx - mediaZone.x, cz - mediaZone.z) <= mediaZone.r;
 
       if (lmCells.has(i + ',' + j)) continue; // landmark/venue block
-      if (spireCells.has(i + ',' + j) && !blockInMedia && rNorm < 0.92 && !inWater(cx, cz) && !nearBoulevard(cx, cz, 68)) {
+      if (spireCells.has(i + ',' + j) && !blockInMedia && rNorm < 0.92 && !inWater(cx, cz, 44) && !nearBoulevard(cx, cz, 68)) {
         addSpire(push, pushBeacon, rand, cx, cz, h01, d);
         towers++;
         continue;
       }
       // Corner blocks outside the organic radial core transition straight into outskirts!
       if (rNorm > 1.06 && !blockInMedia) {
-        if (!inWater(cx, cz) && !nearBoulevard(cx, cz, 48)) {
-          addOutskirts(push, pushBeacon, (s) => signs.push(s), rand, x0, x1, z0, z1, clamp01(1.32 - rNorm * 0.85));
+        if (!inWater(cx, cz, 38) && !nearBoulevard(cx, cz, 48)) {
+          addOutskirts(push, pushBeacon, pushSignDry, rand, x0, x1, z0, z1, clamp01(1.32 - rNorm * 0.85));
         }
         continue;
       }
       // sparse / rift / rim quarters leave whole blocks empty — but never inside the Media Ward!
       if (!blockInMedia && rand() < d.skip * 0.55 + (1 - edgeT) * 0.25) continue;
-      if (inWater(cx, cz) || (!blockInMedia && nearBoulevard(cx, cz, 56))) continue;
+      if (inWater(cx, cz, 42) || (!blockInMedia && nearBoulevard(cx, cz, 56))) continue;
 
       // Street-level urban realm: raised sidewalk promenade, corner transit kiosks & pedestrian skywalks
-      addBlockStreetscape(push, pushBeacon, (sg) => signs.push(sg), rand, i, j, x0, x1, z0, z1, d, blockInMedia, radius, lmCells, inWater);
+      addBlockStreetscape(push, pushBeacon, pushSignDry, rand, i, j, x0, x1, z0, z1, d, blockInMedia, radius, lmCells, inWater);
 
       const site = nearestSite(cx, cz);
       // Voronoi cell orientation: radial around civic/water/park sites, angled in skewed cells
@@ -564,16 +734,16 @@ export function generateCity(
           const pickInZone = distMedia <= (mediaZone ? mediaZone.r : 0) && hash2i(i * 19 + a * 7, j * 23 + b * 11, seed ^ 0x4d3a) < 0.42;
           const pickCorridor = distMedia > (mediaZone ? mediaZone.r * 1.35 : 0) && (onAveCorridor || nearBoulevard(lx, lz, 130)) && hash2i(i * 31 + a * 5, j * 29 + b * 13, seed ^ 0x9b71) < 0.085;
           const useMediaTower = pickInZone || pickCorridor;
-          if (inWater(lx, lz) || nearBoulevard(lx, lz, useMediaTower ? 22 : 38 + halfDiag * 0.75)) continue;
+          if (inWater(lx, lz, halfDiag + 12) || nearBoulevard(lx, lz, useMediaTower ? 22 : 38 + halfDiag * 0.75)) continue;
           if (useMediaTower) {
             const mt = addMediaTower(
-              push, pushBeacon, (bl) => bills.push(bl), (sg) => signs.push(sg), (hl) => holos.push(hl),
+              push, pushBeacon, pushBillDry, pushSignDry, (hl) => holos.push(hl),
               rand, xs[a], xs[a + 1], zs[b], zs[b + 1], h01, baseAngle
             );
             if (mt && pickInZone) mediaTowers.push(mt);
           } else {
             addTower(
-              push, pushBeacon, (bl) => bills.push(bl), (sg) => signs.push(sg),
+              push, pushBeacon, pushBillDry, pushSignDry,
               rand, xs[a], xs[a + 1], zs[b], zs[b + 1], h01, d, edgeT, baseAngle
             );
           }
@@ -621,8 +791,9 @@ export function generateCity(
   const OUT = Math.max(9, Math.round(radius * 1.2) + 4);
   const outSpan = OUT * CELL;
   const effSubReach = Math.max(0, Math.min(2.5, Number.isFinite(suburbReach) ? suburbReach : 1.0));
+  // Stretch suburban sprawl dramatically farther across the basin (~7.8 km at r=5, up to 11.4 km!)
   const suburbSpan = effSubReach > 0.02
-    ? Math.round((Math.max(4500, coreSpan * 4.4 + 1900)) * effSubReach)
+    ? Math.min(11400, Math.round((Math.max(7600, coreSpan * 6.8 + 2900)) * effSubReach))
     : Math.round(coreSpan + outSpan * 0.85);
 
   const terrainY = (px, pz) => Math.max(
@@ -634,6 +805,7 @@ export function generateCity(
     )
   );
   const terrainSlopeAt = (px, pz) => {
+    if ((terrainMode === 4 || terrainScale <= 0.001) && waterMode !== 2) return 0;
     const e = 18.0;
     const hx = evalTerrainHeight(px + e, pz, coreSpan, suburbSpan, terrainMode, terrainScale, coastAngle, waterMode, terrainSeedX, terrainSeedZ)
       - evalTerrainHeight(px - e, pz, coreSpan, suburbSpan, terrainMode, terrainScale, coastAngle, waterMode, terrainSeedX, terrainSeedZ);
@@ -641,6 +813,22 @@ export function generateCity(
       - evalTerrainHeight(px, pz - e, coreSpan, suburbSpan, terrainMode, terrainScale, coastAngle, waterMode, terrainSeedX, terrainSeedZ);
     return Math.hypot(hx, hz) / (2 * e);
   };
+
+  // Organic Ribbon / Finger City Corridors growing outward along the 12 major radial highways!
+  const subLamps = [];
+  const subTrees = [];
+  const pushLampDry = (lp) => {
+    if (!inWater(lp.x, lp.z, 14.0)) subLamps.push(lp);
+  };
+  const pushTreeDry = (tr) => {
+    if (!inWater(tr.x, tr.z, 14.0)) subTrees.push(tr);
+  };
+  towers += addArterialCorridors({
+    seed, noise, coreSpan, suburbSpan, reach: effSubReach,
+    terrainSeedX, terrainSeedZ,
+    inWater, nearBoulevard, terrainY, terrainSlopeAt,
+    push, pushBeacon, pushBill: pushBillDry, pushSign: pushSignDry, pushLamp: pushLampDry,
+  });
 
   // Organic non-grid peri-urban belt (warehouses, silos, sheds & pylons scattered
   // along curved corridors rather than a square block grid).
@@ -653,69 +841,79 @@ export function generateCity(
       const rr = coreSpan * 1.04 + f * outSpan * 0.78;
       const cx = Math.cos(a) * rr;
       const cz = Math.sin(a) * rr;
-      if (inWater(cx, cz) || nearBoulevard(cx, cz, 52)) continue;
+      if (inWater(cx, cz, 34) || nearBoulevard(cx, cz, 52)) continue;
       if (terrainSlopeAt(cx, cz) > 0.24) continue;
       const fade = Math.pow(clamp01(1 - f * 0.88), 1.35);
       if (hash2i(m * 13 + l, 829, seed) > fade * 0.86 + 0.08) continue;
       const rand = mulberry32(hash2i(m * 17 + l, 839, seed) * 4294967296);
       const baseY = terrainY(cx, cz);
       const tangentRot = -a + (rand() - 0.5) * 0.5;
-      addOutskirtsCluster(push, pushBeacon, (sg) => signs.push(sg), rand, cx, cz, baseY, tangentRot, fade);
+      addOutskirtsCluster(push, pushBeacon, pushSignDry, rand, cx, cz, baseY, tangentRot, fade);
     }
   }
 
-  // Waterfront piers, harbor cranes & headland lighthouse on coastal/archipelago worlds
+  // Dry-land coastal headland lighthouses & waterfront warehouse promenades (strictly above waterline!)
   const suburbPOIs = [];
   if (waterMode === 1 || waterMode === 2) {
     const ca = Math.cos(coastAngle);
     const sa = Math.sin(coastAngle);
     for (let pIdx = -2; pIdx <= 2; pIdx++) {
       const vOff = pIdx * 235 + (hash2i(pIdx + 10, 853, seed) - 0.5) * 70;
-      // Binary-search exact shoreline u where coastDist == 0 along v = vOff
-      let uLo = 0;
+      let uLo = -coreSpan;
       let uHi = coreSpan * 2.4;
-      for (let it = 0; it < 14; it++) {
+      for (let it = 0; it < 16; it++) {
         const uMid = (uLo + uHi) * 0.5;
         const wx = ca * uMid - sa * vOff;
         const wz = sa * uMid + ca * vOff;
         if (coastDistAt(wx, wz) > 0) uLo = uMid;
         else uHi = uMid;
       }
-      const pierLen = 78 + hash2i(pIdx + 10, 859, seed) * 65;
-      const uMidPier = uLo + pierLen * 0.42;
-      const px = ca * uMidPier - sa * vOff;
-      const pz = sa * uMidPier + ca * vOff;
       const pierRot = -coastAngle;
-      // Timber/concrete harbor pier deck jutting out into the bay
-      push(px, 1.4, pz, pierLen, 2.2, 13.5, hash2i(pIdx + 10, 863, seed), KIND.SLAB, 4, pierRot);
-      // Warehouse shed on pier root + end beacon bollard
-      const rx = ca * (uLo - 18) - sa * vOff;
-      const rz = sa * (uLo - 18) + ca * vOff;
-      push(rx, 4.2, rz, 24, 7.6, 14, hash2i(pIdx + 10, 877, seed), KIND.WALL, 2, pierRot);
-      const tx = ca * (uLo + pierLen * 0.88) - sa * vOff;
-      const tz = sa * (uLo + pierLen * 0.88) + ca * vOff;
-      push(tx, 5.2, tz, 1.4, 8.0, 1.4, 0.5, KIND.MAST, 0, pierRot);
-      pushBeacon(tx, 9.8, tz, hash2i(pIdx + 10, 881, seed));
+      // Waterfront promenade pavilion & maritime warehouse seated safely on dry bluff (uLo - 46m)
+      const rx = ca * (uLo - 46) - sa * vOff;
+      const rz = sa * (uLo - 46) + ca * vOff;
+      if (!inWater(rx, rz, 24)) {
+        const ry = terrainY(rx, rz);
+        push(rx, ry + 1.0, rz, 28, 2.0, 18, hash2i(pIdx + 10, 863, seed), KIND.SLAB, 4, pierRot);
+        push(rx, ry + 5.2, rz, 22, 7.6, 13, hash2i(pIdx + 10, 877, seed), KIND.WALL, 2, pierRot);
+        pushBeacon(rx, ry + 10.5, rz, hash2i(pIdx + 10, 881, seed));
+        if (pIdx === 0) {
+          suburbPOIs.push({ kind: 'shore', name: 'Harbor Promenade', x: rx, y: ry, z: rz, h: 10, r: 22 });
+        }
+      }
 
-      // Headland lighthouse on outer point
+      // Headland lighthouse seated safely on dry coastal promontory
       if (pIdx === 2) {
-        const lx = ca * (uLo - 26) - sa * (vOff + 95);
-        const lz = sa * (uLo - 26) + ca * (vOff + 95);
-        const ly = terrainY(lx, lz);
-        const lh = 34;
-        push(lx, ly + lh * 0.5, lz, 6.8, lh, 6.8, 0.31, KIND.WALL, 1, 0);
-        push(lx, ly + lh + 2.2, lz, 8.2, 3.4, 8.2, 0.72, KIND.BAND, 1, 0);
-        pushBeacon(lx, ly + lh + 5.5, lz, 0.15);
-        suburbPOIs.push({ kind: 'lighthouse', name: 'Harbor Point Light', x: lx, y: ly, z: lz, h: lh + 6, r: 22 });
+        const vLight = vOff + 85;
+        let uLightLo = -coreSpan;
+        let uLightHi = coreSpan * 2.4;
+        for (let it = 0; it < 16; it++) {
+          const uMid = (uLightLo + uLightHi) * 0.5;
+          const wx = ca * uMid - sa * vLight;
+          const wz = sa * uMid + ca * vLight;
+          if (coastDistAt(wx, wz) > 0) uLightLo = uMid;
+          else uLightHi = uMid;
+        }
+        const lx = ca * (uLightLo - 48) - sa * vLight;
+        const lz = sa * (uLightLo - 48) + ca * vLight;
+        if (!inWater(lx, lz, 24)) {
+          const ly = terrainY(lx, lz);
+          const lh = 34;
+          push(lx, ly + lh * 0.5, lz, 6.8, lh, 6.8, 0.31, KIND.WALL, 1, 0);
+          push(lx, ly + lh + 2.2, lz, 8.2, 3.4, 8.2, 0.72, KIND.BAND, 1, 0);
+          pushBeacon(lx, ly + lh + 5.5, lz, 0.15);
+          suburbPOIs.push({ kind: 'lighthouse', name: 'Harbor Point Light', x: lx, y: ly, z: lz, h: lh + 6, r: 22 });
+        }
       }
     }
   }
 
-  // Organic curvilinear suburbs & patchwork Voronoi countryside:
-  // low-story houses aligned along winding streets, interspersed with corner
-  // shops, regional power stations + pylon lines, and rural farmsteads.
-  const subLamps = [];
-  const subTrees = [];
+  // Record exact index boundary between urban/corridor architecture and horizon suburbs!
+  towers = Math.floor(items.length / 10);
+
+  // Road-aligned trapezoid suburbs & parallel strip-crop countryside:
+  // dense low-story houses aligned along internal residential streets of each
+  // curvilinear trapezoid block, plus shops, power stations & rural farmsteads.
   let suburbCount = 0;
   if (effSubReach > 0.02) {
     suburbCount = addHorizonSuburbs({
@@ -723,9 +921,9 @@ export function generateCity(
       waterMode, terrainMode, coastAngle, terrainSeedX, terrainSeedZ,
       inWater, coastDistAt, terrainY, terrainSlopeAt,
       push, pushBeacon,
-      pushSign: (sg) => signs.push(sg),
-      pushLamp: (lp) => subLamps.push(lp),
-      pushTree: (tr) => subTrees.push(tr),
+      pushSign: pushSignDry,
+      pushLamp: pushLampDry,
+      pushTree: pushTreeDry,
       suburbPOIs,
     });
   }
@@ -810,8 +1008,8 @@ export function generateCity(
     radius, suburbSpan, waterMode, terrainMode, terrainScale,
     coastAngle, terrainSeedX, terrainSeedZ,
   });
-  const lanes = makeLanes(seed, radius, boulevards, collider);
-  const lamps = makeLamps(seed, radius, boulevards, mediaZone);
+  const lanes = makeLanes(seed, radius, boulevards, collider, terrainSeedX, terrainSeedZ, inWater, suburbSpan);
+  const lamps = makeLamps(seed, radius, boulevards, mediaZone, inWater);
   for (let i = 0; i < subLamps.length; i++) lamps.push(subLamps[i]);
   const trees = makeTrees(seed, radius, water, lmCells, places, boulevards, sites, inWater);
   for (let i = 0; i < subTrees.length; i++) trees.push(subTrees[i]);
@@ -825,9 +1023,13 @@ export function generateCity(
   };
 }
 
-/** Street lamps along both sides of every avenue — the night grid, lit. */
-function makeLamps(seed, radius, boulevards = [], mediaZone = null) {
+/** Street lamps along both sides of every avenue — strictly kept off water bodies. */
+function makeLamps(seed, radius, boulevards = [], mediaZone = null, inWater = null) {
   const lamps = [];
+  const pushL = (lx, ly, lz) => {
+    if (inWater && inWater(lx, lz, 14)) return;
+    lamps.push({ x: lx, y: ly, z: lz });
+  };
   const span = radius * CELL + CELL * 0.5;
   const R = (a, b) => hash2i(a, b, seed ^ 0x51e9a3c7);
   // avenues sit at street indices divisible by 4 (see streetWidth)
@@ -837,14 +1039,14 @@ function makeLamps(seed, radius, boulevards = [], mediaZone = null) {
     for (let z = -span; z <= span; z += 58) {
       const j1 = (R(a * 3 + 1, Math.round(z)) - 0.5) * 6;
       const j2 = (R(a * 3 + 2, Math.round(z)) - 0.5) * 6;
-      lamps.push({ x: p + 11 + j1, y: 7.5, z: z + j2 });
-      lamps.push({ x: p - 11 + j2, y: 7.5, z: z + j1 });
+      pushL(p + 11 + j1, 7.5, z + j2);
+      pushL(p - 11 + j2, 7.5, z + j1);
     }
     if (R(a, 77) < 0.6) {
       for (let x = -span; x <= span; x += 58) {
         const j1 = (R(Math.round(x), a * 3 + 3) - 0.5) * 6;
-        lamps.push({ x: x + j1, y: 7.5, z: p + 11 + j1 * 0.5 });
-        lamps.push({ x: x - j1 * 0.5, y: 7.5, z: p - 11 });
+        pushL(x + j1, 7.5, p + 11 + j1 * 0.5);
+        pushL(x - j1 * 0.5, 7.5, p - 11);
       }
     }
   }
@@ -861,8 +1063,8 @@ function makeLamps(seed, radius, boulevards = [], mediaZone = null) {
       const t = s / steps;
       const bx = b.x1 + dx * t;
       const bz = b.z1 + dz * t;
-      lamps.push({ x: bx + nx * 19, y: 8.2, z: bz + nz * 19 });
-      lamps.push({ x: bx - nx * 19, y: 8.2, z: bz - nz * 19 });
+      pushL(bx + nx * 19, 8.2, bz + nz * 19);
+      pushL(bx - nx * 19, 8.2, bz - nz * 19);
     }
   }
   // Extra dense street-level pools & lamps flooding the Media / Holo-Ad District
@@ -870,11 +1072,11 @@ function makeLamps(seed, radius, boulevards = [], mediaZone = null) {
     for (let ring = 0; ring < 24; ring++) {
       const a = (ring / 24) * Math.PI * 2;
       const rr = (0.28 + (ring % 3) * 0.32) * mediaZone.r;
-      lamps.push({
-        x: mediaZone.x + Math.cos(a) * rr,
-        y: 9.0,
-        z: mediaZone.z + Math.sin(a) * rr,
-      });
+      pushL(
+        mediaZone.x + Math.cos(a) * rr,
+        9.0,
+        mediaZone.z + Math.sin(a) * rr
+      );
     }
   }
   return lamps;
@@ -991,7 +1193,16 @@ function addPlaceData(places, lmCells, pushBeacon, pushSign, kind, bi, bj, seed,
  * - Occasional street-aligned S-curve ramps smoothly switch vehicles between
  *   adjacent horizontal elevation layers.
  */
-function makeLanes(seed, radius, boulevards = [], collider = null) {
+function makeLanes(
+  seed,
+  radius,
+  boulevards = [],
+  collider = null,
+  terrainSeedX = 0,
+  terrainSeedZ = 0,
+  inWater = null,
+  suburbSpan = 4000
+) {
   const lanes = [];
   const span = radius * CELL + CELL * 0.85;
   const R = (a, b) => hash2i(a, b, seed ^ 0x2c1b3e5d);
@@ -1080,7 +1291,7 @@ function makeLanes(seed, radius, boulevards = [], collider = null) {
     { dx: -1, dz: 0, axis: 'ew', perp: [0, 1] },
   ];
 
-  const GATE = 30; // intersection apron half-span (m)
+  const GATE = 40; // generous sweeping intersection fillet radius (m) so turns are smooth G1 arcs!
   const OFF_AVE = 8.5; // right-hand lane offset on avenues
   const OFF_ST = 5.5;  // right-hand lane offset on minor streets
   const laneOffFor = (idx) => ((((idx % 4) + 4) % 4 === 0) ? OFF_AVE : OFF_ST);
@@ -1341,6 +1552,133 @@ function makeLanes(seed, radius, boulevards = [], collider = null) {
             lanes[prevSegs[prevSegs.length - 1].idx].outs = [bIdx];
           }
           prevSegs.push({ idx: bIdx, uEnd: u1 });
+        }
+      }
+    }
+  }
+
+  // Dedicated wide-radius continuous Sky-Train Express Loops (railLoop: true):
+  // Multi-car articulated trains ride smooth 8-arc closed maglev rings with zero 90-degree corners!
+  const railRings = [
+    { rr: Math.max(320, 0.56 * span), y: 128, spd: 108 },
+    { rr: Math.max(480, 0.88 * span), y: 156, spd: 122 },
+  ];
+  for (let rIdx = 0; rIdx < railRings.length; rIdx++) {
+    const rc = railRings[rIdx];
+    const segs = 8;
+    const dAng = (Math.PI * 2) / segs;
+    const ctrlScale = 1 / Math.cos(dAng * 0.5);
+    const phase0 = rIdx * 0.39 + 0.18;
+    let yRail = rc.y + R(rIdx, 91) * 18;
+    if (collider) {
+      for (let s = 0; s < segs; s++) {
+        const a0 = s * dAng + phase0;
+        const a1 = (s + 1) * dAng + phase0;
+        const aMid = (a0 + a1) * 0.5;
+        const x1 = Math.cos(a0) * rc.rr, z1 = Math.sin(a0) * rc.rr;
+        const cx = Math.cos(aMid) * rc.rr * ctrlScale, cz = Math.sin(aMid) * rc.rr * ctrlScale;
+        const x2 = Math.cos(a1) * rc.rr, z2 = Math.sin(a1) * rc.rr;
+        for (let k = 0; k <= 12; k++) {
+          const t = k / 12;
+          const om = 1 - t;
+          const px = om * om * x1 + 2 * om * t * cx + t * t * x2;
+          const pz = om * om * z1 + 2 * om * t * cz + t * t * z2;
+          const top = collider.maxHeightNear(px, pz, 34);
+          if (top + 34 > yRail) yRail = top + 34;
+        }
+      }
+    }
+    const indices = [];
+    for (let s = 0; s < segs; s++) {
+      const a0 = s * dAng + phase0;
+      const a1 = (s + 1) * dAng + phase0;
+      const aMid = (a0 + a1) * 0.5;
+      const idx = pushSeg(
+        Math.cos(a0) * rc.rr, Math.sin(a0) * rc.rr,
+        Math.cos(aMid) * rc.rr * ctrlScale, Math.sin(aMid) * rc.rr * ctrlScale,
+        Math.cos(a1) * rc.rr, Math.sin(a1) * rc.rr,
+        yRail, yRail,
+        rc.spd, 'air-mid',
+        { ringId: 20 + rIdx, ringSeg: s, ringSegs: segs, axis: 'ring', deck: 3, kind: 'ring', railLoop: true }
+      );
+      indices.push(idx);
+    }
+    for (let s = 0; s < segs; s++) {
+      const nextI = indices[(s + 1) % segs];
+      lanes[indices[s]].nextIdx = nextI;
+      lanes[indices[s]].prevIdx = indices[(s - 1 + segs) % segs];
+      lanes[indices[s]].outs = [nextI];
+    }
+  }
+
+  // Radial Arterial Highway Corridors streaming vehicles smoothly along the 12 organic major roads!
+  const hwyEnd = Math.min(suburbSpan * 0.58, span * 3.2);
+  const hwyStart = span * 0.72;
+  if (hwyEnd > hwyStart + 320) {
+    const radialPt = (kArt, rr) => {
+      const baseAng = ((kArt + 0.0) / 12.0) * Math.PI * 2;
+      // Invert angular warp once (Newton step) so points trace uRoad == kArt!
+      let a = baseAng;
+      for (let it = 0; it < 3; it++) {
+        const w = 0.135 * Math.sin(rr * 0.00062 + terrainSeedX) * Math.cos(a * 2.0 - terrainSeedZ)
+          + 0.075 * Math.cos(rr * 0.00125 - terrainSeedZ * 0.7) * Math.sin(a * 3.0 + terrainSeedX);
+        a = baseAng - w;
+      }
+      return { x: Math.cos(a) * rr, z: Math.sin(a) * rr };
+    };
+    const stepsH = 5;
+    for (let kArt = 0; kArt < 12; kArt++) {
+      const secHash = fract(Math.sin(kArt * 19.31 + terrainSeedX * 2.17) * 43758.5453);
+      if (secHash < 0.36) continue; // focus highway traffic along the major organic city corridors
+      for (const dirSign of [1, -1]) {
+        const yHwy = dirSign > 0 ? 34.0 : 48.0;
+        const pts = [];
+        const nodeY = new Float64Array(stepsH + 1);
+        for (let s = 0; s <= stepsH; s++) {
+          const u = dirSign > 0 ? (s / stepsH) : ((stepsH - s) / stepsH);
+          const rr = hwyStart + (hwyEnd - hwyStart) * u;
+          const pt = radialPt(kArt, rr);
+          pts.push(pt);
+          nodeY[s] = collider
+            ? Math.max(yHwy, collider.groundHeightAt(pt.x, pt.z) + 18, collider.maxHeightNear(pt.x, pt.z, 26) + 24)
+            : yHwy;
+        }
+        // Ensure midpoint clearance & cap segment slope so connected nodes NEVER jump in Y!
+        for (let s = 0; s < stepsH; s++) {
+          const uMid = dirSign > 0 ? ((s + 0.5) / stepsH) : ((stepsH - s - 0.5) / stepsH);
+          const pm = radialPt(kArt, hwyStart + (hwyEnd - hwyStart) * uMid);
+          if (collider) {
+            const yMidNeed = Math.max(yHwy, collider.groundHeightAt(pm.x, pm.z) + 18, collider.maxHeightNear(pm.x, pm.z, 26) + 24);
+            if (nodeY[s] < yMidNeed) nodeY[s] = yMidNeed;
+            if (nodeY[s + 1] < yMidNeed) nodeY[s + 1] = yMidNeed;
+          }
+        }
+        let prevIdx = -1;
+        for (let s = 0; s < stepsH; s++) {
+          const uMid = dirSign > 0 ? ((s + 0.5) / stepsH) : ((stepsH - s - 0.5) / stepsH);
+          const p0 = pts[s];
+          const pm = radialPt(kArt, hwyStart + (hwyEnd - hwyStart) * uMid);
+          const p1 = pts[s + 1];
+          if (inWater && (inWater(p0.x, p0.z, 18) || inWater(pm.x, pm.z, 18) || inWater(p1.x, p1.z, 18))) {
+            prevIdx = -1;
+            continue;
+          }
+          // Quadratic Bezier control point passing through pm at t=0.5
+          const cx = 2 * pm.x - 0.5 * (p0.x + p1.x);
+          const cz = 2 * pm.z - 0.5 * (p0.z + p1.z);
+          const y0 = nodeY[s];
+          const y1 = nodeY[s + 1];
+          if (!segmentClear(p0.x, p0.z, cx, cz, p1.x, p1.z, y0, y1, 5.2)) {
+            prevIdx = -1;
+            continue;
+          }
+          const idx = pushSeg(
+            p0.x, p0.z, cx, cz, p1.x, p1.z,
+            y0, y1, 98 + R(kArt, s) * 26, 'air-low',
+            { axis: 'corridor', deck: 1, kind: 'corridor' }
+          );
+          if (prevIdx >= 0) lanes[prevIdx].outs = [idx];
+          prevIdx = idx;
         }
       }
     }
@@ -2350,55 +2688,71 @@ function addFarmstead(push, pushTree, rand, fx, fz, fieldRot, terrainY) {
 }
 
 /**
- * Organic Curvilinear Suburban Sprawl & Patchwork Countryside:
- * - Meandering commuter arterials following terrain valleys (zero square grid!)
- * - Curved subdivision collector crescents, loops & cul-de-sacs branching off arterials
- * - Simple 1–2 story houses strictly oriented to the curved street tangent
- * - Occasional corner shops, regional power stations + pylon lines, and rural farms.
+ * Exact 3-step fixed-point inverse of `evalRoadWeb`: maps `(cellU, fu, cellV, fv)`
+ * inside any curvilinear trapezoid road block directly to world `(x, z)` to <2cm!
  */
-function addHorizonSuburbs({
-  seed, noise, coreSpan, outSpan, suburbSpan, reach,
-  coastAngle, terrainSeedX, terrainSeedZ,
-  inWater, terrainY, terrainSlopeAt,
-  push, pushBeacon, pushSign, pushLamp, pushTree, suburbPOIs = [],
-}) {
-  let added = 0;
-  const rStart = coreSpan * 1.08 + 90;
-  if (suburbSpan <= rStart + 80) return 0;
-
-  // 1. 7–9 Meandering Curvilinear Commuter Arterials snaking from downtown to the horizon
-  const spokeCount = 7 + (Math.floor(hash2i(41, 83, seed) * 3) % 3);
-  const spokes = [];
-  for (let k = 0; k < spokeCount; k++) {
-    const baseAng = (k / spokeCount) * Math.PI * 2 + (hash2i(k, 89, seed) - 0.5) * 0.34;
-    spokes.push({
-      ang: baseAng,
-      wobbleA: 0.11 + hash2i(k, 97, seed) * 0.12,
-      wobbleB: 0.05 + hash2i(k, 101, seed) * 0.07,
-      phaseA: hash2i(k, 103, seed) * Math.PI * 2,
-      phaseB: hash2i(k, 107, seed) * Math.PI * 2,
-    });
+export function roadWebToWorld(cellU, fu, cellV, fv, sx = 0, sz = 0) {
+  const angTarget = ((cellU + fu) / 12.0) * Math.PI * 2;
+  const rTarget = Math.max(120, (cellV + fv) * 380.0);
+  let ang = angTarget;
+  let r = rTarget;
+  for (let it = 0; it < 3; it++) {
+    r = Math.max(
+      80,
+      rTarget - (
+        135.0 * Math.sin(ang * 3.0 + sx * 1.1) +
+        78.0 * Math.cos(ang * 5.0 - sz * 1.3 + r * 0.00055) +
+        65.0 * Math.sin(ang * 4.0 - sx * 0.6 + r * 0.0004)
+      )
+    );
+    ang = angTarget - (
+      0.135 * Math.sin(r * 0.00062 + sx) * Math.cos(ang * 2.0 - sz) +
+      0.075 * Math.cos(r * 0.00125 - sz * 0.7) * Math.sin(ang * 3.0 + sx)
+    );
   }
+  return { x: Math.cos(ang) * r, z: Math.sin(ang) * r, r, ang };
+}
 
-  const spokePos = (sp, r) => {
-    const a = sp.ang
-      + Math.sin(r * 0.00078 + sp.phaseA) * sp.wobbleA
-      + Math.cos(r * 0.00175 + sp.phaseB) * sp.wobbleB;
-    return { x: Math.cos(a) * r, z: Math.sin(a) * r, a };
-  };
+/**
+ * Organic Ribbon / Finger City Growth along the major radial arterial highways:
+ * High-rise & mid-rise commercial/apartment corridors branch naturally outward
+ * from the downtown core along primary roads, tapering smoothly into the suburbs.
+ */
+function addArterialCorridors({
+  seed, noise, coreSpan, suburbSpan, reach,
+  terrainSeedX, terrainSeedZ,
+  inWater, nearBoulevard, terrainY, terrainSlopeAt,
+  push, pushBeacon, pushBill, pushSign, pushLamp,
+}) {
+  if (reach <= 0.02) return 0;
+  let corridorTowers = 0;
 
-  // Walk each winding arterial: place streetlamps, corner shops, and branch curved residential crescents!
-  const branchStep = Math.max(135, Math.round(170 / Math.max(0.65, Math.min(1.35, reach))));
-  for (let k = 0; k < spokes.length; k++) {
-    const sp = spokes[k];
-    let branchIdx = 0;
-    for (let r = rStart; r < suburbSpan * 0.96; r += branchStep) {
-      branchIdx++;
-      const p0 = spokePos(sp, r);
-      const p1 = spokePos(sp, r + 24);
-      if (inWater(p0.x, p0.z)) continue;
-      const slope = terrainSlopeAt(p0.x, p0.z);
-      if (slope > 0.25) continue;
+  for (let kArt = 0; kArt < 12; kArt++) {
+    const secHash = fract(Math.sin(kArt * 19.31 + terrainSeedX * 2.17) * 43758.5453);
+    const corrProm = smoothstep(0.32, 0.88, secHash);
+    if (corrProm < 0.18) continue; // minor country roads skip high-density urban fingers
+
+    const rStart = coreSpan * 0.92;
+    const rEnd = Math.min(
+      suburbSpan * 0.52,
+      coreSpan * (1.85 + 2.15 * corrProm) * Math.min(1.4, 0.78 + reach * 0.35)
+    );
+    if (rEnd <= rStart + 140) continue;
+
+    const stepR = 66;
+    let nodeIdx = 0;
+    for (let r = rStart; r <= rEnd; r += stepR) {
+      nodeIdx++;
+      const vApprox = r / 380.0;
+      const cellV = Math.floor(vApprox);
+      const fv = vApprox - cellV;
+      // Avoid collector cross-road intersections (fv near 0 or 1)
+      if (fv < 0.08 || fv > 0.92) continue;
+
+      const p0 = roadWebToWorld(kArt, 0.0, cellV, fv, terrainSeedX, terrainSeedZ);
+      const p1 = roadWebToWorld(kArt, 0.0, cellV, fv + 0.05, terrainSeedX, terrainSeedZ);
+      if (inWater(p0.x, p0.z, 36) || nearBoulevard(p0.x, p0.z, 48)) continue;
+      if (terrainSlopeAt(p0.x, p0.z) > 0.20) continue;
 
       const tx = p1.x - p0.x;
       const tz = p1.z - p0.z;
@@ -2407,189 +2761,251 @@ function addHorizonSuburbs({
       const uz = tz / tl;
       const nx = -uz;
       const nz = ux;
-      const artRot = Math.atan2(-uz, ux);
-      const tNorm = clamp01((r - rStart) / Math.max(250, suburbSpan - rStart));
-      const densityFade = Math.pow(1 - tNorm * 0.82, 1.15);
-      const rand = mulberry32(hash2i(k * 131 + branchIdx, 521, seed) * 4294967296);
+      const roadRot = Math.atan2(-uz, ux);
 
-      // Arterial lamps
-      if (tNorm < 0.72) {
-        const ly = terrainY(p0.x, p0.z) + 6.5;
-        pushLamp({ x: p0.x + nx * 13, y: ly, z: p0.z + nz * 13 });
-        if (tNorm < 0.42) pushLamp({ x: p0.x - nx * 13, y: ly, z: p0.z - nz * 13 });
+      const tAlong = clamp01((r - rStart) / Math.max(180, rEnd - rStart));
+      const env = Math.pow(1 - tAlong, 1.35) * (0.55 + 0.45 * corrProm);
+      const hField = fbm2D(noise, p0.x / 950 + 3.1, p0.z / 950 - 2.7, 2);
+
+      // Highway corridor streetlamps on both sides of the major arterial
+      const roadY = terrainY(p0.x, p0.z);
+      pushLamp({ x: p0.x + nx * 13.5, y: roadY + 7.4, z: p0.z + nz * 13.5 });
+      pushLamp({ x: p0.x - nx * 13.5, y: roadY + 7.4, z: p0.z - nz * 13.5 });
+
+      for (const side of [-1, 1]) {
+        const rand = mulberry32(hash2i(kArt * 197 + nodeIdx * 3 + (side > 0 ? 1 : 0), 463, seed) * 4294967296);
+        if (rand() > 0.82 * (1 - tAlong * 0.35)) continue;
+
+        const setback = 36 + rand() * 14;
+        const bx = p0.x + nx * side * setback;
+        const bz = p0.z + nz * side * setback;
+        if (inWater(bx, bz, 32) || terrainSlopeAt(bx, bz) > 0.20) continue;
+
+        const by = terrainY(bx, bz);
+        const bRot = roadRot + (side > 0 ? Math.PI : 0);
+        const bw = 24 + rand() * 18;
+        const bd = 19 + rand() * 13;
+        const bh = 16 + (78 * env * (0.55 + 0.65 * hField)) + rand() * 12;
+
+        // Streetfront retail arcade podium + stepped mid/high-rise shaft aligned with the highway!
+        push(bx, by + 2.8, bz, bw + 4.0, 5.6, bd + 3.5, rand(), KIND.SLAB, 4, bRot);
+        push(bx, by + bh * 0.5, bz, bw, bh, bd, rand(), KIND.WALL, rand() < 0.14 ? 2 : 0, bRot);
+        if (bh > 38) {
+          const h2 = bh * (0.28 + rand() * 0.18);
+          push(bx, by + bh + h2 * 0.5, bz, bw * 0.72, h2, bd * 0.72, rand(), KIND.WALL, 0, bRot);
+          push(bx, by + bh + 0.7, bz, bw * 0.92, 1.3, bd * 0.92, rand(), KIND.BAND, 0, bRot);
+          if (bh + h2 > 62 && rand() < 0.55) {
+            pushBeacon(bx, by + bh + h2 + 2.5, bz, rand());
+          }
+          if (rand() < 0.22) {
+            const [fx, fz] = rotOff(bx, bz, 0, -(bd * 0.5 + 0.9), bRot);
+            pushBill({
+              x: fx, y: by + Math.min(bh * 0.55, 34), z: fz,
+              w: bw * 0.68, h: 9.5, rot: bRot, seed: rand(),
+            });
+          }
+        } else if (rand() < 0.45) {
+          const [sx, sz] = rotOff(bx, bz, 0, -(bd * 0.5 + 1.0), bRot);
+          pushSign({ x: sx, y: by + 6.4, z: sz, w: 7.5 + rand() * 4.5, h: 2.4, d: 1.0, rot: bRot, seed: rand() });
+        }
+        corridorTowers++;
       }
+    }
+  }
+  return corridorTowers;
+}
 
-      // Occasional neighbourhood corner shop / market plaza at arterial collector junctions (~1 in 5)
-      if (branchIdx % 5 === 2 && rand() < 0.78 * densityFade + 0.12) {
-        const shopSide = rand() < 0.5 ? -1 : 1;
-        const sx = p0.x + nx * shopSide * 26;
-        const sz = p0.z + nz * shopSide * 26;
-        if (!inWater(sx, sz) && terrainSlopeAt(sx, sz) < 0.22) {
-          const shopRot = artRot + (shopSide > 0 ? Math.PI : 0);
-          added += addSuburbanShop(push, pushSign, pushLamp, rand, sx, terrainY(sx, sz), sz, shopRot);
-          if (suburbPOIs.length < 28) {
-            suburbPOIs.push({ kind: 'shop', name: 'Corner Shop', x: sx, y: terrainY(sx, sz), z: sz, h: 8, r: 20 });
+/**
+ * Road-Aligned Trapezoidal Suburban Sprawl & Strip-Crop Countryside:
+ * - Uses the exact same curvilinear `(cellU, cellV)` trapezoid road-web as `GROUND_FRAG`!
+ * - Residential trapezoid blocks subdivide into 2–4 parallel internal streets
+ *   lined densely on both sides with low-story houses, gardens, trees & corner shops.
+ * - Agricultural trapezoid blocks subdivide into parallel strip-crop parcels with
+ *   farmsteads strictly aligned to the bounding roads & plow furrows.
+ */
+function addHorizonSuburbs({
+  seed, noise, coreSpan, outSpan, suburbSpan, reach,
+  terrainMode, terrainSeedX, terrainSeedZ,
+  inWater, terrainY, terrainSlopeAt,
+  push, pushBeacon, pushSign, pushLamp, pushTree, suburbPOIs = [],
+}) {
+  let added = 0;
+  const rStart = coreSpan * 1.04 + 65;
+  if (suburbSpan <= rStart + 100) return 0;
+
+  const isArid = terrainMode === 1 || terrainMode === 3;
+  const vMin = Math.max(1, Math.floor((rStart - 220) / 380.0));
+  const vMax = Math.min(32, Math.ceil((suburbSpan * 1.14 + 260) / 380.0));
+
+  let farmCount = 0;
+
+  // 1. Systematically populate every curvilinear road-bounded trapezoid block (cellU = 0..11, cellV = vMin..vMax)
+  for (let cellV = vMin; cellV <= vMax; cellV++) {
+    for (let cellU = 0; cellU < 12; cellU++) {
+      const center = roadWebToWorld(cellU, 0.5, cellV, 0.5, terrainSeedX, terrainSeedZ);
+      if (center.r < rStart || center.r > suburbSpan * 1.16) continue;
+      if (terrainSlopeAt(center.x, center.z) > 0.24) continue;
+
+      const secHash = fract(Math.sin(cellU * 19.31 + terrainSeedX * 2.17) * 43758.5453);
+      const corrProm = smoothstep(0.32, 0.88, secHash);
+      // Suburban sprawl stretches far across suburbSpan and reaches even farther along major radial roads!
+      const subSpanEff = suburbSpan * (0.86 + 0.28 * corrProm);
+      const subBelt = (1.0 - smoothstep(subSpanEff * 0.72, subSpanEff * 1.12, center.r));
+      const patch = fbm2D(noise, center.x * 0.00085 - 4.2, center.z * 0.00085 + 8.7, 2);
+      const subPatch = smoothstep(0.24, 0.52, patch + corrProm * 0.24);
+      const subZone = clamp01(subBelt * (0.48 + 0.52 * subPatch));
+
+      const blockH = fract(Math.sin(cellU * 12.9898 + cellV * 78.233 + terrainSeedX * 3.1) * 43758.5453);
+      const blockH2 = fract(blockH * 13.71 + cellV * 0.37);
+      const rand = mulberry32(hash2i(cellU * 97 + cellV, 541, seed) * 4294967296);
+
+      // Arterial & collector junction streetlamps + neighbourhood corner shops
+      const junc = roadWebToWorld(cellU, 0.06, cellV, 0.08, terrainSeedX, terrainSeedZ);
+      if (!inWater(junc.x, junc.z, 26) && terrainSlopeAt(junc.x, junc.z) < 0.20) {
+        if (center.r < suburbSpan * 0.78 && (cellV + cellU) % 2 === 0) {
+          pushLamp({ x: junc.x, y: terrainY(junc.x, junc.z) + 6.5, z: junc.z });
+        }
+        if (subZone > 0.36 && rand() < 0.34 * subZone) {
+          const jNext = roadWebToWorld(cellU, 0.06, cellV, 0.16, terrainSeedX, terrainSeedZ);
+          const shopRot = Math.atan2(-(jNext.z - junc.z), jNext.x - junc.x);
+          added += addSuburbanShop(push, pushSign, pushLamp, rand, junc.x, terrainY(junc.x, junc.z), junc.z, shopRot);
+          if (suburbPOIs.length < 32) {
+            suburbPOIs.push({ kind: 'shop', name: 'Corner Shop', x: junc.x, y: terrainY(junc.x, junc.z), z: junc.z, h: 8, r: 20 });
           }
         }
       }
 
-      // Branch curved subdivision collector crescents / cul-de-sacs on both sides of the arterial!
-      for (const side of [-1, 1]) {
-        const patch = fbm2D(noise, (p0.x + nx * side * 140) / 860 + 9.2, (p0.z + nz * side * 140) / 860 - 5.4, 2);
-        if (rand() > (0.28 + patch * 0.85) * densityFade + 0.08) continue;
+      if (subZone > 0.30) {
+        // DENSE ROAD-ALIGNED SUBURBAN TRAPEZOID BLOCK:
+        // Matches GROUND_FRAG's exact internal parallel residential streets!
+        const nLanes = 2 + Math.floor(blockH2 * 2.0);
+        const orientAlongRing = blockH >= 0.42;
+        const arcSpanU = (Math.PI * 2 * Math.max(center.r, 220)) / 12.0;
+        const tOut = clamp01((center.r - rStart) / Math.max(400, suburbSpan - rStart));
+        const fillProb = Math.min(0.88, (0.52 + 0.42 * subZone) * (1.0 - tOut * 0.36) * Math.min(1.18, 0.72 + reach * 0.28));
 
-        // Trace a smooth curved residential street (quadratic/sinusoidal arc + optional sub-loop)
-        const stLen = (150 + rand() * 210) * (1.0 - tNorm * 0.28);
-        const curv = (rand() - 0.5) * 0.0048 + (side * 0.0014);
-        const lotStep = 23 + rand() * 7;
-        const steps = Math.max(4, Math.floor(stLen / lotStep));
-        let curX = p0.x + nx * side * 24;
-        let curZ = p0.z + nz * side * 24;
-        let dirAng = Math.atan2(nz * side, nx * side) + (rand() - 0.5) * 0.32;
+        for (let lIdx = 1; lIdx <= nLanes - 1; lIdx++) {
+          const laneFrac = lIdx / nLanes;
+          const lengthM = orientAlongRing ? arcSpanU : 380.0;
+          const lotPitch = 40 + (lIdx % 2) * 8 + tOut * 14;
+          const nLots = Math.max(3, Math.min(15, Math.floor((lengthM - 48) / lotPitch)));
+          let lastSlope = 0;
 
-        for (let s = 0; s < steps; s++) {
-          dirAng += curv * lotStep + Math.sin(s * 0.65 + k) * 0.055;
-          const dxS = Math.cos(dirAng);
-          const dzS = Math.sin(dirAng);
-          curX += dxS * lotStep;
-          curZ += dzS * lotStep;
-          if (inWater(curX, curZ) || terrainSlopeAt(curX, curZ) > 0.22) break;
+          for (let s = 0; s < nLots; s++) {
+            const alongF = 0.08 + ((s + 0.5) / nLots) * 0.84;
+            const fu0 = orientAlongRing ? alongF : laneFrac;
+            const fv0 = orientAlongRing ? laneFrac : alongF;
+            const fu1 = orientAlongRing ? Math.min(0.98, alongF + 0.03) : laneFrac;
+            const fv1 = orientAlongRing ? laneFrac : Math.min(0.98, alongF + 0.03);
 
-          // Street normal (left & right sidewalks of this curved residential lane)
-          const snx = -dzS;
-          const snz = dxS;
-          for (const hSide of [-1, 1]) {
-            if (rand() > 0.84 - tNorm * 0.24) continue;
-            const setback = 14.5 + rand() * 4.8;
-            const hx = curX + snx * hSide * setback;
-            const hz = curZ + snz * hSide * setback;
-            if (inWater(hx, hz) || terrainSlopeAt(hx, hz) > 0.24) continue;
-            // Orient house strictly parallel to the curved street, front porch facing the road!
-            const houseRot = Math.atan2(-dzS, dxS) + (hSide > 0 ? Math.PI : 0) + (rand() - 0.5) * 0.05;
-            added += addSuburbanHouse(push, rand, hx, terrainY(hx, hz), hz, houseRot, 1.0 - tNorm * 0.12);
-            if (s % 3 === 0 && hSide === 1 && rand() < 0.52) {
-              const bx = hx + snx * hSide * 8.5;
-              const bz = hz + snz * hSide * 8.5;
-              pushTree({ x: bx, y: terrainY(bx, bz), z: bz, h: 6.5 + rand() * 5.5, seed: rand(), role: 'suburb' });
+            const pSt0 = roadWebToWorld(cellU, fu0, cellV, fv0, terrainSeedX, terrainSeedZ);
+            // Leave breathing room around the urban highway corridor towers on inner radial edges
+            const dArtApprox = Math.min(fu0, 1 - fu0) * arcSpanU;
+            if (corrProm >= 0.18 && center.r < coreSpan * (1.55 + 1.65 * corrProm) && dArtApprox < 68) {
+              continue;
+            }
+            if (s % 2 === 0) lastSlope = terrainSlopeAt(pSt0.x, pSt0.z);
+            if (lastSlope > 0.22 || inWater(pSt0.x, pSt0.z, 26)) continue;
+
+            const pSt1 = roadWebToWorld(cellU, fu1, cellV, fv1, terrainSeedX, terrainSeedZ);
+            const dx = pSt1.x - pSt0.x;
+            const dz = pSt1.z - pSt0.z;
+            const dl = Math.hypot(dx, dz) || 1;
+            const ux = dx / dl;
+            const uz = dz / dl;
+            const snx = -uz;
+            const snz = ux;
+            const stRot = Math.atan2(-uz, ux);
+            const stY = terrainY(pSt0.x, pSt0.z);
+
+            if (s === Math.floor(nLots * 0.5) && center.r < suburbSpan * 0.68 && lIdx === 1) {
+              pushLamp({ x: pSt0.x, y: stY + 5.8, z: pSt0.z });
+            }
+
+            // Place low-story suburban houses on BOTH sides of the parallel residential street!
+            for (const hSide of [-1, 1]) {
+              if (rand() > fillProb) continue;
+              const setback = 14.5 + rand() * 4.2;
+              const hx = pSt0.x + snx * hSide * setback;
+              const hz = pSt0.z + snz * hSide * setback;
+              if (inWater(hx, hz, 22)) continue;
+              const houseRot = stRot + (hSide > 0 ? Math.PI : 0) + (rand() - 0.5) * 0.04;
+              const hy = lastSlope > 0.03 ? terrainY(hx, hz) : stY;
+              added += addSuburbanHouse(push, rand, hx, hy, hz, houseRot, 0.94 + rand() * 0.12);
+              if ((s + lIdx) % 4 === 0 && hSide === 1 && rand() < 0.42) {
+                const tx = hx + snx * hSide * 8.5;
+                const tz = hz + snz * hSide * 8.5;
+                pushTree({ x: tx, y: hy, z: tz, h: 6.2 + rand() * 5.2, seed: rand(), role: 'suburb' });
+              }
             }
           }
-          if (s === Math.floor(steps * 0.5) && tNorm < 0.65) {
-            pushLamp({ x: curX, y: terrainY(curX, curZ) + 5.8, z: curZ });
-          }
         }
-
-        // Cul-de-sac bulb houses fanned radially around the end of the curved lane!
-        if (steps >= 5 && rand() < 0.65 && !inWater(curX, curZ) && terrainSlopeAt(curX, curZ) < 0.20) {
-          for (let c = -1; c <= 1; c++) {
-            const fanAng = dirAng + c * 0.72;
-            const bx = curX + Math.cos(fanAng) * 19;
-            const bz = curZ + Math.sin(fanAng) * 19;
-            if (inWater(bx, bz)) continue;
-            // Face inward toward the cul-de-sac turnaround circle
-            const bulbRot = Math.atan2(Math.cos(fanAng), -Math.sin(fanAng));
-            added += addSuburbanHouse(push, rand, bx, terrainY(bx, bz), bz, bulbRot, 0.96);
+      } else if (!isArid || rand() < 0.28) {
+        // RURAL TRAPEZOID STRIP-CROP AGRICULTURAL PARCELS:
+        // Seat farmsteads inside the road-bounded trapezoid strips, strictly aligned to bounding roads & furrows!
+        if (rand() < 0.42 && !inWater(center.x, center.z, 46) && terrainSlopeAt(center.x, center.z) < 0.16) {
+          const fuFarm = 0.26 + rand() * 0.48;
+          const fvFarm = 0.26 + rand() * 0.48;
+          const fp0 = roadWebToWorld(cellU, fuFarm, cellV, fvFarm, terrainSeedX, terrainSeedZ);
+          if (!inWater(fp0.x, fp0.z, 44) && terrainSlopeAt(fp0.x, fp0.z) < 0.16) {
+            const alongArt = rand() >= 0.48;
+            const fp1 = alongArt
+              ? roadWebToWorld(cellU, fuFarm, cellV, Math.min(0.95, fvFarm + 0.08), terrainSeedX, terrainSeedZ)
+              : roadWebToWorld(cellU, Math.min(0.95, fuFarm + 0.08), cellV, fvFarm, terrainSeedX, terrainSeedZ);
+            const fieldRot = Math.atan2(-(fp1.z - fp0.z), fp1.x - fp0.x);
+            added += addFarmstead(push, pushTree, rand, fp0.x, fp0.z, fieldRot, terrainY);
+            farmCount++;
+            if (suburbPOIs.length < 40) {
+              suburbPOIs.push({
+                kind: 'farm',
+                name: `Valley Farm ${farmCount}`,
+                x: fp0.x, y: terrainY(fp0.x, fp0.z), z: fp0.z, h: 18, r: 38,
+              });
+            }
           }
         }
       }
     }
   }
 
-  // 2. Organic Winding Valley Neighbourhoods between arterials (non-grid contour lanes!)
-  const pocketCount = Math.round(52 * reach);
-  for (let p = 0; p < pocketCount; p++) {
-    const u01 = (p + 0.5) / Math.max(1, pocketCount);
-    const ang = p * 2.39996 + hash2i(p, 601, seed) * 0.45;
-    const rr = rStart + 160 + Math.pow(u01, 0.82) * (suburbSpan - rStart - 220);
-    const ox = Math.cos(ang) * rr;
-    const oz = Math.sin(ang) * rr;
-    if (inWater(ox, oz) || terrainSlopeAt(ox, oz) > 0.20) continue;
-    const patch = fbm2D(noise, ox / 950 - 4.2, oz / 950 + 8.7, 2);
-    if (patch < 0.42) continue; // leave wide open Voronoi farmland valleys between neighbourhoods!
-
-    const rand = mulberry32(hash2i(p, 617, seed) * 4294967296);
-    const tNorm = clamp01((rr - rStart) / Math.max(250, suburbSpan - rStart));
-    let lx = ox;
-    let lz = oz;
-    // Follow local terrain contour tangent so hillside streets hug elevation contours naturally!
-    const e = 20;
-    const gx = terrainY(ox + e, oz) - terrainY(ox - e, oz);
-    const gz = terrainY(ox, oz + e) - terrainY(ox, oz - e);
-    let laneAng = Math.hypot(gx, gz) > 0.4
-      ? Math.atan2(gx, -gz)
-      : ang + Math.PI * 0.5 + (rand() - 0.5) * 0.8;
-    const bend = (rand() - 0.5) * 0.09;
-    const lots = 6 + Math.floor(rand() * 6);
-
-    for (let s = 0; s < lots; s++) {
-      laneAng += bend + Math.sin(s * 0.8 + p) * 0.05;
-      const dx = Math.cos(laneAng);
-      const dz = Math.sin(laneAng);
-      lx += dx * 25;
-      lz += dz * 25;
-      if (inWater(lx, lz) || terrainSlopeAt(lx, lz) > 0.22) break;
-      const snx = -dz;
-      const snz = dx;
-      for (const hSide of [-1, 1]) {
-        if (rand() > 0.78 - tNorm * 0.22) continue;
-        const hx = lx + snx * hSide * (14 + rand() * 4);
-        const hz = lz + snz * hSide * (14 + rand() * 4);
-        if (inWater(hx, hz)) continue;
-        const houseRot = Math.atan2(-dz, dx) + (hSide > 0 ? Math.PI : 0);
-        added += addSuburbanHouse(push, rand, hx, terrainY(hx, hz), hz, houseRot, 0.96);
-      }
-      if (s === 0 && rand() < 0.22) {
-        added += addSuburbanShop(push, pushSign, pushLamp, rand, lx - snx * 20, terrainY(lx, lz), lz - snz * 20, Math.atan2(-dz, dx));
-      }
+  // Guarantee at least 3 farmsteads even on ultra-lush / compact reach worlds
+  if (farmCount < 3) {
+    for (let f = 0; f < 16 && farmCount < 3; f++) {
+      const cellU = (f * 5 + 2) % 12;
+      const cellV = Math.max(vMin + 2, Math.min(vMax, vMin + 4 + (f % 5)));
+      const fp0 = roadWebToWorld(cellU, 0.5, cellV, 0.5, terrainSeedX, terrainSeedZ);
+      if (inWater(fp0.x, fp0.z, 44) || terrainSlopeAt(fp0.x, fp0.z) > 0.18) continue;
+      const fp1 = roadWebToWorld(cellU, 0.58, cellV, 0.5, terrainSeedX, terrainSeedZ);
+      const fieldRot = Math.atan2(-(fp1.z - fp0.z), fp1.x - fp0.x);
+      const rand = mulberry32(hash2i(f, 709, seed) * 4294967296);
+      added += addFarmstead(push, pushTree, rand, fp0.x, fp0.z, fieldRot, terrainY);
+      farmCount++;
+      suburbPOIs.push({
+        kind: 'farm',
+        name: `Valley Farm ${farmCount}`,
+        x: fp0.x, y: terrainY(fp0.x, fp0.z), z: fp0.z, h: 18, r: 38,
+      });
     }
   }
 
-  // 3. Regional Power Stations + High-Voltage Transmission Pylon Lines (3–5 complexes)
+  // 2. Regional Power Stations + High-Voltage Transmission Pylon Lines (3–5 dry-land complexes)
   const powerCount = Math.max(3, Math.round(3 + reach));
   for (let p = 0; p < powerCount; p++) {
     const rand = mulberry32(hash2i(p, 653, seed) * 4294967296);
-    for (let attempt = 0; attempt < 18; attempt++) {
-      const a = (p / powerCount) * Math.PI * 2 + 0.38 + attempt * 0.31;
-      const rr = rStart + (suburbSpan - rStart) * (0.24 + (p % 3) * 0.22);
-      const px = Math.cos(a) * rr;
-      const pz = Math.sin(a) * rr;
-      if (inWater(px, pz) || terrainSlopeAt(px, pz) > 0.16) continue;
-      const rot = -a + (rand() - 0.5) * 0.3;
-      added += addPowerStation(push, pushBeacon, pushLamp, rand, px, pz, rot, terrainY, inWater, terrainSlopeAt);
+    for (let attempt = 0; attempt < 24; attempt++) {
+      const cellU = (p * 3 + attempt) % 12;
+      const cellV = Math.max(vMin + 1, Math.min(vMax - 1, vMin + 2 + ((p * 2 + attempt) % Math.max(2, vMax - vMin - 2))));
+      const pt = roadWebToWorld(cellU, 0.52, cellV, 0.52, terrainSeedX, terrainSeedZ);
+      if (inWater(pt.x, pt.z, 58) || terrainSlopeAt(pt.x, pt.z) > 0.16) continue;
+      const ptNext = roadWebToWorld(cellU, 0.60, cellV, 0.52, terrainSeedX, terrainSeedZ);
+      const rot = Math.atan2(-(ptNext.z - pt.z), ptNext.x - pt.x);
+      added += addPowerStation(push, pushBeacon, pushLamp, rand, pt.x, pt.z, rot, terrainY, inWater, terrainSlopeAt);
       suburbPOIs.push({
         kind: 'power',
         name: `Sector ${p + 1} Power Station`,
-        x: px, y: terrainY(px, pz), z: pz, h: 38, r: 52,
+        x: pt.x, y: terrainY(pt.x, pt.z), z: pt.z, h: 38, r: 52,
       });
       break;
-    }
-  }
-
-  // 4. Rural Farmsteads seated inside Voronoi Agricultural Fields (extending past >3.5 km!)
-  const farmCandidates = Math.round(46 * Math.max(0.8, reach));
-  const usedCells = new Set();
-  for (let f = 0; f < farmCandidates; f++) {
-    const u01 = (f + 0.5) / farmCandidates;
-    const a = f * 2.39996 + 1.13;
-    const rr = rStart + 320 + Math.pow(u01, 0.72) * (suburbSpan * 1.04 - rStart - 260);
-    const qx = Math.cos(a) * rr;
-    const qz = Math.sin(a) * rr;
-    const cell = evalVoronoiField(qx, qz, terrainSeedX, terrainSeedZ);
-    const cellKey = `${Math.round(cell.cx / 80)},${Math.round(cell.cz / 80)}`;
-    if (usedCells.has(cellKey)) continue;
-    if (inWater(cell.cx, cell.cz) || terrainSlopeAt(cell.cx, cell.cz) > 0.16) continue;
-    // Prefer open agricultural valleys (where suburban pocket noise is lower or further out)
-    const patch = fbm2D(noise, cell.cx / 950 - 4.2, cell.cz / 950 + 8.7, 2);
-    if (rr < rStart + 1100 && patch > 0.52) continue;
-    usedCells.add(cellKey);
-
-    const rand = mulberry32(hash2i(f, 701, seed) * 4294967296);
-    added += addFarmstead(push, pushTree, rand, cell.cx, cell.cz, cell.angle, terrainY);
-    if (suburbPOIs.length < 36) {
-      suburbPOIs.push({
-        kind: 'farm',
-        name: `Valley Farm ${usedCells.size}`,
-        x: cell.cx, y: terrainY(cell.cx, cell.cz), z: cell.cz, h: 18, r: 38,
-      });
     }
   }
 
