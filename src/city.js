@@ -1093,11 +1093,27 @@ export function generateCity(
     radius, suburbSpan, waterMode, waterAmount, shoreDist, terrainMode, terrainScale,
     coastAngle, terrainSeedX, terrainSeedZ,
   });
-  const transit = makeTransitNetwork(seed, radius, collider, inWater, transitAmt);
+  const transit = makeTransitNetwork(seed, radius, collider, inWater, transitAmt, {
+    span: radius * CELL, coastAngle, waterMode, terrainSeedX, terrainSeedZ, shoreDist, waterAmount,
+  });
   const lanes = makeLanes(seed, radius, boulevards, collider, terrainSeedX, terrainSeedZ, inWater, suburbSpan, transit, bridges);
   const streetInfra = makeStreetInfrastructure(seed, radius, boulevards, places, inWater);
   const lamps = makeLamps(seed, radius, boulevards, mediaZone, inWater);
   for (let i = 0; i < subLamps.length; i++) lamps.push(subLamps[i]);
+  const primaryLampCount = lamps.length;
+  // Secondary side-street lamps (appended after primaryLampCount so lamps.slice(0, 64) stays strictly on avenues,
+  // and lampDensity > 1.0 illuminates secondary streets too!)
+  {
+    const spanS = radius * CELL + CELL * 0.4;
+    for (let s = -radius; s <= radius; s++) {
+      if (((s % 4) + 4) % 4 === 0 || Math.abs(s % 2) !== 0) continue;
+      const p = s * CELL;
+      for (let zc = -spanS; zc <= spanS; zc += 76) {
+        if (!inWater(p + 8.5, zc, 14)) lamps.push({ x: p + 8.5, y: 6.8, z: zc, secondary: true });
+        if (!inWater(p - 8.5, zc, 14)) lamps.push({ x: p - 8.5, y: 6.8, z: zc, secondary: true });
+      }
+    }
+  }
   const trees = makeTrees(seed, radius, water, lmCells, places, boulevards, sites, inRestricted, vegCover, vegScale);
   for (let i = 0; i < subTrees.length; i++) trees.push(subTrees[i]);
   const treeLinks = makeTreeConnections(trees, seed);
@@ -1109,7 +1125,7 @@ export function generateCity(
     count: n, towers, maxY, x, y, z, w, h, d, s, kind, style, rot,
     districts, landmarks, places, suburbPOIs, mediaZone, lanes, transit,
     harbor, bridges, spaceport, streetInfra,
-    beacons, lamps, sites, water, boulevards, trees, treeLinks, bills, signs, holos,
+    beacons, lamps, primaryLampCount, sites, water, boulevards, trees, treeLinks, bills, signs, holos,
   };
 }
 
@@ -1633,7 +1649,7 @@ function makeLanes(
     const x2 = isNS ? coord + 14 : bSpan;
     const z2 = isNS ? bSpan : coord - 14;
     pushSeg(x1, z1, (x1 + x2) * 0.5, (z1 + z2) * 0.5, x2, z2, yB, yB, 38 + R(k, 24) * 22, 'blimp', {
-      axis: isNS ? 'ns' : 'ew', deck: 5, kind: 'street',
+      axis: isNS ? 'ns' : 'ew', deck: 5, kind: 'airway',
     });
   }
 
@@ -3784,7 +3800,7 @@ function makeRoundedRectSegments(xMin, xMax, zMin, zMax, cr) {
   ];
 }
 
-function makeTransitNetwork(seed, radius, collider, inWater, transitAmt = 1.0) {
+function makeTransitNetwork(seed, radius, collider, inWater, transitAmt = 1.0, coastCfg = null) {
   if (transitAmt <= 0.01) {
     return { active: false, amt: 0, lines: [], stations: [] };
   }
@@ -3792,6 +3808,32 @@ function makeTransitNetwork(seed, radius, collider, inWater, transitAmt = 1.0) {
   const innerG = radius >= 4 ? 4 : Math.max(1, Math.min(2, radius));
   const outerG = Math.max(2, Math.min(radius, Math.floor(radius / 2) * 2 || 2));
   const reachG = Math.max(innerG, radius);
+
+  const inOpenSea = (px, pz) => {
+    if (!coastCfg) return false;
+    return evalCoastSignedDist(
+      px, pz, coastCfg.span, coastCfg.coastAngle, coastCfg.waterMode,
+      coastCfg.terrainSeedX, coastCfg.terrainSeedZ, coastCfg.shoreDist, coastCfg.waterAmount
+    ) < 18.0;
+  };
+  const clampBoxDry = (sp) => {
+    let { xMin, xMax, zMin, zMax } = sp;
+    let guard = 0;
+    while (xMax - xMin >= CELL * 2 && guard++ < 16) {
+      const midZ = (zMin + zMax) * 0.5;
+      if (inOpenSea(xMax, zMin) || inOpenSea(xMax, midZ) || inOpenSea(xMax, zMax)) { xMax -= CELL; continue; }
+      if (inOpenSea(xMin, zMin) || inOpenSea(xMin, midZ) || inOpenSea(xMin, zMax)) { xMin += CELL; continue; }
+      break;
+    }
+    guard = 0;
+    while (zMax - zMin >= CELL * 2 && guard++ < 16) {
+      const midX = (xMin + xMax) * 0.5;
+      if (inOpenSea(xMin, zMax) || inOpenSea(midX, zMax) || inOpenSea(xMax, zMax)) { zMax -= CELL; continue; }
+      if (inOpenSea(xMin, zMin) || inOpenSea(midX, zMin) || inOpenSea(xMax, zMin)) { zMin += CELL; continue; }
+      break;
+    }
+    return { ...sp, xMin, xMax, zMin, zMax };
+  };
 
   const specs = [
     // Line 0: North-South Grand Central Trunk (runs along x = 0 Central Ave & x = -innerG Ave)
@@ -3818,7 +3860,7 @@ function makeTransitNetwork(seed, radius, collider, inWater, transitAmt = 1.0) {
       zMin: -outerG * CELL, zMax: outerG * CELL,
       baseY: 38.5, speed: 96, cr: 22,
     },
-  ];
+  ].map(clampBoxDry);
 
   const isLoopClearAtY = (segs, yTest) => {
     if (!collider) return true;

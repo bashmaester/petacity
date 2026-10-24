@@ -131,14 +131,23 @@ export function makeUniforms() {
     uBillMono: { value: 0 },
     uWaterDeep: { value: col('#0c2033') },
     uWaterShallow: { value: col('#2a6a8c') },
+    uWaterScale: { value: 1.0 },
+    uWaterChop: { value: 1.0 },
+    uWaterFoam: { value: 0.85 },
+    uWaterRefl: { value: 1.15 },
+    uWaterContrast: { value: 0.12 },
+    uWaterWarp: { value: 0.40 },
     uTint: { value: 0.72 },
     uWaterAmt: { value: 1.0 },
     uShoreDist: { value: 1.0 },
     uCloudSeed: { value: 0.0 },
     uCloudEvol: { value: 0.35 },
     uCloudLac: { value: 2.08 },
-    uCloudElev: { value: 260.0 },
-    uCloudRange: { value: 780.0 },
+    uCloudElev: { value: 1.0 },
+    uCloudRange: { value: 1.0 },
+    uCloudLayerElev: { value: new THREE.Vector3(210.0, 680.0, 1620.0) },
+    uCloudLayerThick: { value: new THREE.Vector3(220.0, 620.0, 540.0) },
+    uCloudLayerDens: { value: new THREE.Vector3(0.0, 1.0, 0.72) },
     uSignAmt: { value: 1.0 },
     uMegaWrap: { value: 1.0 },
     uGlyphStyle: { value: 0.0 },
@@ -237,9 +246,20 @@ export function makeCurvedBasicMaterial(U, hex = '#ffffff', { vertexColors = fal
  * reaching strict 0.0 inside r <= 0.88 (zero polygonal silhouettes or disc edges;
  * the horizon-to-horizon cloud canopy is raymarched seamlessly inside SKY_FRAG).
  */
+export const CLOUD_LAYER_PRESETS = [
+  { id: 'all3', name: 'All 3 Decks (Low + Mid + High)', dens: [0.65, 1.00, 0.78], elev: [210, 680, 1620], thick: [220, 620, 540] },
+  { id: 'mid-high', name: 'Mid + High Decks (Classic Sky)', dens: [0.00, 1.00, 0.72], elev: [210, 680, 1620], thick: [220, 620, 540] },
+  { id: 'low-mid', name: 'Low Tower Mist + Mid Cumulus', dens: [0.82, 0.95, 0.00], elev: [185, 650, 1620], thick: [210, 580, 540] },
+  { id: 'low-only', name: 'Low Deck Only (Tower Mist)', dens: [1.05, 0.00, 0.00], elev: [175, 680, 1620], thick: [230, 620, 540] },
+  { id: 'mid-only', name: 'Mid Deck Only (Cumulus)', dens: [0.00, 1.05, 0.00], elev: [210, 680, 1620], thick: [220, 660, 540] },
+  { id: 'high-only', name: 'High Deck Only (Cirrus Canopy)', dens: [0.00, 0.00, 1.08], elev: [210, 680, 1680], thick: [220, 620, 580] },
+  { id: 'low-high', name: 'Split Sky (Low + High Decks)', dens: [0.78, 0.00, 0.88], elev: [195, 680, 1680], thick: [210, 620, 560] },
+  { id: 'custom', name: 'Custom Per-Layer Mix', dens: null, elev: null, thick: null },
+];
+
 export function buildCloudLayers(cloudMat, seed = 4417) {
   const group = new THREE.Group();
-  const puffCount = 48;
+  const puffCount = 60;
   const baseBox = new THREE.BoxGeometry(1, 1, 1);
   const instGeo = new THREE.InstancedBufferGeometry();
   instGeo.index = baseBox.index;
@@ -249,14 +269,17 @@ export function buildCloudLayers(cloudMat, seed = 4417) {
   const centers = new Float32Array(puffCount * 3);
   const scales = new Float32Array(puffCount * 3);
   const seeds = new Float32Array(puffCount);
+  const layers = new Float32Array(puffCount);
 
   for (let i = 0; i < puffCount; i++) {
     const r01 = hash2i(i, 17, seed ^ 0x3c91);
     const a01 = hash2i(i, 29, seed ^ 0x3c91);
     const h01 = hash2i(i, 43, seed ^ 0x3c91);
-    const dist = 220 + Math.pow(r01, 0.78) * 4400;
+    // Distribute 3D fly-through volumetric puffs across Low (0: 18), Mid (1: 26), and High (2: 16) decks!
+    const layerIdx = i < 18 ? 0 : (i < 44 ? 1 : 2);
+    const dist = (layerIdx === 0 ? 150 : 220) + Math.pow(r01, 0.78) * (layerIdx === 2 ? 5200 : 4400);
     const ang = a01 * Math.PI * 2;
-    const alt = 330 + h01 * 390;
+    const alt = 185 + h01 * 315;
     const sx = 460 + hash2i(i, 53, seed ^ 0x3c91) * 580;
     const sy = 155 + hash2i(i, 61, seed ^ 0x3c91) * 165;
     const sz = 430 + hash2i(i, 71, seed ^ 0x3c91) * 540;
@@ -267,11 +290,13 @@ export function buildCloudLayers(cloudMat, seed = 4417) {
     scales[i * 3 + 1] = sy;
     scales[i * 3 + 2] = sz;
     seeds[i] = 0.05 + hash2i(i, 97, seed ^ 0x3c91) * 0.94;
+    layers[i] = layerIdx;
   }
 
   instGeo.setAttribute('aCenter', new THREE.InstancedBufferAttribute(centers, 3));
   instGeo.setAttribute('aScale', new THREE.InstancedBufferAttribute(scales, 3));
   instGeo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seeds, 1));
+  instGeo.setAttribute('aLayer', new THREE.InstancedBufferAttribute(layers, 1));
 
   const puffs = new THREE.Mesh(instGeo, cloudMat);
   puffs.frustumCulled = false;
@@ -288,6 +313,7 @@ export function makeWorld(U) {
     uniforms: pick(U, [
       'uZen', 'uHor', 'uSkySunCol', 'uSunDir', 'uSolarDir', 'uCloudCol', 'uStars', 'uStarRot',
       'uCloud', 'uCloudType', 'uCloudStyle', 'uCloudSeed', 'uCloudEvol', 'uCloudLac', 'uCloudElev', 'uCloudRange',
+      'uCloudLayerElev', 'uCloudLayerThick', 'uCloudLayerDens',
       'uHaze', 'uTime', 'uSunGlow', 'uSat', 'uMoonDir', 'uMoonSize', 'uMoonGlow', 'uMoonPhase',
       'uFlash', 'uWorldCurve', 'uPlanetR',
     ]),
@@ -322,6 +348,7 @@ export function makeWorld(U) {
     uniforms: pick(U, [
       'uCloudCol', 'uSkySunCol', 'uSunDir', 'uFogCol', 'uSunFogCol', 'uHazeSun',
       'uCloud', 'uCloudType', 'uCloudStyle', 'uCloudSeed', 'uCloudEvol', 'uCloudLac', 'uCloudElev', 'uCloudRange',
+      'uCloudLayerElev', 'uCloudLayerThick', 'uCloudLayerDens',
       'uSunGlow', 'uTime', 'uSat',
       'uPoolCol', 'uLightK', 'uWorldCurve', 'uPlanetR',
     ]),
@@ -408,7 +435,9 @@ export function makeWorld(U) {
     vertexShader: WATER_VERT,
     fragmentShader: WATER_FRAG,
     uniforms: pick(U, [
-      'uWaterDeep', 'uWaterShallow', 'uSunDir', 'uSkySunCol', 'uFogCol', 'uSunFogCol',
+      'uWaterDeep', 'uWaterShallow',
+      'uWaterScale', 'uWaterChop', 'uWaterFoam', 'uWaterRefl', 'uWaterContrast', 'uWaterWarp',
+      'uSunDir', 'uSkySunCol', 'uFogCol', 'uSunFogCol',
       'uCitySpan', 'uSuburbSpan', 'uGroundRadius',
       'uWaterMode', 'uWaterAmt', 'uShoreDist', 'uTerrainMode', 'uTerrainScale', 'uCoastAngle', 'uTerrainSeed',
       'uPoolCol', 'uLightK', 'uShipWakes',
@@ -544,6 +573,7 @@ export function growCity(
       airAmt: envOpts.airAmt ?? 1.0,
       signAmt: envOpts.signAmt ?? 1.0,
       megaWrap: envOpts.megaWrap ?? 1.0,
+      lampDensity: envOpts.lampDensity ?? 1.0,
     })
     : generateCity(seed, radius, suburbReach);
   if (envOpts && envOpts.U) syncCityEnvironmentUniforms(envOpts.U, city);
@@ -1019,12 +1049,19 @@ export function buildBeacons(city, beaconMat) {
   geo.setAttribute('aSize', new THREE.BufferAttribute(size, 1));
   const points = new THREE.Points(geo, beaconMat);
   points.frustumCulled = false;
+  points.setDensity = (d = 1.0) => {
+    const f = Math.max(0, Math.min(1, Number(d) / 1.25));
+    const active = Math.round(n * (Number(d) >= 1.0 ? 1.0 : Number(d)));
+    geo.setDrawRange(0, Math.max(0, Math.min(n, active)));
+    points.visible = active > 0 && f >= 0;
+  };
   return points;
 }
 
-/** Steady street-lamp glow along the avenues. */
+/** Steady street-lamp glow along the avenues (plus optional secondary side-street density up to 2.0x). */
 export function makeLamps(city, lampMat) {
   const n = city.lamps.length;
+  const primaryN = city.primaryLampCount || n;
   const geo = new THREE.BufferGeometry();
   const pos = new Float32Array(n * 3);
   const phase = new Float32Array(n);
@@ -1042,6 +1079,14 @@ export function makeLamps(city, lampMat) {
   geo.setAttribute('aSize', new THREE.BufferAttribute(size, 1));
   const points = new THREE.Points(geo, lampMat);
   points.frustumCulled = false;
+  points.setDensity = (d = 1.0) => {
+    const v = Math.max(0, Number(d));
+    const active = v <= 1.0
+      ? Math.round(primaryN * v)
+      : Math.round(primaryN + (n - primaryN) * Math.min(1.0, v - 1.0));
+    geo.setDrawRange(0, Math.max(0, Math.min(n, active)));
+    points.visible = active > 0;
+  };
   return points;
 }
 
@@ -2873,9 +2918,10 @@ export function makeSearchlights(city, beamMat, count = 34) {
     }
   }
   tall.sort((a, b) => b.top - a.top);
-  const needTowers = Math.max(8, count - spots.length + 6);
+  const maxPool = Math.max(8, count * 2);
+  const needTowers = Math.max(12, maxPool - spots.length + 6);
   const pickStep = Math.max(1, Math.floor(tall.length / needTowers));
-  for (let k = 0; k < tall.length && spots.length < count + 8; k += pickStep) {
+  for (let k = 0; k < tall.length && spots.length < maxPool; k += pickStep) {
     const sp = tall[k];
     spots.push({
       x: sp.x, y: sp.y, z: sp.z, r: sp.r,
@@ -2884,9 +2930,12 @@ export function makeSearchlights(city, beamMat, count = 34) {
     });
   }
   const pivots = [];
-  const use = spots.slice(0, Math.max(2, count));
+  const baseCount = Math.max(2, count);
+  const use = spots.slice(0, Math.max(baseCount, maxPool));
   let baseK = beamMat.uniforms && beamMat.uniforms.uBeamK ? beamMat.uniforms.uBeamK.value : 0.22;
   let searchAmt = 1.0;
+  let countFactor = 1.0;
+  let activeCount = Math.min(use.length, baseCount);
   let elapsed = 0;
   const LOOP_OMEGA = (Math.PI * 2) / 120.0; // integer harmonics of PC_LOOP = 120s
   for (let k = 0; k < use.length; k++) {
@@ -2901,6 +2950,7 @@ export function makeSearchlights(city, beamMat, count = 34) {
     const tilt = sp.tilt ?? (0.10 + sp.r * 0.32);
     mesh.rotation.z = tilt;
     mesh.frustumCulled = false;
+    pivot.visible = k < activeCount;
     pivot.add(mesh);
     group.add(pivot);
     const fm = sp.fast || 1;
@@ -2919,9 +2969,18 @@ export function makeSearchlights(city, beamMat, count = 34) {
   function syncBaseFromLook(lookBeamK) {
     if (Number.isFinite(lookBeamK)) baseK = lookBeamK;
   }
+  function setCountFactor(factor = 1.0) {
+    countFactor = Math.max(0, Math.min(2.0, Number(factor)));
+    activeCount = Math.min(use.length, Math.round(baseCount * countFactor));
+    for (let k = 0; k < pivots.length; k++) {
+      pivots[k].pivot.visible = k < activeCount;
+    }
+    group.visible = searchAmt > 0.005 && activeCount > 0;
+    return activeCount;
+  }
   function setAmount(amt) {
     searchAmt = Math.max(0, Number(amt) ?? 1.0);
-    group.visible = searchAmt > 0.005;
+    group.visible = searchAmt > 0.005 && activeCount > 0;
     if (beamMat.uniforms && beamMat.uniforms.uBeamK) {
       beamMat.uniforms.uBeamK.value = baseK * searchAmt * (0.84 + 0.16 * Math.sin(elapsed * LOOP_OMEGA * 11));
     }
@@ -2929,23 +2988,30 @@ export function makeSearchlights(city, beamMat, count = 34) {
   function update(dt) {
     elapsed = (elapsed + dt) % 120.0;
     const tau = elapsed * LOOP_OMEGA;
-    for (const pv of pivots) {
+    for (let k = 0; k < activeCount; k++) {
+      const pv = pivots[k];
       pv.pivot.rotation.y = pv.baseYaw + tau * pv.yawHarm;
       pv.mesh.rotation.z = pv.tilt + Math.sin(tau * pv.wobHarm + pv.phase) * 0.28;
       pv.mesh.rotation.x = Math.cos(tau * pv.nodHarm + pv.phase * 1.3) * 0.18;
     }
-    group.visible = searchAmt > 0.005;
+    group.visible = searchAmt > 0.005 && activeCount > 0;
     // gentle shared intensity pulse — seamlessly periodic over PC_LOOP = 120s
     if (beamMat.uniforms && beamMat.uniforms.uBeamK) {
       beamMat.uniforms.uBeamK.value = baseK * searchAmt * (0.84 + 0.16 * Math.sin(tau * 11));
     }
   }
-  return { group, pivots, update, setAmount, syncBaseFromLook, get amount() { return searchAmt; } };
+  return {
+    group, pivots, update, setAmount, setCountFactor, syncBaseFromLook,
+    get amount() { return searchAmt; },
+    get activeCount() { return activeCount; },
+    get countFactor() { return countFactor; },
+  };
 }
 
 /** Soft warm light pools lying on the ground under the street lamps. */
 export function makeLightPools(city, poolMat) {
   const n = city.lamps.length;
+  const primaryN = city.primaryLampCount || n;
   const geo = new THREE.CircleGeometry(1, 20).rotateX(-Math.PI / 2);
   const mesh = new THREE.InstancedMesh(geo, poolMat, Math.max(1, n));
   mesh.frustumCulled = false;
@@ -2962,6 +3028,14 @@ export function makeLightPools(city, poolMat) {
     mesh.setMatrixAt(i, m);
   }
   mesh.instanceMatrix.needsUpdate = true;
+  mesh.setDensity = (d = 1.0) => {
+    const v = Math.max(0, Number(d));
+    const active = v <= 1.0
+      ? Math.round(primaryN * v)
+      : Math.round(primaryN + (n - primaryN) * Math.min(1.0, v - 1.0));
+    mesh.count = Math.max(0, Math.min(n, active));
+    mesh.visible = mesh.count > 0;
+  };
   return mesh;
 }
 
@@ -4086,6 +4160,15 @@ export function applyLook(U, look, tune = { win: 1, glow: 1, fog: 1 }) {
   if (tune.cloudLac !== undefined && U.uCloudLac) U.uCloudLac.value = tune.cloudLac;
   if (tune.cloudElev !== undefined && U.uCloudElev) U.uCloudElev.value = tune.cloudElev;
   if (tune.cloudRange !== undefined && U.uCloudRange) U.uCloudRange.value = tune.cloudRange;
+  if (Array.isArray(tune.cloudLayerElev) && U.uCloudLayerElev) U.uCloudLayerElev.value.set(tune.cloudLayerElev[0], tune.cloudLayerElev[1], tune.cloudLayerElev[2]);
+  if (Array.isArray(tune.cloudLayerThick) && U.uCloudLayerThick) U.uCloudLayerThick.value.set(tune.cloudLayerThick[0], tune.cloudLayerThick[1], tune.cloudLayerThick[2]);
+  if (Array.isArray(tune.cloudLayerDens) && U.uCloudLayerDens) U.uCloudLayerDens.value.set(tune.cloudLayerDens[0], tune.cloudLayerDens[1], tune.cloudLayerDens[2]);
+  if (tune.waterScale !== undefined && U.uWaterScale) U.uWaterScale.value = tune.waterScale;
+  if (tune.waterChop !== undefined && U.uWaterChop) U.uWaterChop.value = tune.waterChop;
+  if (tune.waterFoam !== undefined && U.uWaterFoam) U.uWaterFoam.value = tune.waterFoam;
+  if (tune.waterRefl !== undefined && U.uWaterRefl) U.uWaterRefl.value = tune.waterRefl;
+  if (tune.waterContrast !== undefined && U.uWaterContrast) U.uWaterContrast.value = tune.waterContrast;
+  if (tune.waterWarp !== undefined && U.uWaterWarp) U.uWaterWarp.value = tune.waterWarp;
   if (tune.signAmt !== undefined && U.uSignAmt) U.uSignAmt.value = tune.signAmt;
   if (tune.megaWrap !== undefined && U.uMegaWrap) U.uMegaWrap.value = tune.megaWrap;
   if (tune.glyphStyle !== undefined && U.uGlyphStyle) U.uGlyphStyle.value = tune.glyphStyle;
@@ -4310,9 +4393,10 @@ export function applyTime(U, look, hours = 12, tune = { lights: 1, glow: 1 }) {
   const baseWinGlow = look.tower.winGlow;
   const nightFloorWinGlow = dNight > 0 ? Math.max(baseWinGlow, 0.82 * dNight) : baseWinGlow;
   U.uWinGlow.value = ((nightFloorWinGlow * (tune.glow ?? 1)) * glowR(cur)) / glowR(ref);
-  U.uWinDensity.value = clamp01(
+  const baseWinOcc = clamp01(
     look.tower.winDensity + dNight * Math.max(0, 0.58 - look.tower.winDensity) - dDay * 0.14 * look.tower.winDensity
   );
+  U.uWinDensity.value = Math.max(0, Math.min(1.45, baseWinOcc * (tune.win ?? 1)));
 
   // stars: identity at defTime, stronger through the night, deepest pre-dawn, faded in bright day
   const starFloor = 0.4 * (1 - clamp01(look.sky.haze));
@@ -4335,6 +4419,15 @@ export function applyTime(U, look, hours = 12, tune = { lights: 1, glow: 1 }) {
   if (tune.cloudLac !== undefined && U.uCloudLac) U.uCloudLac.value = tune.cloudLac;
   if (tune.cloudElev !== undefined && U.uCloudElev) U.uCloudElev.value = tune.cloudElev;
   if (tune.cloudRange !== undefined && U.uCloudRange) U.uCloudRange.value = tune.cloudRange;
+  if (Array.isArray(tune.cloudLayerElev) && U.uCloudLayerElev) U.uCloudLayerElev.value.set(tune.cloudLayerElev[0], tune.cloudLayerElev[1], tune.cloudLayerElev[2]);
+  if (Array.isArray(tune.cloudLayerThick) && U.uCloudLayerThick) U.uCloudLayerThick.value.set(tune.cloudLayerThick[0], tune.cloudLayerThick[1], tune.cloudLayerThick[2]);
+  if (Array.isArray(tune.cloudLayerDens) && U.uCloudLayerDens) U.uCloudLayerDens.value.set(tune.cloudLayerDens[0], tune.cloudLayerDens[1], tune.cloudLayerDens[2]);
+  if (tune.waterScale !== undefined && U.uWaterScale) U.uWaterScale.value = tune.waterScale;
+  if (tune.waterChop !== undefined && U.uWaterChop) U.uWaterChop.value = tune.waterChop;
+  if (tune.waterFoam !== undefined && U.uWaterFoam) U.uWaterFoam.value = tune.waterFoam;
+  if (tune.waterRefl !== undefined && U.uWaterRefl) U.uWaterRefl.value = tune.waterRefl;
+  if (tune.waterContrast !== undefined && U.uWaterContrast) U.uWaterContrast.value = tune.waterContrast;
+  if (tune.waterWarp !== undefined && U.uWaterWarp) U.uWaterWarp.value = tune.waterWarp;
   if (tune.tint !== undefined && U.uTint) U.uTint.value = tune.tint;
   if (tune.signAmt !== undefined && U.uSignAmt) U.uSignAmt.value = tune.signAmt;
   if (tune.megaWrap !== undefined && U.uMegaWrap) U.uMegaWrap.value = tune.megaWrap;
@@ -5381,8 +5474,9 @@ export function buildStreetInfrastructure(city, U) {
     lensHeads.push({ x: hx, y: baseY + poleH - 0.90, z: hz, rotY: faceRot, phase: sg.phase, axis: sigAxis });
   }
 
+  let mastMesh = null;
   if (mastParts.length > 0) {
-    const mastMesh = new THREE.InstancedMesh(unitBox, mastMat, mastParts.length);
+    mastMesh = new THREE.InstancedMesh(unitBox, mastMat, mastParts.length);
     mastMesh.frustumCulled = false;
     for (let i = 0; i < mastParts.length; i++) {
       const mp = mastParts[i];
@@ -5494,6 +5588,9 @@ export function buildStreetInfrastructure(city, U) {
 
   // 4. Sidewalk Transit Shelters, Backlit Ad Kiosks & Plaza Benches / Totems
   const furniture = infra.furniture || [];
+  let shelterInst = null;
+  let benchInst = null;
+  let kioskGlowInst = null;
   if (furniture.length > 0) {
     const shelterBoxes = [];
     const benchBoxes = [];
@@ -5515,9 +5612,10 @@ export function buildStreetInfrastructure(city, U) {
       }
     }
     const buildInst = (arr, mat) => {
-      if (!arr.length) return;
+      if (!arr.length) return null;
       const im = new THREE.InstancedMesh(unitBox, mat, arr.length);
       im.frustumCulled = false;
+      im.userData.maxCount = arr.length;
       for (let i = 0; i < arr.length; i++) {
         const b = arr[i];
         dummy.position.set(b.x, b.y, b.z);
@@ -5528,13 +5626,16 @@ export function buildStreetInfrastructure(city, U) {
       }
       im.instanceMatrix.needsUpdate = true;
       group.add(im);
+      return im;
     };
-    buildInst(shelterBoxes, shelterGlassMat);
-    buildInst(benchBoxes, benchMat);
-    buildInst(glowBoxes, kioskGlowMat);
+    shelterInst = buildInst(shelterBoxes, shelterGlassMat);
+    benchInst = buildInst(benchBoxes, benchMat);
+    kioskGlowInst = buildInst(glowBoxes, kioskGlowMat);
   }
 
   let signalGlow = 1.0;
+  let signalDensity = 1.0;
+  let activeHeads = lensHeads.length;
   let isMono = false;
   const colRed = new THREE.Color();
   const colAmb = new THREE.Color();
@@ -5544,7 +5645,7 @@ export function buildStreetInfrastructure(city, U) {
 
   function refreshSignalColors(timeSec, force = false) {
     if (!lensMesh || !lensHeads.length) return;
-    lensMesh.visible = signalGlow > 0.01;
+    lensMesh.visible = signalGlow > 0.01 && activeHeads > 0;
     if (!lensMesh.visible) return;
     // Signals transition every ~1.9s; quantize updates to 10Hz unless forced for near-zero CPU overhead!
     const bucket = Math.floor(timeSec * 10);
@@ -5563,7 +5664,7 @@ export function buildStreetInfrastructure(city, U) {
     }
     colOff.setRGB(0.06, 0.07, 0.09);
 
-    for (let h = 0; h < lensHeads.length; h++) {
+    for (let h = 0; h < activeHeads; h++) {
       const hd = lensHeads[h];
       const st = evalTrafficSignalState(timeSec, hd.phase, hd.axis); // 0=Green, 1=Amber, 2=Red
       const base = h * 3;
@@ -5585,6 +5686,27 @@ export function buildStreetInfrastructure(city, U) {
     refreshSignalColors(elapsed, true);
   }
 
+  function setDensity(val = 1.0) {
+    signalDensity = Math.max(0, Math.min(1.5, Number(val)));
+    const f = Math.min(1.0, signalDensity);
+    activeHeads = Math.round(lensHeads.length * f);
+    if (mastMesh) {
+      mastMesh.count = activeHeads * 3;
+      mastMesh.visible = activeHeads > 0;
+    }
+    if (lensMesh) {
+      lensMesh.count = activeHeads * 3;
+      lensMesh.visible = signalGlow > 0.01 && activeHeads > 0;
+    }
+    for (const im of [shelterInst, benchInst, kioskGlowInst]) {
+      if (im && im.userData.maxCount) {
+        im.count = Math.round(im.userData.maxCount * f);
+        im.visible = im.count > 0;
+      }
+    }
+    refreshSignalColors(elapsed, true);
+  }
+
   function setLook(look) {
     isMono = !!(look && look.signals && look.signals.billMono > 0.5);
     const pal = computeSpecialPalette(look, U, 0.31);
@@ -5603,8 +5725,11 @@ export function buildStreetInfrastructure(city, U) {
     furnitureCount: furniture.length,
     update,
     setSignalGlow,
+    setDensity,
     setLook,
     get signalGlow() { return signalGlow; },
+    get density() { return signalDensity; },
+    get activeSignalCount() { return activeHeads; },
   };
 }
 

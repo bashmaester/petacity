@@ -13,7 +13,7 @@ import {
   buildLandmarks, buildBeacons, buildPlaces, makeLamps,
   makeVehicles, makeSearchlights, makeLightPools,
   buildWater, buildBoulevards, buildBillboards, buildTrees, buildSculptures,
-  makeWeather, WEATHER_NAMES, CLOUD_TYPE_NAMES, GLYPH_STYLE_NAMES,
+  makeWeather, WEATHER_NAMES, CLOUD_TYPE_NAMES, CLOUD_LAYER_PRESETS, GLYPH_STYLE_NAMES,
   WATER_MODE_NAMES, TERRAIN_MODE_NAMES, TREE_MODE_NAMES, describeMoonPhase,
   buildSigns, buildHolos,
   buildTransitInfrastructure, buildBridges, buildHarbor, buildSpaceport,
@@ -23,6 +23,7 @@ import { makePostProcessor, ART_STYLE_NAMES } from './post.js';
 import { FlyControls, CAMERA_STYLE_NAMES } from './controls.js';
 import { CameraPathRecorder, makeSceneExporter } from './recorder.js';
 import { makeMinimap } from './minimap.js';
+import { ModularRadioEngine, RADIO_STATIONS } from './audio.js';
 
 // Colours are authored as plain sRGB and written straight out — keep THREE's
 // colour management out of the way.
@@ -205,11 +206,17 @@ let pathSmooth = initialExact ? (initialExact.pathSmooth ?? 0.65) : 0.65;
 let heightScale = initialExact ? initialExact.heightScale : 1;
 
 const initLookDefTint = LOOK_BY_ID[lookId].defTint ?? 0.72;
+const defLayerPreset = CLOUD_LAYER_PRESETS[1];
 const tune = initialExact
   ? {
       tint: initLookDefTint,
-      searchLight: 1, trafficLight: 1, vehLight: 1,
+      searchLight: 1, searchCount: 1, trafficLight: 1, sigDensity: 1, vehLight: 1, lampDensity: 1,
+      waterScale: 1, waterChop: 1, waterFoam: 0.85, waterRefl: 1.15, waterContrast: 0.12, waterWarp: 0.4,
       cloudSeed: 0, cloudEvol: 0.35, cloudLac: 2.08, cloudElev: 1, cloudRange: 1,
+      cloudLayersMode: 1,
+      cloudLayerElev: [...defLayerPreset.elev],
+      cloudLayerThick: [...defLayerPreset.thick],
+      cloudLayerDens: [...defLayerPreset.dens],
       glyphStyle: 0, signAnim: 1,
       ...initialExact.tune,
     }
@@ -217,8 +224,17 @@ const tune = initialExact
       tint: params.get('tn') !== null ? clampFloat(params.get('tn'), 0, 1, initLookDefTint) : initLookDefTint,
       win: 1, glow: 1, fog: 1, lights: 1, traffic: 1,
       searchLight: params.get('sl') !== null ? clampFloat(params.get('sl'), 0, 2.5, 1) : 1,
+      searchCount: params.get('sc') !== null ? clampFloat(params.get('sc'), 0, 2, 1) : 1,
       trafficLight: params.get('tl') !== null ? clampFloat(params.get('tl'), 0, 2.5, 1) : 1,
+      sigDensity: params.get('sgd') !== null ? clampFloat(params.get('sgd'), 0, 1.5, 1) : 1,
       vehLight: params.get('vl') !== null ? clampFloat(params.get('vl'), 0, 2.5, 1) : 1,
+      lampDensity: params.get('ld') !== null ? clampFloat(params.get('ld'), 0, 2, 1) : 1,
+      waterScale: params.get('ws') !== null ? clampFloat(params.get('ws'), 0.2, 4, 1) : 1,
+      waterChop: params.get('wc') !== null ? clampFloat(params.get('wc'), 0, 2.5, 1) : 1,
+      waterFoam: params.get('wf') !== null ? clampFloat(params.get('wf'), 0, 2.5, 0.85) : 0.85,
+      waterRefl: params.get('wr') !== null ? clampFloat(params.get('wr'), 0, 2.5, 1.15) : 1.15,
+      waterContrast: params.get('wk') !== null ? clampFloat(params.get('wk'), 0, 1, 0.12) : 0.12,
+      waterWarp: params.get('ww') !== null ? clampFloat(params.get('ww'), 0, 2, 0.4) : 0.4,
       clouds: params.get('cl') !== null ? clampFloat(params.get('cl'), 0, 2.4, 1) : 1,
       cloudType: clampInt(params.get('ct'), 0, 5, 0),
       cloudStyle: clampInt(params.get('cs'), 0, 6, 0),
@@ -227,11 +243,19 @@ const tune = initialExact
       cloudLac: params.get('clac') !== null ? clampFloat(params.get('clac'), 1.4, 3.2, 2.08) : 2.08,
       cloudElev: params.get('cel') !== null ? clampFloat(params.get('cel'), 0.35, 2.4, 1) : 1,
       cloudRange: params.get('crg') !== null ? clampFloat(params.get('crg'), 0.3, 3.0, 1) : 1,
+      cloudLayersMode: clampInt(params.get('clm'), 0, 7, 1),
+      cloudLayerElev: [...((CLOUD_LAYER_PRESETS[clampInt(params.get('clm'), 0, 7, 1)] || defLayerPreset).elev || defLayerPreset.elev)],
+      cloudLayerThick: [...((CLOUD_LAYER_PRESETS[clampInt(params.get('clm'), 0, 7, 1)] || defLayerPreset).thick || defLayerPreset.thick)],
+      cloudLayerDens: [...((CLOUD_LAYER_PRESETS[clampInt(params.get('clm'), 0, 7, 1)] || defLayerPreset).dens || defLayerPreset.dens)],
       glyphStyle: clampInt(params.get('gl'), 0, 2, 0),
       signAnim: params.get('sa') !== null ? clampFloat(params.get('sa'), 0, 2.5, 1) : 1,
       haze: 1, sun: 1, vib: 1,
       moon: 1, moonsz: 1, moonph: 0.85,
     };
+let cloudEditLayer = 1;
+const radioState = initialExact && initialExact.radio
+  ? { station: 0, volume: 0.68, space: 0.9, warmth: 0.8, pulse: 0.55, react: 0.65, ...initialExact.radio }
+  : { station: 0, volume: 0.68, space: 0.9, warmth: 0.8, pulse: 0.55, react: 0.65 };
 let weatherMode = initialExact ? initialExact.weatherMode : clampInt(params.get('w'), 0, 6, 0);
 let dustLevel = initialExact ? initialExact.dustLevel : 0.6;
 const initGrade = LOOK_BY_ID[lookId].grade || { bloom: 0.85, lens: 0.45, contrast: 1.06, temp: 0, film: 0.16 };
@@ -308,6 +332,16 @@ function boot() {
 
   const controls = new FlyControls(camera, canvas);
   const pathRecorder = new CameraPathRecorder();
+  const radioEngine = new ModularRadioEngine({
+    station: radioState.station,
+    volume: radioState.volume,
+    space: radioState.space,
+    warmth: radioState.warmth,
+    pulse: radioState.pulse,
+    cityReactivity: radioState.react,
+    seed: (seed % 997) + 1,
+  });
+  const radioVizCanvas = $('#radio-viz');
   const exporter = makeSceneExporter({
     renderer,
     post,
@@ -417,6 +451,7 @@ function boot() {
       airAmt,
       signAmt,
       megaWrap,
+      lampDensity: 2.0,
       U,
     });
     city = grown.city;
@@ -439,8 +474,12 @@ function boot() {
     beacons = buildBeacons(city, world.beaconMat);
     lamps = makeLamps(city, world.lampMat);
     pools = makeLightPools(city, world.poolMat);
+    if (lamps.setDensity) lamps.setDensity(tune.lampDensity ?? 1);
+    if (pools.setDensity) pools.setDensity(tune.lampDensity ?? 1);
+    if (beacons.setDensity) beacons.setDensity(tune.lampDensity ?? 1);
     searchlights = makeSearchlights(city, world.beamMat);
     searchlights.setAmount(tune.searchLight ?? 1);
+    if (searchlights.setCountFactor) searchlights.setCountFactor(tune.searchCount ?? 1);
     vehicles = makeVehicles(city, world.trailMat, 1400, cityCollider, {
       swarmMat: world.swarmMat,
       swarmCount: 18600,
@@ -463,6 +502,7 @@ function boot() {
     spaceportObj = buildSpaceport(city, U, world.beaconMat, world.lampMat, world.beamMat);
     streetInfraObj = buildStreetInfrastructure(city, U);
     streetInfraObj.setSignalGlow(tune.trafficLight ?? 1);
+    if (streetInfraObj.setDensity) streetInfraObj.setDensity(tune.sigDensity ?? 1);
     trees.setNature(look, treeMode);
     trees.setScale(vegScale);
     transitGroup.setLook(look);
@@ -559,14 +599,60 @@ function boot() {
     el.title = `Lunar phase: ${info.name}`;
   }
 
+  function syncCloudLayerInspector() {
+    const idx = Math.max(0, Math.min(2, cloudEditLayer));
+    const dArr = Array.isArray(tune.cloudLayerDens) ? tune.cloudLayerDens : [0.0, 1.0, 0.72];
+    const eArr = Array.isArray(tune.cloudLayerElev) ? tune.cloudLayerElev : [210, 680, 1620];
+    const tArr = Array.isArray(tune.cloudLayerThick) ? tune.cloudLayerThick : [220, 620, 540];
+    $('#sel-cloud-layers').value = String(tune.cloudLayersMode ?? 1);
+    $('#sel-cloud-edit').value = String(idx);
+    $('#sl-clayer-dens').value = String(dArr[idx]);
+    $('#sl-clayer-elev').value = String(eArr[idx]);
+    $('#sl-clayer-thick').value = String(tArr[idx]);
+    $('#clayer-dens-label').textContent = dArr[idx] <= 0.005 ? 'Off' : `${Math.round(dArr[idx] * 100)}%`;
+    $('#clayer-elev-label').textContent = `${Math.round(eArr[idx])}m`;
+    $('#clayer-thick-label').textContent = `${Math.round(tArr[idx])}m`;
+  }
+
+  function syncRadioUI() {
+    const on = radioEngine.playing;
+    const st = radioEngine.station;
+    $('#b-radio').classList.toggle('on', on);
+    $('#b-radio').setAttribute('aria-pressed', String(on));
+    $('#b-radio-play').classList.toggle('on', on);
+    $('#b-radio-play').setAttribute('aria-pressed', String(on));
+    $('#b-radio-play').textContent = on ? '\u23F8' : '\u25B6';
+    $('#sel-radio-station').value = String(radioEngine.stationIndex);
+    $('#sl-radio-vol').value = String(radioState.volume);
+    $('#sl-radio-space').value = String(radioState.space);
+    $('#sl-radio-warmth').value = String(radioState.warmth);
+    $('#sl-radio-pulse').value = String(radioState.pulse);
+    $('#sl-radio-react').value = String(radioState.react);
+    $('#radio-vol-label').textContent = radioState.volume <= 0.005 ? 'Muted' : `Vol ${Math.round(radioState.volume * 100)}%`;
+    $('#radio-space-label').textContent = `Space ${Math.round(radioState.space * 100)}%`;
+    $('#radio-warmth-label').textContent = `Tone ${Math.round(radioState.warmth * 100)}%`;
+    $('#radio-pulse-label').textContent = radioState.pulse <= 0.01 ? 'Beatless' : `Pulse ${Math.round(radioState.pulse * 100)}%`;
+    $('#radio-react-label').textContent = `City ${Math.round(radioState.react * 100)}%`;
+    $('#radio-status').textContent = on
+      ? `\u266B ${st.artist} \u00B7 ${st.title} (${st.bpm} BPM)`
+      : `Standby \u00B7 ${st.artist} \u00B7 ${st.title} (press M)`;
+  }
+
   function syncFeatureLabels() {
     $('#tint-label').textContent = `Tint ${Math.round((tune.tint ?? 0.72) * 100)}%`;
     $('#water-amt-label').textContent = (waterMode === 4 || waterAmount <= 0.005) ? 'Off' : `${Math.round(waterAmount * 100)}%`;
     $('#shoredist-label').textContent = `${shoreDist.toFixed(1)}\u00D7`;
+    $('#water-scale-label').textContent = `Scale ${(tune.waterScale ?? 1).toFixed(2)}\u00D7`;
+    $('#water-chop-label').textContent = (tune.waterChop ?? 1) <= 0.01 ? 'Mirror' : `Chop ${Math.round((tune.waterChop ?? 1) * 100)}%`;
+    $('#water-foam-label').textContent = (tune.waterFoam ?? 0.85) <= 0.01 ? 'No Foam' : `Foam ${Math.round((tune.waterFoam ?? 0.85) * 100)}%`;
+    $('#water-refl-label').textContent = `Refl ${Math.round((tune.waterRefl ?? 1.15) * 100)}%`;
+    $('#water-contrast-label').textContent = `Tint ${Math.round((tune.waterContrast ?? 0.12) * 100)}%`;
+    $('#water-warp-label').textContent = `Warp ${Math.round((tune.waterWarp ?? 0.4) * 100)}%`;
     $('#cloud-label').textContent = tune.clouds <= 0.005 ? 'Off' : `${Math.round(tune.clouds * 100)}%`;
     $('#cloudelev-label').textContent = `${(tune.cloudElev ?? 1).toFixed(2)}\u00D7`;
     $('#cloudrange-label').textContent = `${(tune.cloudRange ?? 1).toFixed(2)}\u00D7`;
     $('#cloud-lac-label').textContent = `Lac ${(tune.cloudLac ?? 2.08).toFixed(2)}`;
+    syncCloudLayerInspector();
     $('#traffspeed-label').textContent = trafficSpeed <= 0.01 ? 'Paused' : `${trafficSpeed.toFixed(2)}\u00D7`;
     $('#dayspeed-label').textContent = `${daySpeed.toFixed(2)}\u00D7`;
     $('#transit-label').textContent = transitAmt <= 0.01 ? 'Off' : `${Math.round(transitAmt * 100)}%`;
@@ -575,7 +661,13 @@ function boot() {
     $('#signs-label').textContent = signAmt <= 0.01 ? 'Off' : `${Math.round(signAmt * 100)}%`;
     $('#megawrap-label').textContent = megaWrap <= 0.01 ? 'Off' : `${Math.round(megaWrap * 100)}%`;
     $('#sign-anim-label').textContent = (tune.signAnim ?? 1) <= 0.01 ? 'Static' : `${(tune.signAnim ?? 1).toFixed(1)}\u00D7`;
+    $('#win-density-label').textContent = (tune.win ?? 1) <= 0.01 ? 'Blackout' : `Win # ${Math.round((tune.win ?? 1) * 100)}%`;
+    $('#glow-label').textContent = (tune.glow ?? 1) <= 0.01 ? 'Off' : `Glow ${Math.round((tune.glow ?? 1) * 100)}%`;
+    const activeBeams = searchlights ? searchlights.activeCount : Math.round(34 * (tune.searchCount ?? 1));
+    $('#search-count-label').textContent = activeBeams <= 0 ? '0 beams' : `${activeBeams} beams`;
     $('#searchlights-label').textContent = (tune.searchLight ?? 1) <= 0.01 ? 'Off' : `${Math.round((tune.searchLight ?? 1) * 100)}%`;
+    $('#lamp-density-label').textContent = (tune.lampDensity ?? 1) <= 0.01 ? 'Off' : `Lamps ${Math.round((tune.lampDensity ?? 1) * 100)}%`;
+    $('#sig-density-label').textContent = (tune.sigDensity ?? 1) <= 0.01 ? 'Off' : `Sig # ${Math.round((tune.sigDensity ?? 1) * 100)}%`;
     $('#trafflights-label').textContent = (tune.trafficLight ?? 1) <= 0.01 ? 'Off' : `${Math.round((tune.trafficLight ?? 1) * 100)}%`;
     $('#vehlights-label').textContent = (tune.vehLight ?? 1) <= 0.01 ? 'Off' : `${Math.round((tune.vehLight ?? 1) * 100)}%`;
     $('#lights-label').textContent = (tune.lights ?? 1) <= 0.01 ? 'Off' : `${Math.round((tune.lights ?? 1) * 100)}%`;
@@ -585,6 +677,7 @@ function boot() {
     $('#camrad-label').textContent = `${camRadius.toFixed(1)}m`;
     $('#camsmooth-label').textContent = `${Math.round(camSmooth * 100)}%`;
     $('#pathsmooth-label').textContent = `Smooth ${Math.round(pathSmooth * 100)}%`;
+    syncRadioUI();
   }
 
   function syncAllSliders() {
@@ -602,6 +695,12 @@ function boot() {
     $('#sel-water').value = String(waterMode);
     $('#sl-water-amt').value = String(waterAmount);
     $('#sl-shoredist').value = String(shoreDist);
+    $('#sl-water-scale').value = String(tune.waterScale ?? 1);
+    $('#sl-water-chop').value = String(tune.waterChop ?? 1);
+    $('#sl-water-foam').value = String(tune.waterFoam ?? 0.85);
+    $('#sl-water-refl').value = String(tune.waterRefl ?? 1.15);
+    $('#sl-water-contrast').value = String(tune.waterContrast ?? 0.12);
+    $('#sl-water-warp').value = String(tune.waterWarp ?? 0.4);
     $('#sel-terrain').value = String(terrainMode);
     $('#sl-relief').value = String(terrainScale);
     $('#sel-trees').value = String(treeMode);
@@ -618,6 +717,9 @@ function boot() {
     $('#sel-glyph').value = String(tune.glyphStyle ?? 0);
     $('#sl-sign-anim').value = String(tune.signAnim ?? 1);
     $('#sl-searchlights').value = String(tune.searchLight ?? 1);
+    $('#sl-search-count').value = String(tune.searchCount ?? 1);
+    $('#sl-lamp-density').value = String(tune.lampDensity ?? 1);
+    $('#sl-sig-density').value = String(tune.sigDensity ?? 1);
     $('#sl-trafflights').value = String(tune.trafficLight ?? 1);
     $('#sl-vehlights').value = String(tune.vehLight ?? 1);
     $('#sl-win').value = String(tune.win);
@@ -627,6 +729,7 @@ function boot() {
     $('#sl-clouds').value = String(tune.clouds);
     $('#sl-cloudelev').value = String(tune.cloudElev ?? 1);
     $('#sl-cloudrange').value = String(tune.cloudRange ?? 1);
+    syncCloudLayerInspector();
     $('#sl-cloud-seed').value = String(tune.cloudSeed ?? 0);
     $('#sl-cloud-evol').value = String(tune.cloudEvol ?? 0.35);
     $('#sl-cloud-lac').value = String(tune.cloudLac ?? 2.08);
@@ -707,10 +810,15 @@ function boot() {
     if (searchlights && searchlights.syncBaseFromLook) {
       searchlights.syncBaseFromLook((look.signals && look.signals.beamK) ?? 0.22);
       searchlights.setAmount(tune.searchLight ?? 1);
+      if (searchlights.setCountFactor) searchlights.setCountFactor(tune.searchCount ?? 1);
     }
+    if (lamps && lamps.setDensity) lamps.setDensity(tune.lampDensity ?? 1);
+    if (pools && pools.setDensity) pools.setDensity(tune.lampDensity ?? 1);
+    if (beacons && beacons.setDensity) beacons.setDensity(tune.lampDensity ?? 1);
     if (streetInfraObj) {
       streetInfraObj.setLook(look);
       streetInfraObj.setSignalGlow(tune.trafficLight ?? 1);
+      if (streetInfraObj.setDensity) streetInfraObj.setDensity(tune.sigDensity ?? 1);
     }
     if (world.clouds) world.clouds.visible = U.uCloud.value > 0.008;
     if (billboards) billboards.visible = signAmt > 0.01;
@@ -827,6 +935,7 @@ function boot() {
       pathSmooth,
       tune: { ...tune },
       post: { ...postState },
+      radio: { ...radioState, station: radioEngine.stationIndex },
       custom: LOOK_BY_ID.custom.customConfig ? { ...LOOK_BY_ID.custom.customConfig } : { ...DEFAULT_CUSTOM },
       camera: controls.getPose(),
       bookmarks,
@@ -889,6 +998,21 @@ function boot() {
     weatherMode = st.weatherMode;
     dustLevel = st.dustLevel;
     Object.assign(tune, st.tune);
+    if (!Array.isArray(tune.cloudLayerElev) || tune.cloudLayerElev.length !== 3) {
+      const pr = CLOUD_LAYER_PRESETS[clampInt(tune.cloudLayersMode ?? 1, 0, 7, 1)] || defLayerPreset;
+      tune.cloudLayerElev = [...pr.elev];
+      tune.cloudLayerThick = [...pr.thick];
+      tune.cloudLayerDens = [...pr.dens];
+    }
+    if (st.radio) {
+      Object.assign(radioState, st.radio);
+      radioEngine.setStation(radioState.station);
+      radioEngine.setVolume(radioState.volume);
+      radioEngine.setSpace(radioState.space);
+      radioEngine.setWarmth(radioState.warmth);
+      radioEngine.setPulse(radioState.pulse);
+      radioEngine.setCityReactivity(radioState.react);
+    }
     Object.assign(postState, st.post);
     if (st.custom) {
       syncCustomLook(st.custom);
@@ -1215,11 +1339,41 @@ function boot() {
   };
   $('#b-time-play').onclick = toggleTimeCycle;
 
+  const toggleRadio = () => {
+    const on = radioEngine.toggle();
+    syncRadioUI();
+    flash(on
+      ? `\u266B Radio ON \u00B7 ${radioEngine.station.artist} \u2014 ${radioEngine.station.title}`
+      : '\u266B Synth radio paused');
+  };
+  $('#b-radio').onclick = toggleRadio;
+  $('#b-radio-play').onclick = toggleRadio;
+  $('#b-radio-next').onclick = () => {
+    const st = radioEngine.nextStation();
+    radioState.station = radioEngine.stationIndex;
+    if (!radioEngine.playing) radioEngine.start();
+    syncRadioUI();
+    flash(`\u266B ${st.artist} \u00B7 ${st.title}`);
+  };
+  $('#b-radio-seed').onclick = () => {
+    radioEngine.reseed();
+    syncRadioUI();
+    flash('\u21BB New generative synth sequence seed');
+  };
+  $('#sel-radio-station').onchange = (ev) => {
+    const idx = clampInt(ev.target.value, 0, RADIO_STATIONS.length - 1, 0);
+    const st = radioEngine.setStation(idx);
+    radioState.station = radioEngine.stationIndex;
+    syncRadioUI();
+    flash(`\u266B Station \u00B7 ${st.artist} \u2014 ${st.title}`);
+  };
+
   window.addEventListener('keydown', (e) => {
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) return;
     if (e.key === 'h' || e.key === 'H') toggleUI();
     else if (e.key === 'g' || e.key === 'G') toggleGlide();
     else if (e.key === 'l' || e.key === 'L') toggleFreelook();
+    else if (e.key === 'm' || e.key === 'M') toggleRadio();
     else if (e.key === 'v' || e.key === 'V') toggleAvoidance();
     else if (e.key === 'c' || e.key === 'C') toggleCollision();
     else if (e.key === 't' || e.key === 'T') toggleTimeCycle();
@@ -1420,6 +1574,23 @@ function boot() {
     if (searchlights && searchlights.setAmount) searchlights.setAmount(tune.searchLight);
     syncFeatureLabels();
   });
+  bindSlider($('#sl-search-count'), (v) => {
+    tune.searchCount = clampFloat(v, 0, 2, 1);
+    if (searchlights && searchlights.setCountFactor) searchlights.setCountFactor(tune.searchCount);
+    syncFeatureLabels();
+  });
+  bindSlider($('#sl-lamp-density'), (v) => {
+    tune.lampDensity = clampFloat(v, 0, 2, 1);
+    if (lamps && lamps.setDensity) lamps.setDensity(tune.lampDensity);
+    if (pools && pools.setDensity) pools.setDensity(tune.lampDensity);
+    if (beacons && beacons.setDensity) beacons.setDensity(tune.lampDensity);
+    syncFeatureLabels();
+  });
+  bindSlider($('#sl-sig-density'), (v) => {
+    tune.sigDensity = clampFloat(v, 0, 1.5, 1);
+    if (streetInfraObj && streetInfraObj.setDensity) streetInfraObj.setDensity(tune.sigDensity);
+    syncFeatureLabels();
+  });
   bindSlider($('#sl-trafflights'), (v) => {
     tune.trafficLight = clampFloat(v, 0, 2.5, 1);
     if (streetInfraObj && streetInfraObj.setSignalGlow) streetInfraObj.setSignalGlow(tune.trafficLight);
@@ -1430,13 +1601,81 @@ function boot() {
     U.uVehLight.value = tune.vehLight;
     syncFeatureLabels();
   });
-  bindSlider($('#sl-win'), (v) => { tune.win = v; refreshLook(); });
+  bindSlider($('#sl-water-scale'), (v) => { tune.waterScale = clampFloat(v, 0.2, 4, 1); refreshLook(); });
+  bindSlider($('#sl-water-chop'), (v) => { tune.waterChop = clampFloat(v, 0, 2.5, 1); refreshLook(); });
+  bindSlider($('#sl-water-foam'), (v) => { tune.waterFoam = clampFloat(v, 0, 2.5, 0.85); refreshLook(); });
+  bindSlider($('#sl-water-refl'), (v) => { tune.waterRefl = clampFloat(v, 0, 2.5, 1.15); refreshLook(); });
+  bindSlider($('#sl-water-contrast'), (v) => { tune.waterContrast = clampFloat(v, 0, 1, 0.12); refreshLook(); });
+  bindSlider($('#sl-water-warp'), (v) => { tune.waterWarp = clampFloat(v, 0, 2, 0.4); refreshLook(); });
+  bindSlider($('#sl-win'), (v) => { tune.win = clampFloat(v, 0, 2.5, 1); refreshLook(); });
   bindSlider($('#sl-glow'), (v) => { tune.glow = v; refreshLook(); });
   bindSlider($('#sl-fog'), (v) => { tune.fog = v; refreshLook(); });
   bindSlider($('#sl-lights'), (v) => { tune.lights = v; refreshLook(); });
   bindSlider($('#sl-clouds'), (v) => { tune.clouds = v; refreshLook(); });
   bindSlider($('#sl-cloudelev'), (v) => { tune.cloudElev = clampFloat(v, 0.35, 2.4, 1); refreshLook(); });
   bindSlider($('#sl-cloudrange'), (v) => { tune.cloudRange = clampFloat(v, 0.3, 3.0, 1); refreshLook(); });
+  $('#sel-cloud-layers').onchange = (ev) => {
+    const mode = clampInt(ev.target.value, 0, CLOUD_LAYER_PRESETS.length - 1, 1);
+    tune.cloudLayersMode = mode;
+    if (mode < 7) {
+      const pr = CLOUD_LAYER_PRESETS[mode];
+      tune.cloudLayerElev = [...pr.elev];
+      tune.cloudLayerThick = [...pr.thick];
+      tune.cloudLayerDens = [...pr.dens];
+      if (mode === 3) cloudEditLayer = 0;
+      else if (mode === 4) cloudEditLayer = 1;
+      else if (mode === 5) cloudEditLayer = 2;
+    }
+    refreshLook();
+    flash(`Clouds \u00B7 ${(CLOUD_LAYER_PRESETS[mode] && CLOUD_LAYER_PRESETS[mode].name) || 'Custom Layers'}`);
+  };
+  $('#sel-cloud-edit').onchange = (ev) => {
+    cloudEditLayer = clampInt(ev.target.value, 0, 2, 1);
+    syncCloudLayerInspector();
+  };
+  bindSlider($('#sl-clayer-dens'), (v) => {
+    if (!Array.isArray(tune.cloudLayerDens)) tune.cloudLayerDens = [...defLayerPreset.dens];
+    tune.cloudLayerDens[cloudEditLayer] = clampFloat(v, 0, 2, 1);
+    tune.cloudLayersMode = 7;
+    refreshLook();
+  });
+  bindSlider($('#sl-clayer-elev'), (v) => {
+    if (!Array.isArray(tune.cloudLayerElev)) tune.cloudLayerElev = [...defLayerPreset.elev];
+    tune.cloudLayerElev[cloudEditLayer] = clampFloat(v, 60, 2800, 680);
+    tune.cloudLayersMode = 7;
+    refreshLook();
+  });
+  bindSlider($('#sl-clayer-thick'), (v) => {
+    if (!Array.isArray(tune.cloudLayerThick)) tune.cloudLayerThick = [...defLayerPreset.thick];
+    tune.cloudLayerThick[cloudEditLayer] = clampFloat(v, 80, 1600, 620);
+    tune.cloudLayersMode = 7;
+    refreshLook();
+  });
+  bindSlider($('#sl-radio-vol'), (v) => {
+    radioState.volume = clampFloat(v, 0, 1, 0.68);
+    radioEngine.setVolume(radioState.volume);
+    syncRadioUI();
+  });
+  bindSlider($('#sl-radio-space'), (v) => {
+    radioState.space = clampFloat(v, 0, 1.5, 0.9);
+    radioEngine.setSpace(radioState.space);
+    syncRadioUI();
+  });
+  bindSlider($('#sl-radio-warmth'), (v) => {
+    radioState.warmth = clampFloat(v, 0.1, 1.5, 0.8);
+    radioEngine.setWarmth(radioState.warmth);
+    syncRadioUI();
+  });
+  bindSlider($('#sl-radio-pulse'), (v) => {
+    radioState.pulse = clampFloat(v, 0, 1.5, 0.55);
+    radioEngine.setPulse(radioState.pulse);
+    syncRadioUI();
+  });
+  bindSlider($('#sl-radio-react'), (v) => {
+    radioState.react = clampFloat(v, 0, 1, 0.65);
+    radioEngine.setCityReactivity(radioState.react);
+    syncRadioUI();
+  });
   bindSlider($('#sl-cloud-seed'), (v) => { tune.cloudSeed = v; refreshLook(); });
   bindSlider($('#sl-cloud-evol'), (v) => { tune.cloudEvol = v; refreshLook(); });
   bindSlider($('#sl-cloud-lac'), (v) => { tune.cloudLac = v; refreshLook(); });
@@ -2130,6 +2369,16 @@ function boot() {
       if (searchlights) searchlights.update(dt);
       if (weather) weather.update(dt, camera.position);
       if (minimap) minimap.render(camera, controls, pathRecorder);
+      const nightAmt = 0.5 + 0.5 * Math.cos(((timeOfDay % 24) / 24) * Math.PI * 2);
+      const camSpd = controls.velocity ? controls.velocity.length() : 0;
+      radioEngine.update(dt, {
+        altitude: Math.max(0, camera.position.y),
+        speed: camSpd,
+        night: nightAmt,
+      });
+      if (radioVizCanvas) {
+        radioEngine.renderScope(radioVizCanvas, LOOK_BY_ID[lookId].accent || '#6be4ff');
+      }
       world.sky.position.copy(camera.position);
       post.render(scene, camera, U.uTime.value);
       requestAnimationFrame(animate);

@@ -14,7 +14,7 @@ import {
   buildLandmarks, buildBeacons, buildPlaces, makeLamps, makeLandmarkMaterial,
   makeVehicles, makeSearchlights, makeLightPools,
   buildWater, buildBoulevards, buildBillboards, buildTrees, buildSculptures,
-  makeWeather, WEATHER_NAMES, CLOUD_TYPE_NAMES,
+  makeWeather, WEATHER_NAMES, CLOUD_TYPE_NAMES, CLOUD_LAYER_PRESETS,
   WATER_MODE_NAMES, TERRAIN_MODE_NAMES, TREE_MODE_NAMES, GLYPH_STYLE_NAMES, describeMoonPhase,
   buildSigns, buildHolos,
   buildTransitInfrastructure, buildBridges, buildHarbor, buildSpaceport,
@@ -26,6 +26,9 @@ import {
 import { FlyControls, CAMERA_STYLE_NAMES } from '../src/controls.js';
 import { CameraPathRecorder, makeSceneExporter } from '../src/recorder.js';
 import { makeMinimap } from '../src/minimap.js';
+import {
+  RADIO_STATIONS, midiToHz, buildSpaceImpulseData, evalStationHarmony, ModularRadioEngine,
+} from '../src/audio.js';
 import { isPointInWater, makeCityCollider } from '../src/city.js';
 
 test('every look preset has a complete schema', () => {
@@ -1681,6 +1684,203 @@ test('Phase-13 scene: small adjustable camera collider + freelook, minimap + pat
     globalThis.window = prevWin;
   }
 });
+
+test('Phase-14 scene: anti-aliased multi-band water shader controls, selectable 3-deck cloud elevation layers, light number/density & pure-code modular synth radio', () => {
+  const U = makeUniforms();
+  const world = makeWorld(U);
+
+  // 1) Water shader multi-band anti-aliased wave spectrum & live parameter uniforms
+  assert.ok(SHADERS.WATER_FRAG.includes('uWaterScale') && SHADERS.WATER_FRAG.includes('uWaterContrast'), 'WATER_FRAG uses multi-band directional wave spectrum & contrast uniforms');
+  for (const uName of ['uWaterScale', 'uWaterChop', 'uWaterFoam', 'uWaterRefl', 'uWaterContrast', 'uWaterWarp']) {
+    assert.ok(uName in U && uName in world.waterMat.uniforms, `${uName} registered in U and waterMat`);
+  }
+  applyLook(U, LOOK_BY_ID.outrun, {
+    win: 1.5, glow: 1, fog: 1,
+    waterScale: 1.85, waterChop: 0.55, waterFoam: 1.35, waterRefl: 1.6, waterContrast: 0.08, waterWarp: 0.75,
+  });
+  assert.equal(U.uWaterScale.value, 1.85);
+  assert.equal(U.uWaterChop.value, 0.55);
+  assert.equal(U.uWaterFoam.value, 1.35);
+  assert.equal(U.uWaterRefl.value, 1.6);
+  assert.equal(U.uWaterContrast.value, 0.08);
+  assert.equal(U.uWaterWarp.value, 0.75);
+
+  // 2) Selectable & adjustable 3-deck cloud elevation layers (Low / Mid / High)
+  assert.equal(CLOUD_LAYER_PRESETS.length, 8, '8 cloud elevation layer presets including custom');
+  const puffMesh = world.clouds.children[0];
+  const aLayer = puffMesh.geometry.getAttribute('aLayer');
+  assert.ok(aLayer && aLayer.count === 60, '60 instanced volumetric cloud puffs carry per-layer aLayer attribute');
+  const seenLayers = new Set();
+  for (let i = 0; i < aLayer.count; i++) seenLayers.add(Math.round(aLayer.getX(i)));
+  assert.deepEqual([...seenLayers].sort(), [0, 1, 2], 'cloud puffs span Low (0), Mid (1) and High (2) decks');
+
+  applyTime(U, LOOK_BY_ID.bladerunner, 22.0, {
+    cloudLayerElev: [160, 740, 1850],
+    cloudLayerThick: [190, 580, 620],
+    cloudLayerDens: [1.15, 0.0, 0.85],
+    win: 0.0,
+  });
+  assert.deepEqual(U.uCloudLayerElev.value.toArray(), [160, 740, 1850]);
+  assert.deepEqual(U.uCloudLayerThick.value.toArray(), [190, 580, 620]);
+  assert.ok(Math.abs(U.uCloudLayerDens.value.x - 1.15) < 1e-5 && U.uCloudLayerDens.value.y === 0, 'individual cloud layers toggle cleanly');
+  assert.equal(U.uWinDensity.value, 0, 'tune.win = 0 blacks out window occupancy across applyTime');
+  applyTime(U, LOOK_BY_ID.bladerunner, 22.0, { win: 1.0 });
+  const winAt1 = U.uWinDensity.value;
+  applyTime(U, LOOK_BY_ID.bladerunner, 22.0, { win: 1.8 });
+  assert.ok(U.uWinDensity.value > winAt1 * 1.6, 'tune.win > 1 boosts lit window count');
+
+  // 3) Adjustable light number / density across searchlights, streetlamps, light pools, beacons & signals
+  const { city } = growCity(4417, 5, world.towerMat, 1.0, { waterMode: 1, lampDensity: 2.0, U });
+  const lamps = makeLamps(city, world.lampMat);
+  const pools = makeLightPools(city, world.poolMat);
+  const beacons = buildBeacons(city, world.beaconMat);
+  const search = makeSearchlights(city, world.beamMat);
+  const infra = buildStreetInfrastructure(city, U);
+
+  assert.equal(search.activeCount, 34, 'default searchCount=1.0 activates 34 beams');
+  assert.equal(search.setCountFactor(0), 0, 'searchCount=0 turns off all beam shafts');
+  assert.equal(search.group.visible, false);
+  assert.ok(search.setCountFactor(2.0) >= 60, 'searchCount=2.0 scales up to ~68 skybeams');
+  assert.equal(search.group.visible, true);
+
+  lamps.setDensity(0);
+  pools.setDensity(0);
+  beacons.setDensity(0);
+  assert.equal(lamps.visible, false);
+  assert.equal(pools.count, 0);
+  assert.equal(beacons.visible, false);
+  lamps.setDensity(1.0);
+  pools.setDensity(1.0);
+  assert.equal(pools.count, city.primaryLampCount, 'lampDensity=1.0 illuminates primary avenue lamps');
+  lamps.setDensity(2.0);
+  pools.setDensity(2.0);
+  assert.equal(pools.count, city.lamps.length, 'lampDensity=2.0 illuminates secondary side-street lamps too');
+
+  const fullSignals = infra.signalCount;
+  infra.setDensity(0.5);
+  assert.equal(infra.activeSignalCount, Math.round(fullSignals * 0.5), 'signal density scales active traffic signal heads');
+  infra.setDensity(0);
+  assert.equal(infra.activeSignalCount, 0);
+
+  // 4) Pure-code Modular Synth Radio (Vangelis & Aphex Twin, zero audio samples)
+  assert.equal(RADIO_STATIONS.length, 4, '4 Vangelis & Aphex Twin generative stations');
+  assert.ok(Math.abs(midiToHz(69) - 440) < 1e-6, 'A4 = 440Hz');
+  const ir = buildSpaceImpulseData(8000, 0.5, 42);
+  assert.equal(ir.left.length, 4000);
+  assert.ok(ir.left.some((x) => Math.abs(x) > 0.05), 'procedural FDN space impulse response generated in code');
+  const h0 = evalStationHarmony(RADIO_STATIONS[0], 0);
+  const h1 = evalStationHarmony(RADIO_STATIONS[1], 4);
+  assert.ok(h0.padMidi.length >= 4 && h1.scaleMidi.length >= 5, 'generative chord & modal scale harmony evaluated');
+
+  // Test ModularRadioEngine against a lightweight mock WebAudio AudioContext
+  let createdOscs = 0;
+  let createdBuffers = 0;
+  const mockParam = (v = 0) => ({
+    value: v,
+    setValueAtTime(x) { this.value = x; },
+    linearRampToValueAtTime(x) { this.value = x; },
+    exponentialRampToValueAtTime(x) { this.value = x; },
+    setTargetAtTime(x) { this.value = x; },
+  });
+  const mockNode = () => ({
+    connect() { return this; },
+    disconnect() {},
+    gain: mockParam(1),
+    frequency: mockParam(440),
+    detune: mockParam(0),
+    Q: mockParam(1),
+    pan: mockParam(0),
+    delayTime: mockParam(0.3),
+    threshold: mockParam(-16),
+    knee: mockParam(12),
+    ratio: mockParam(3),
+    attack: mockParam(0.01),
+    release: mockParam(0.2),
+    type: 'sine',
+    curve: null,
+    oversample: 'none',
+    buffer: null,
+    loop: false,
+    fftSize: 256,
+    frequencyBinCount: 128,
+    smoothingTimeConstant: 0.8,
+    getByteFrequencyData(arr) { for (let i = 0; i < arr.length; i++) arr[i] = 110; },
+    getByteTimeDomainData(arr) { for (let i = 0; i < arr.length; i++) arr[i] = 128 + Math.round(Math.sin(i * 0.2) * 32); },
+    start() {},
+    stop() {},
+  });
+  class MockAudioContext {
+    constructor() {
+      this.sampleRate = 22050;
+      this.currentTime = 0;
+      this.state = 'running';
+      this.destination = mockNode();
+    }
+    resume() { this.state = 'running'; }
+    createGain() { return mockNode(); }
+    createOscillator() { createdOscs++; return mockNode(); }
+    createBiquadFilter() { return mockNode(); }
+    createStereoPanner() { return mockNode(); }
+    createDelay() { return mockNode(); }
+    createConvolver() { return mockNode(); }
+    createChannelMerger() { return mockNode(); }
+    createWaveShaper() { return mockNode(); }
+    createDynamicsCompressor() { return mockNode(); }
+    createAnalyser() { return mockNode(); }
+    createBuffer(ch, len) {
+      createdBuffers++;
+      const chans = Array.from({ length: ch }, () => new Float32Array(len));
+      return { getChannelData: (c) => chans[c] };
+    }
+    createBufferSource() { return mockNode(); }
+  }
+
+  const radio = new ModularRadioEngine({ AudioContextClass: MockAudioContext, station: 0, volume: 0.72 });
+  assert.equal(radio.start(), true, 'ModularRadioEngine starts cleanly with WebAudio');
+  assert.equal(radio.playing, true);
+  radio.ctx.currentTime = 0.25;
+  radio.update(0.1, { altitude: 640, speed: 95, night: 0.9 });
+  assert.ok(createdOscs >= 6 && createdBuffers >= 2, 'pure-code oscillators + procedural noise/IR buffers synthesized');
+  radio.nextStation();
+  assert.equal(radio.station.id, 'aphex-saw-drift', 'switched to Aphex Twin SAW station');
+  radio.ctx.currentTime = 0.75;
+  radio.update(0.2, { altitude: 220, speed: 40, night: 0.5 });
+
+  // Render visualizer scope onto a mock 2D canvas
+  let drewWave = false;
+  const mockCanvas = {
+    width: 240,
+    height: 46,
+    getContext: () => ({
+      fillStyle: '', strokeStyle: '', lineWidth: 1,
+      fillRect() {}, beginPath() {}, moveTo() {}, lineTo() {},
+      stroke() { drewWave = true; },
+    }),
+  };
+  radio.renderScope(mockCanvas, '#06d6a0');
+  assert.equal(drewWave, true, 'radio visualizer draws live spectrum & oscilloscope waveform');
+  radio.stop();
+  assert.equal(radio.playing, false);
+
+  // 5) Exact state roundtrip preserves Phase-14 water, cloud layers, light density & radio state
+  const tok = encodeExactState({
+    seed: 4417,
+    tune: {
+      waterScale: 1.75, waterChop: 0.65, waterFoam: 1.2,
+      searchCount: 1.5, lampDensity: 1.6, sigDensity: 0.8,
+      cloudLayersMode: 7, cloudLayerElev: [180, 710, 1750], cloudLayerDens: [0.9, 1.1, 0.4],
+    },
+    radio: { station: 2, volume: 0.8, space: 1.1, warmth: 0.9, pulse: 0.7, react: 0.5 },
+  });
+  const dec = decodeExactState(tok);
+  assert.equal(dec.tune.waterScale, 1.75);
+  assert.equal(dec.tune.searchCount, 1.5);
+  assert.equal(dec.tune.lampDensity, 1.6);
+  assert.deepEqual(dec.tune.cloudLayerElev, [180, 710, 1750]);
+  assert.equal(dec.radio.station, 2);
+  assert.equal(dec.radio.space, 1.1);
+});
+
 
 
 

@@ -179,6 +179,40 @@ test('Phase-13 camera collider/freelook, interactive minimap, path smoothing, de
   assert.ok(main.includes("e.key === 'l'"), 'L key shortcut wired for separate free look-around mode');
 });
 
+test('Phase-14 water shader controls, selectable cloud elevation layers, light number/density & pure-code modular synth radio exist with zero audio sample files', () => {
+  for (const id of [
+    'sl-water-scale', 'water-scale-label',
+    'sl-water-chop', 'water-chop-label',
+    'sl-water-foam', 'water-foam-label',
+    'sl-water-refl', 'water-refl-label',
+    'sl-water-contrast', 'water-contrast-label',
+    'sl-water-warp', 'water-warp-label',
+    'sel-cloud-layers', 'sel-cloud-edit',
+    'sl-clayer-dens', 'clayer-dens-label',
+    'sl-clayer-elev', 'clayer-elev-label',
+    'sl-clayer-thick', 'clayer-thick-label',
+    'win-density-label', 'glow-label',
+    'sl-search-count', 'search-count-label',
+    'sl-lamp-density', 'lamp-density-label',
+    'sl-sig-density', 'sig-density-label',
+    'b-radio', 'radio-viz', 'radio-status', 'sel-radio-station',
+    'b-radio-play', 'b-radio-next', 'b-radio-seed',
+    'sl-radio-vol', 'radio-vol-label',
+    'sl-radio-space', 'radio-space-label',
+    'sl-radio-warmth', 'radio-warmth-label',
+    'sl-radio-pulse', 'radio-pulse-label',
+    'sl-radio-react', 'radio-react-label',
+  ]) {
+    assert.ok(html.includes(`id="${id}"`), `#${id} present in index.html`);
+  }
+  assert.match(html, /<summary>Modular Synth Radio<\/summary>/, 'Modular Synth Radio subpanel exists');
+  assert.ok(main.includes("e.key === 'm'"), 'M key shortcut wired for Modular Synth Radio');
+  const audioSrc = readFileSync(new URL('../src/audio.js', import.meta.url), 'utf8');
+  assert.equal(/\.(mp3|wav|ogg|flac|m4a|aac)\b/i.test(audioSrc), false, 'audio.js uses 100% pure-code synthesis with zero audio sample files');
+  assert.equal(/fetch\(|Audio\(|decodeAudioData/i.test(audioSrc), false, 'audio.js never fetches or decodes external audio samples');
+});
+
+
 
 
 

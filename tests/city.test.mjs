@@ -703,6 +703,42 @@ test('Phase-13 city: dry-land traffic grid (no street lanes over water), bridge 
   assert.ok(coastal.harbor && coastal.harbor.beach && coastal.harbor.promenade, 'harbor features golden crescent beach & boardwalk promenade');
 });
 
+test('Phase-14 city: dry-coastline transit retraction, airway blimps & adjustable side-street lamp density', () => {
+  const c = generateCity({ seed: 4417, radius: 5, suburbReach: 1.0, waterMode: 1, shoreDist: 0.95, transitAmt: 1.4, lampDensity: 2.0 });
+  const sdAt = (px, pz) => evalCoastSignedDist(
+    px, pz, c.span, c.coastAngle, c.waterMode,
+    c.terrainSeedX, c.terrainSeedZ, c.shoreDist, c.waterAmount
+  );
+
+  // 1) All 3 transit lines stay strictly inland of ocean coastline (no guideways or trains over open ocean!)
+  assert.equal(c.transit.lines.length, 3, 'all 3 transit lines generated');
+  const railLoops = c.lanes.filter((l) => l.railLoop);
+  assert.ok(railLoops.length >= 24, `expected >=24 railLoop segments, got ${railLoops.length}`);
+  for (const ln of c.transit.lines) {
+    for (const seg of ln.segments) {
+      const mx = (seg.x1 + seg.x2) * 0.5;
+      const mz = (seg.z1 + seg.z2) * 0.5;
+      assert.ok(sdAt(seg.x1, seg.z1) > 0 && sdAt(seg.x2, seg.z2) > 0 && sdAt(mx, mz) > 0, `transit line ${ln.name} segment stays strictly inland of ocean shoreline`);
+    }
+  }
+
+  // 2) Blimp routes are never tagged kind: 'street'
+  const blimpLanes = c.lanes.filter((l) => l.layer === 'blimp');
+  assert.ok(blimpLanes.length >= 16, `expected >=16 blimp ring + avenue segments, got ${blimpLanes.length}`);
+  for (const bl of blimpLanes) {
+    assert.notEqual(bl.kind, 'street', 'blimp route is never kind street');
+  }
+
+  // 3) Secondary side-street lamps extend city.lamps beyond primaryLampCount while keeping first 64 on avenues and all dry
+  assert.ok(c.primaryLampCount > 100, 'primaryLampCount recorded');
+  assert.ok(c.lamps.length > c.primaryLampCount + 40, `lampDensity=2.0 adds secondary side-street lamps (${c.lamps.length} > ${c.primaryLampCount})`);
+  for (let i = c.primaryLampCount; i < c.lamps.length; i++) {
+    assert.equal(c.lamps[i].secondary, true);
+    assert.equal(isPointInWater(c, c.lamps[i].x, c.lamps[i].z, 4), false, 'secondary side-street lamp stays out of water');
+  }
+});
+
+
 
 
 

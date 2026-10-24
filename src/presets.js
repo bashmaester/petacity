@@ -237,9 +237,10 @@ export function normalizeExactState(raw = {}) {
   const defTune = {
     tint: 0.75,
     win: 1, glow: 1, fog: 1, lights: 1, traffic: 1,
-    searchLight: 1, trafficLight: 1, vehLight: 1,
+    searchLight: 1, searchCount: 1, trafficLight: 1, sigDensity: 1, vehLight: 1, lampDensity: 1,
+    waterScale: 1, waterChop: 1, waterFoam: 0.85, waterRefl: 1.15, waterContrast: 0.12, waterWarp: 0.4,
     clouds: 1, cloudType: 0, cloudStyle: 0, cloudSeed: 17, cloudEvol: 1, cloudLac: 2.07,
-    cloudElev: 1, cloudRange: 1,
+    cloudElev: 1, cloudRange: 1, cloudLayersMode: 1,
     glyphStyle: 0, signAnim: 1,
     haze: 1, sun: 1, vib: 1,
     moon: 1, moonsz: 1, moonph: 0.85,
@@ -249,6 +250,25 @@ export function normalizeExactState(raw = {}) {
     for (const k of Object.keys(defTune)) {
       if (raw.tune[k] !== undefined) out.tune[k] = roundN(Number(raw.tune[k]), 3);
     }
+    if (Array.isArray(raw.tune.cloudLayerElev) && raw.tune.cloudLayerElev.length === 3) {
+      out.tune.cloudLayerElev = raw.tune.cloudLayerElev.map((v) => roundN(Number(v), 1));
+    }
+    if (Array.isArray(raw.tune.cloudLayerThick) && raw.tune.cloudLayerThick.length === 3) {
+      out.tune.cloudLayerThick = raw.tune.cloudLayerThick.map((v) => roundN(Number(v), 1));
+    }
+    if (Array.isArray(raw.tune.cloudLayerDens) && raw.tune.cloudLayerDens.length === 3) {
+      out.tune.cloudLayerDens = raw.tune.cloudLayerDens.map((v) => roundN(Number(v), 2));
+    }
+  }
+  if (raw.radio && typeof raw.radio === 'object') {
+    out.radio = {
+      station: Math.max(0, Math.min(3, Math.round(Number(raw.radio.station) || 0))),
+      volume: roundN(Number(raw.radio.volume ?? 0.68), 2),
+      space: roundN(Number(raw.radio.space ?? 0.90), 2),
+      warmth: roundN(Number(raw.radio.warmth ?? 0.80), 2),
+      pulse: roundN(Number(raw.radio.pulse ?? 0.55), 2),
+      react: roundN(Number(raw.radio.react ?? 0.65), 2),
+    };
   }
   const defPost = { bloom: 0.85, lens: 0.45, contrast: 1.06, temp: 0, film: 0.16, artStyle: 0, artStrength: 1.0 };
   out.post = { ...defPost };

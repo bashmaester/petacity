@@ -364,6 +364,36 @@ button.icon-btn.rec-on, button.action.rec-on {
   cursor: pointer;
 }
 
+#radio-wrap {
+  margin: 2px 0 7px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: rgba(6, 10, 20, 0.90);
+}
+#radio-viz {
+  display: block;
+  width: 100%;
+  height: 46px;
+}
+.radio-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px 7px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 10px;
+  color: var(--mute);
+}
+#radio-status {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .stats {
   display: flex; gap: 6px; margin-top: 8px;
 }
@@ -452,6 +482,7 @@ button.icon-btn.rec-on, button.action.rec-on {
     <div class="head-actions">
       <button id="b-glide" class="icon-btn" type="button" aria-pressed="false" aria-label="Glide mode" title="Start Glide mode — drag to steer, wheel for speed (G)">&#x2708;&#xFE0E;</button>
       <button id="b-freelook" class="icon-btn" type="button" aria-pressed="false" aria-label="Free look-around mode" title="Free look-around mode — decouple head gaze from flight travel direction (L)">&#x25CE;</button>
+      <button id="b-radio" class="icon-btn" type="button" aria-pressed="false" aria-label="Toggle synth radio" title="Play / mute modular space-ambient synth radio — Vangelis &amp; Aphex Twin pure code (M)">&#x266B;</button>
       <button id="b-avoid" class="icon-btn on" type="button" aria-pressed="true" aria-label="Anticipatory obstacle avoidance" title="Anticipatory shallow-angle obstacle &amp; terrain avoidance: on (V)">&#x2934;</button>
       <button id="b-collide" class="icon-btn on" type="button" aria-pressed="true" aria-label="Toggle collision detection" title="Collision: on — toggle noclip (C)">&#x2B21;</button>
       <button id="b-fold-all" class="icon-btn" type="button" aria-label="Collapse or expand all subpanels" title="Collapse / expand all control subpanels">&#x229F;</button>
@@ -606,6 +637,36 @@ button.icon-btn.rec-on, button.action.rec-on {
             <input id="sl-shoredist" type="range" min="0.35" max="2.5" step="0.02" value="1" aria-label="Distance to shoreline">
             <em id="shoredist-label">1.0×</em>
           </div>
+          <div class="slider-row wide" title="Water Shader Wave Scale / Wavelength (0.2× tight fine ripples … 4.0× long ocean swells)">
+            <span>&#x223F;</span>
+            <input id="sl-water-scale" type="range" min="0.2" max="4.0" step="0.02" value="1" aria-label="Water wave scale">
+            <em id="water-scale-label">Scale 1.0×</em>
+          </div>
+          <div class="slider-row wide" title="Water Shader Choppiness &amp; Surface Normal Steepness (0 = mirror calm … 2.5 = stormy sea)">
+            <span>&#x224B;</span>
+            <input id="sl-water-chop" type="range" min="0" max="2.5" step="0.02" value="1" aria-label="Water wave choppiness">
+            <em id="water-chop-label">Chop 100%</em>
+          </div>
+          <div class="slider-row wide" title="Water Shader Surf, Ship Wakes &amp; Crest Whitecaps (0 = no foam … 2.5 = heavy whitecaps)">
+            <span>&#x25CC;</span>
+            <input id="sl-water-foam" type="range" min="0" max="2.5" step="0.02" value="0.85" aria-label="Water surf and foam amount">
+            <em id="water-foam-label">Foam 85%</em>
+          </div>
+          <div class="slider-row wide" title="Water Shader Sky Reflection &amp; Sun/Moon Specular Glitter">
+            <span>&#x2727;</span>
+            <input id="sl-water-refl" type="range" min="0" max="2.5" step="0.02" value="1.15" aria-label="Water reflection and glitter">
+            <em id="water-refl-label">Refl 115%</em>
+          </div>
+          <div class="slider-row wide" title="Water Shader Deep-to-Crest Color Contrast (low keeps open ocean cohesive &amp; blotch-free)">
+            <span>&#x25D1;</span>
+            <input id="sl-water-contrast" type="range" min="0" max="1" step="0.01" value="0.12" aria-label="Water trough to crest color contrast">
+            <em id="water-contrast-label">Tint 12%</em>
+          </div>
+          <div class="slider-row wide" title="Water Shader Wave-Front Curl / Organic Warp">
+            <span>&#x2933;</span>
+            <input id="sl-water-warp" type="range" min="0" max="2" step="0.02" value="0.4" aria-label="Water wave organic warp">
+            <em id="water-warp-label">Warp 40%</em>
+          </div>
         </div>
       </div>
     </details>
@@ -651,13 +712,49 @@ button.icon-btn.rec-on, button.action.rec-on {
             <span>&#x29BF;</span>
             <input id="sl-cloud-evol" type="range" min="0" max="2.5" step="0.02" value="0.35" aria-label="Cloud 4D shape evolution speed">
           </div>
-          <div class="slider-row wide" title="Cloud Cover Base Elevation (0.35× low mist deck … 2.4× high tropospheric deck)">
+          <div class="slider-row wide" title="Selectable Atmospheric Cloud Elevation Decks (Low Tower Mist, Mid Cumulus, High Cirrus)">
+            <span>&#x2630;</span>
+            <select id="sel-cloud-layers" aria-label="Selectable cloud elevation layers">
+              <option value="0">Layers · All 3 Decks (Low + Mid + High)</option>
+              <option value="1" selected>Layers · Mid + High Decks (Classic Sky)</option>
+              <option value="2">Layers · Low Tower Mist + Mid Cumulus</option>
+              <option value="3">Layers · Low Deck Only (Tower Mist)</option>
+              <option value="4">Layers · Mid Deck Only (Cumulus)</option>
+              <option value="5">Layers · High Deck Only (Cirrus Canopy)</option>
+              <option value="6">Layers · Split Sky (Low + High Decks)</option>
+              <option value="7">Layers · Custom Per-Layer Mix</option>
+            </select>
+          </div>
+          <div class="slider-row wide" title="Choose individual cloud elevation layer to inspect &amp; adjust">
+            <span>&#x29BF;</span>
+            <select id="sel-cloud-edit" aria-label="Select cloud layer to adjust">
+              <option value="0">Adjust · Layer 1 — Low Deck (Tower Mist)</option>
+              <option value="1" selected>Adjust · Layer 2 — Mid Deck (Cumulus)</option>
+              <option value="2">Adjust · Layer 3 — High Deck (Cirrus)</option>
+            </select>
+          </div>
+          <div class="slider-row wide" title="Selected Cloud Layer Density / Active Weight (0 = layer off … 2.0 = dense deck)">
+            <span>&#x25CE;</span>
+            <input id="sl-clayer-dens" type="range" min="0" max="2" step="0.02" value="1" aria-label="Selected cloud layer density">
+            <em id="clayer-dens-label">100%</em>
+          </div>
+          <div class="slider-row wide" title="Selected Cloud Layer Base Altitude in metres">
             <span>&#x21A5;</span>
+            <input id="sl-clayer-elev" type="range" min="60" max="2800" step="10" value="680" aria-label="Selected cloud layer altitude">
+            <em id="clayer-elev-label">680m</em>
+          </div>
+          <div class="slider-row wide" title="Selected Cloud Layer Vertical Thickness in metres">
+            <span>&#x2195;</span>
+            <input id="sl-clayer-thick" type="range" min="80" max="1600" step="10" value="620" aria-label="Selected cloud layer thickness">
+            <em id="clayer-thick-label">620m</em>
+          </div>
+          <div class="slider-row wide" title="Master Cloud Elevation Multiplier across all active layers (0.35× … 2.4×)">
+            <span>&#x21C8;</span>
             <input id="sl-cloudelev" type="range" min="0.35" max="2.4" step="0.02" value="1" aria-label="Cloud cover elevation">
             <em id="cloudelev-label">1.0×</em>
           </div>
-          <div class="slider-row wide" title="Cloud Vertical Range &amp; Multi-Altitude Thickness (0.3× thin layer … 3.0× towering multi-tier sky)">
-            <span>&#x2195;</span>
+          <div class="slider-row wide" title="Master Cloud Vertical Range Multiplier across all active layers (0.3× … 3.0×)">
+            <span>&#x21F5;</span>
             <input id="sl-cloudrange" type="range" min="0.3" max="3.0" step="0.05" value="1" aria-label="Cloud vertical range">
             <em id="cloudrange-label">1.0×</em>
           </div>
@@ -741,10 +838,40 @@ button.icon-btn.rec-on, button.action.rec-on {
       <summary>Lights, Searchlights &amp; Signals</summary>
       <div class="subpanel-body">
         <div class="slider-grid">
+          <div class="slider-row wide" title="Lit Window Number / Occupancy Density across towers, landmarks &amp; suburbs (0 = blackout … 2.5 = full skyline)">
+            <span>&#x229E;</span>
+            <input id="sl-win" type="range" min="0" max="2.5" step="0.02" value="1" aria-label="Window density">
+            <em id="win-density-label">Win # 100%</em>
+          </div>
+          <div class="slider-row wide" title="Window &amp; Facade Light Brightness / Glow">
+            <span>&#x273A;</span>
+            <input id="sl-glow" type="range" min="0" max="2.5" step="0.02" value="1" aria-label="Window glow">
+            <em id="glow-label">Glow 100%</em>
+          </div>
+          <div class="slider-row wide" title="Number of Active Sky Searchlight Beams (0 = none … 68 sweeping shafts)">
+            <span>#</span>
+            <input id="sl-search-count" type="range" min="0" max="2" step="0.05" value="1" aria-label="Searchlight beam count">
+            <em id="search-count-label">34 beams</em>
+          </div>
           <div class="slider-row wide" title="Volumetric Searchlight Shafts Intensity (0 = off … 2.5 = premiere skybeams)">
             <span>&#x29BF;</span>
             <input id="sl-searchlights" type="range" min="0" max="2.5" step="0.05" value="1" aria-label="Searchlights intensity">
             <em id="searchlights-label">100%</em>
+          </div>
+          <div class="slider-row wide" title="Streetlamp, Light-Pool &amp; Aviation Beacon Number / Density (0 = off … 2.0× illuminates side streets)">
+            <span>&#x22EE;</span>
+            <input id="sl-lamp-density" type="range" min="0" max="2" step="0.05" value="1" aria-label="Streetlamp and beacon density">
+            <em id="lamp-density-label">Lamps 100%</em>
+          </div>
+          <div class="slider-row wide" title="Overall Street Lamps &amp; District Light Pools Brightness">
+            <span>&#x2726;</span>
+            <input id="sl-lights" type="range" min="0" max="2" step="0.02" value="1" aria-label="Atmospheric lights">
+            <em id="lights-label">100%</em>
+          </div>
+          <div class="slider-row wide" title="Intersection Traffic Signal &amp; Lit Kiosk Number / Density">
+            <span>&#x2237;</span>
+            <input id="sl-sig-density" type="range" min="0" max="1.5" step="0.05" value="1" aria-label="Traffic signal density">
+            <em id="sig-density-label">Sig # 100%</em>
           </div>
           <div class="slider-row wide" title="Intersection Traffic Signal Lights Intensity (0 = off … 2.5 = vivid red/amber/green)">
             <span>&#x2666;</span>
@@ -756,12 +883,56 @@ button.icon-btn.rec-on, button.action.rec-on {
             <input id="sl-vehlights" type="range" min="0" max="2.5" step="0.05" value="1" aria-label="Object and vehicle lights intensity">
             <em id="vehlights-label">100%</em>
           </div>
-          <div class="slider-row" title="Window density"><span>&#x229E;</span><input id="sl-win" type="range" min="0" max="2" step="0.02" value="1" aria-label="Window density"></div>
-          <div class="slider-row" title="Window &amp; facade glow"><span>&#x273A;</span><input id="sl-glow" type="range" min="0" max="2.5" step="0.02" value="1" aria-label="Window glow"></div>
-          <div class="slider-row wide" title="Overall street lamps &amp; district light pools">
-            <span>&#x2726;</span>
-            <input id="sl-lights" type="range" min="0" max="2" step="0.02" value="1" aria-label="Atmospheric lights">
-            <em id="lights-label">100%</em>
+        </div>
+      </div>
+    </details>
+
+    <!-- 6C. Modular Pure-Code Space-Ambient Synth Radio -->
+    <details class="subpanel" open>
+      <summary>Modular Synth Radio</summary>
+      <div class="subpanel-body">
+        <div id="radio-wrap">
+          <canvas id="radio-viz" width="276" height="46" aria-label="Live modular synthesizer spectrum and waveform visualizer"></canvas>
+          <div class="radio-bar">
+            <span id="radio-status">Standby · Pure-code WebAudio synth (press M)</span>
+          </div>
+        </div>
+        <div class="drop-row" style="margin-bottom: 6px;" title="Select pure-code generative synthesizer radio station (zero samples)">
+          <select id="sel-radio-station" aria-label="Modular synth radio station">
+            <option value="0" selected>Vangelis · Tyrell 2019 (CS-80 Space Blues)</option>
+            <option value="1">Aphex Twin · Selected Ambient Works (Drift)</option>
+            <option value="2">Vangelis · Albedo &amp; Spiral (Sequencer)</option>
+            <option value="3">Aphex Twin · Polygon Window (IDM Acid)</option>
+          </select>
+          <button id="b-radio-play" type="button" class="icon-btn" aria-pressed="false" aria-label="Play or pause modular synth radio" title="Play / stop pure-code modular synth radio (M)">&#x25B6;</button>
+          <button id="b-radio-next" type="button" class="icon-btn" aria-label="Next radio station" title="Switch to next generative synth station">&#x23ED;</button>
+          <button id="b-radio-seed" type="button" class="icon-btn" aria-label="New generative music variation" title="Reseed generative melody &amp; harmonic variation">&#x21BB;</button>
+        </div>
+        <div class="slider-grid">
+          <div class="slider-row wide" title="Modular Radio Master Volume">
+            <span>&#x266B;</span>
+            <input id="sl-radio-vol" type="range" min="0" max="1" step="0.02" value="0.68" aria-label="Radio master volume">
+            <em id="radio-vol-label">Vol 68%</em>
+          </div>
+          <div class="slider-row wide" title="Algorithmic Lexicon Hall Space Reverb &amp; Stereo Tape Delay">
+            <span>&#x25CE;</span>
+            <input id="sl-radio-space" type="range" min="0" max="1.5" step="0.02" value="0.9" aria-label="Synth space reverb and delay">
+            <em id="radio-space-label">Space 90%</em>
+          </div>
+          <div class="slider-row wide" title="Analog CS-80 / Ladder Filter Cutoff &amp; Harmonic Brilliance">
+            <span>&#x223F;</span>
+            <input id="sl-radio-warmth" type="range" min="0.1" max="1.5" step="0.02" value="0.8" aria-label="Synth filter cutoff and warmth">
+            <em id="radio-warmth-label">Tone 80%</em>
+          </div>
+          <div class="slider-row wide" title="Sequencer &amp; IDM Micro-Percussion Activity (0 = pure beatless space pads)">
+            <span>&#x22EF;</span>
+            <input id="sl-radio-pulse" type="range" min="0" max="1.5" step="0.02" value="0.55" aria-label="Synth sequencer and rhythm activity">
+            <em id="radio-pulse-label">Pulse 55%</em>
+          </div>
+          <div class="slider-row wide" title="Couple camera altitude, flight speed &amp; time-of-day into synth filter &amp; reverb">
+            <span>&#x21C4;</span>
+            <input id="sl-radio-react" type="range" min="0" max="1" step="0.02" value="0.65" aria-label="City reactive synth modulation">
+            <em id="radio-react-label">City 65%</em>
           </div>
         </div>
       </div>
@@ -943,6 +1114,7 @@ button.icon-btn.rec-on, button.action.rec-on {
   <span title="Dolly / speed"><kbd>&#x27F3;</kbd>&#x00B1;</span>
   <span title="Glide mode"><kbd>G</kbd>&#x2708;&#xFE0E;</span>
   <span title="Free look-around"><kbd>L</kbd>&#x25CE;</span>
+  <span title="Synth radio"><kbd>M</kbd>&#x266B;</span>
   <span title="Anticipatory steer"><kbd>V</kbd>&#x2934;</span>
   <span title="Collision"><kbd>C</kbd>&#x2B21;</span>
   <span title="Record path"><kbd>R</kbd>&#x25CF;</span>
