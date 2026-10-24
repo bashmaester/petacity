@@ -128,11 +128,12 @@ a specific city + style + hour (the Copy link button does this for you).
 ```
 index.html          UI shell + overlay effects (grain / scanlines / vignette)
 src/prng.js         seeded RNG + smooth value noise
-src/city.js         the scaffolding: streets, lots, tower stacks, landmarks, lanes (pure JS)
-src/shaders.js      GLSL: sky dome, ground grid, instanced towers w/ windows, landmarks, beacons
+src/city.js         the scaffolding: streets, lots, tower stacks, 16 creative PoI landmarks, lanes
+src/shaders.js      GLSL: sky dome, ground grid, instanced towers, multi-role landmarks, beacons
 src/looks.js        look presets (sky, fog, light, tower, ground, post) + authored hours
-src/scene.js        three.js scene layer: look/time -> uniforms, landmarks, traffic, beacons
-src/controls.js     6-DOF flight physics, 2nd-order turn damper, POI Auto-Look & smooth route queue
+src/scene.js        three.js scene layer: look/time -> uniforms, sculpted PoI landmarks, traffic
+src/post.js         bloom + 10 camera lens projections (Panini, Fisheye, 360°, Little Planet, Tilt-Shift)
+src/controls.js     6-DOF flight physics, Dutch roll, 2nd-order turn damper, POI Auto-Look & routes
 src/minimap.js      interactive radar/city map with dry-land street clipping & live route visualization
 src/recorder.js     C2 camera path recorder, non-destructive spline smoother & PNG/WebM exporter
 src/audio.js        pure-code Web Audio synth radio (6 original stations + 4-movement evolution)

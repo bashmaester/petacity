@@ -146,6 +146,26 @@ export const WORLD_PRESETS = [
       post: { bloom: 1.08, lens: 0.52, contrast: 1.10, temp: -0.22, film: 0.12 },
     },
   },
+  {
+    id: 'little-planet-gardens',
+    label: 'Little Planet Sky-Gardens (360°)',
+    state: {
+      seed: 4417, lookId: 'realistic', cityRadius: 5, suburbReach: 1.25,
+      worldCurve: 0.0, heightScale: 1.12, timeOfDay: 17.6, weatherMode: 0, dustLevel: 0.45,
+      tune: { win: 1.05, glow: 1.12, fog: 0.72, lights: 1.15, traffic: 1.1, clouds: 1.15, cloudType: 1, cloudStyle: 0, haze: 0.9, sun: 1.35, vib: 1.12, moon: 0.6, moonsz: 1.0, moonph: 0.8 },
+      post: { bloom: 0.82, lens: 0.35, contrast: 1.08, temp: 0.12, film: 0.08, lensMode: 6, lensZoom: 0.88 },
+    },
+  },
+  {
+    id: 'dutch-panini-noir',
+    label: 'Panini Dutch Noir (118°)',
+    state: {
+      seed: 4417, lookId: 'bladerunner', cityRadius: 5, suburbReach: 1.2,
+      worldCurve: 0.0, heightScale: 1.2, timeOfDay: 22.4, weatherMode: 1, dustLevel: 0.95,
+      tune: { win: 1.35, glow: 1.4, fog: 1.05, lights: 1.4, traffic: 1.25, clouds: 1.25, cloudType: 1, cloudStyle: 0, haze: 1.05, sun: 1.0, vib: 1.08, moon: 1.1, moonsz: 1.1, moonph: 1.35 },
+      post: { bloom: 1.22, lens: 0.74, contrast: 1.14, temp: -0.06, film: 0.18, lensMode: 1, lensDistort: 0.24, anamorphic: 0.42 },
+    },
+  },
 ];
 
 export const PRESET_BY_ID = Object.fromEntries(WORLD_PRESETS.map((p) => [p.id, p]));
@@ -273,7 +293,10 @@ export function normalizeExactState(raw = {}) {
       react: roundN(Number(raw.radio.react ?? 0.65), 2),
     };
   }
-  const defPost = { bloom: 0.85, lens: 0.45, contrast: 1.06, temp: 0, film: 0.16, artStyle: 0, artStrength: 1.0 };
+  const defPost = {
+    bloom: 0.85, lens: 0.45, contrast: 1.06, temp: 0, film: 0.16, artStyle: 0, artStrength: 1.0,
+    lensMode: 0, lensDistort: 0, lensZoom: 1.0, anamorphic: 0, tiltShift: 0,
+  };
   out.post = { ...defPost };
   if (raw.post && typeof raw.post === 'object') {
     for (const k of Object.keys(defPost)) {
@@ -290,6 +313,8 @@ export function normalizeExactState(raw = {}) {
       yaw: roundN(Number(camIn.yaw), 4),
       pitch: roundN(Number(camIn.pitch), 4),
     };
+    if (camIn.roll !== undefined) out.camera.roll = roundN(Number(camIn.roll), 4);
+    if (camIn.fov !== undefined) out.camera.fov = roundN(Number(camIn.fov), 1);
   }
   if (Array.isArray(raw.bookmarks) && raw.bookmarks.length) {
     out.bookmarks = raw.bookmarks.slice(0, 32).map((b, idx) => ({
@@ -300,6 +325,9 @@ export function normalizeExactState(raw = {}) {
       z: roundN(Number(b.z), 2),
       yaw: roundN(Number(b.yaw), 4),
       pitch: roundN(Number(b.pitch), 4),
+      ...(b.roll !== undefined ? { roll: roundN(Number(b.roll), 4) } : {}),
+      ...(b.fov !== undefined ? { fov: roundN(Number(b.fov), 1) } : {}),
+      ...(b.lensMode !== undefined ? { lensMode: Math.round(Number(b.lensMode)) } : {}),
     }));
   }
   if (raw.path && typeof raw.path === 'object') {

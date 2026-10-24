@@ -19,7 +19,7 @@ import {
   buildTransitInfrastructure, buildBridges, buildHarbor, buildSpaceport,
   buildStreetInfrastructure,
 } from './scene.js';
-import { makePostProcessor, ART_STYLE_NAMES } from './post.js';
+import { makePostProcessor, ART_STYLE_NAMES, LENS_MODE_NAMES, CAMERA_ANGLE_PRESETS } from './post.js';
 import { FlyControls, CAMERA_STYLE_NAMES } from './controls.js';
 import { CameraPathRecorder, makeSceneExporter } from './recorder.js';
 import { makeMinimap } from './minimap.js';
@@ -269,7 +269,11 @@ let weatherMode = initialExact ? initialExact.weatherMode : clampInt(params.get(
 let dustLevel = initialExact ? initialExact.dustLevel : 0.6;
 const initGrade = LOOK_BY_ID[lookId].grade || { bloom: 0.85, lens: 0.45, contrast: 1.06, temp: 0, film: 0.16 };
 const postState = initialExact
-  ? { artStyle: 0, artStrength: 1.0, ...initialExact.post }
+  ? {
+      artStyle: 0, artStrength: 1.0,
+      lensMode: 0, lensDistort: 0, lensZoom: 1.0, anamorphic: 0, tiltShift: 0,
+      ...initialExact.post,
+    }
   : {
       bloom: initGrade.bloom,
       lens: initGrade.lens,
@@ -278,7 +282,18 @@ const postState = initialExact
       film: initGrade.film,
       artStyle: clampInt(params.get('art'), 0, 5, 0),
       artStrength: params.get('as') !== null ? clampFloat(params.get('as'), 0, 1.4, 1) : 1.0,
+      lensMode: clampInt(params.get('lm'), 0, 9, 0),
+      lensDistort: params.get('ld') !== null ? clampFloat(params.get('ld'), -1, 1.25, 0) : 0,
+      lensZoom: params.get('lz') !== null ? clampFloat(params.get('lz'), 0.35, 2.5, 1) : 1.0,
+      anamorphic: params.get('ana') !== null ? clampFloat(params.get('ana'), 0, 1, 0) : 0,
+      tiltShift: params.get('ts') !== null ? clampFloat(params.get('ts'), 0, 1, 0) : 0,
     };
+let camFov = (initialExact && initialExact.camera && Number.isFinite(initialExact.camera.fov))
+  ? clampFloat(initialExact.camera.fov, 15, 150, 58)
+  : clampFloat(params.get('fov'), 15, 150, 58);
+let camRollDeg = (initialExact && initialExact.camera && Number.isFinite(initialExact.camera.roll))
+  ? clampFloat((initialExact.camera.roll * 180) / Math.PI, -180, 180, 0)
+  : clampFloat(params.get('roll'), -180, 180, 0);
 
 function createRenderer(canvas) {
   try {
@@ -637,6 +652,37 @@ function boot() {
 
   /* ------------------------------------------------------------- look */
 
+  function syncCameraOptics() {
+    const lMode = clampInt(postState.lensMode ?? 0, 0, 9, 0);
+    // In single-pass wide/distorted modes (0..3), expand effective pinhole FOV slightly when
+    // Panini or barrel distortion is active so real peripheral skyline enters the lens!
+    const paniniBoost = lMode === 1 ? 14 : 0;
+    const barrelBoost = Math.max(0, postState.lensDistort || 0) * 16;
+    const effFov = lMode >= 4
+      ? 90
+      : Math.max(12, Math.min(162, camFov + paniniBoost + barrelBoost));
+    if (Math.abs(camera.fov - effFov) > 0.05) {
+      camera.fov = effFov;
+      camera.updateProjectionMatrix();
+    }
+    controls.setCameraRoll((camRollDeg * Math.PI) / 180);
+    post.configure({
+      lensMode: lMode,
+      lensDistort: postState.lensDistort ?? 0,
+      lensZoom: postState.lensZoom ?? 1.0,
+      anamorphic: postState.anamorphic ?? 0,
+      tiltShift: postState.tiltShift ?? 0,
+      tiltAngle: -(camRollDeg * Math.PI) / 180,
+    });
+    $('#cam-fov-label').textContent = lMode >= 4 ? (lMode === 4 ? '180\u00B0' : (lMode === 8 ? '250\u00B0' : '360\u00B0')) : `FOV ${Math.round(camFov)}\u00B0`;
+    const dPct = Math.round((postState.lensDistort ?? 0) * 100);
+    $('#lens-distort-label').textContent = `Dist ${dPct > 0 ? '+' : ''}${dPct}%`;
+    $('#lens-zoom-label').textContent = `Zoom ${(postState.lensZoom ?? 1).toFixed(2)}\u00D7`;
+    $('#cam-roll-label').textContent = `Roll ${camRollDeg > 0 ? '+' : ''}${Math.round(camRollDeg)}\u00B0`;
+    $('#anamorphic-label').textContent = `Ana ${Math.round((postState.anamorphic ?? 0) * 100)}%`;
+    $('#tilt-shift-label').textContent = `Tilt ${Math.round((postState.tiltShift ?? 0) * 100)}%`;
+  }
+
   function syncPostSliders() {
     $('#sel-art').value = String(postState.artStyle ?? 0);
     $('#sl-artstr').value = String(postState.artStrength ?? 1.0);
@@ -645,6 +691,14 @@ function boot() {
     $('#sl-contrast').value = String(postState.contrast);
     $('#sl-temp').value = String(postState.temp);
     $('#sl-film').value = String(postState.film);
+    $('#sel-lens-mode').value = String(postState.lensMode ?? 0);
+    $('#sl-cam-fov').value = String(camFov);
+    $('#sl-lens-distort').value = String(postState.lensDistort ?? 0);
+    $('#sl-lens-zoom').value = String(postState.lensZoom ?? 1.0);
+    $('#sl-cam-roll').value = String(camRollDeg);
+    $('#sl-anamorphic').value = String(postState.anamorphic ?? 0);
+    $('#sl-tilt-shift').value = String(postState.tiltShift ?? 0);
+    syncCameraOptics();
   }
 
   function formatClock(hours) {
@@ -846,6 +900,12 @@ function boot() {
       tint: look.accent,
       artStyle: postState.artStyle ?? 0,
       artStrength: postState.artStrength ?? 1.0,
+      lensMode: postState.lensMode ?? 0,
+      lensDistort: postState.lensDistort ?? 0,
+      lensZoom: postState.lensZoom ?? 1.0,
+      anamorphic: postState.anamorphic ?? 0,
+      tiltShift: postState.tiltShift ?? 0,
+      tiltAngle: -(camRollDeg * Math.PI) / 180,
     });
   }
 
@@ -1018,7 +1078,7 @@ function boot() {
       post: { ...postState },
       radio: { ...radioState, station: radioEngine.stationIndex },
       custom: LOOK_BY_ID.custom.customConfig ? { ...LOOK_BY_ID.custom.customConfig } : { ...DEFAULT_CUSTOM },
-      camera: controls.getPose(),
+      camera: { ...controls.getPose(), fov: camFov },
       bookmarks,
       path: pathRecorder.hasPath ? pathRecorder.toJSON() : undefined,
     });
@@ -1126,7 +1186,10 @@ function boot() {
     }
     if (applyCamera && st.camera) {
       fly = null;
+      if (Number.isFinite(st.camera.fov)) camFov = clampFloat(st.camera.fov, 15, 150, 58);
+      if (Number.isFinite(st.camera.roll)) camRollDeg = clampFloat((st.camera.roll * 180) / Math.PI, -180, 180, 0);
       controls.setPose(st.camera);
+      syncPostSliders();
     }
     if (st.path) {
       pathRecorder.fromJSON(st.path);
@@ -1427,7 +1490,7 @@ function boot() {
     const on = radioEngine.toggle();
     syncRadioUI();
     flash(on
-      ? `\u266B Radio ON \u00B7 ${radioEngine.station.artist} \u2014 ${radioEngine.station.title}`
+      ? `\u266B Radio ON \u00B7 ${radioEngine.station.name}`
       : '\u266B Synth radio paused');
   };
   $('#b-radio').onclick = toggleRadio;
@@ -1437,7 +1500,7 @@ function boot() {
     radioState.station = radioEngine.stationIndex;
     if (!radioEngine.playing) radioEngine.start();
     syncRadioUI();
-    flash(`\u266B ${st.artist} \u00B7 ${st.title}`);
+    flash(`\u266B ${st.name}`);
   };
   $('#b-radio-seed').onclick = () => {
     radioEngine.reseed();
@@ -1514,6 +1577,75 @@ function boot() {
     turnSmooth = clampFloat(v, 0.2, 3.5, 1.25);
     controls.turnSmooth = turnSmooth;
     syncFeatureLabels();
+  });
+
+  // Camera Optics, Wide-Angle, 360-deg Projections & Strange Angles
+  $('#sel-lens-mode').onchange = (ev) => {
+    postState.lensMode = clampInt(ev.target.value, 0, 9, 0);
+    syncCameraOptics();
+    syncURL();
+    flash(`Optics \u00B7 ${LENS_MODE_NAMES[postState.lensMode] || 'Rectilinear'}`);
+  };
+  const applyAnglePresetByIndex = (idx) => {
+    const pr = CAMERA_ANGLE_PRESETS[clampInt(idx, 0, CAMERA_ANGLE_PRESETS.length - 1, 0)];
+    if (!pr) return;
+    postState.lensMode = pr.lensMode;
+    camFov = pr.fov;
+    postState.lensDistort = pr.distort;
+    postState.lensZoom = pr.zoom;
+    camRollDeg = pr.roll;
+    postState.anamorphic = pr.anamorphic;
+    postState.tiltShift = pr.tiltShift;
+    const pose = controls.getPose();
+    if (pr.pitchDeg !== undefined) pose.pitch = (pr.pitchDeg * Math.PI) / 180;
+    if (pr.altitude !== undefined) {
+      const terrY = cityCollider && cityCollider.groundHeightAt
+        ? cityCollider.groundHeightAt(pose.x, pose.z)
+        : 0;
+      const roofNear = cityCollider && cityCollider.maxHeightNear
+        ? cityCollider.maxHeightNear(pose.x, pose.z, 6) * heightScale
+        : 0;
+      pose.y = Math.max(terrY + pr.altitude, pr.altitude < 60 ? roofNear + 12 : terrY + pr.altitude);
+    }
+    pose.roll = (camRollDeg * Math.PI) / 180;
+    controls.setPose(pose);
+    syncPostSliders();
+    syncURL();
+    flash(`Shot \u00B7 ${pr.label}`);
+  };
+  $('#sel-angle-preset').onchange = (ev) => applyAnglePresetByIndex(ev.target.value);
+  $('#b-angle-apply').onclick = () => applyAnglePresetByIndex($('#sel-angle-preset').value);
+  $('#b-opt-reset').onclick = () => {
+    $('#sel-angle-preset').value = '0';
+    applyAnglePresetByIndex(0);
+  };
+  bindSlider($('#sl-cam-fov'), (v) => {
+    camFov = clampFloat(v, 15, 150, 58);
+    if ((postState.lensMode ?? 0) >= 4) {
+      postState.lensMode = 0;
+      $('#sel-lens-mode').value = '0';
+    }
+    syncCameraOptics();
+  });
+  bindSlider($('#sl-lens-distort'), (v) => {
+    postState.lensDistort = clampFloat(v, -1, 1.25, 0);
+    syncCameraOptics();
+  });
+  bindSlider($('#sl-lens-zoom'), (v) => {
+    postState.lensZoom = clampFloat(v, 0.35, 2.5, 1);
+    syncCameraOptics();
+  });
+  bindSlider($('#sl-cam-roll'), (v) => {
+    camRollDeg = clampFloat(v, -180, 180, 0);
+    syncCameraOptics();
+  });
+  bindSlider($('#sl-anamorphic'), (v) => {
+    postState.anamorphic = clampFloat(v, 0, 1, 0);
+    syncCameraOptics();
+  });
+  bindSlider($('#sl-tilt-shift'), (v) => {
+    postState.tiltShift = clampFloat(v, 0, 1, 0);
+    syncCameraOptics();
   });
   bindSlider($('#sl-curve'), (v) => {
     worldCurve = clampFloat(v, 0, 1, 0);
@@ -2242,6 +2374,14 @@ function boot() {
     sphere: '\u25CF',
     arch: '\u2229',
     bridge: '\u2312',
+    ziggurat: '\u25EC',
+    hanging_gardens: '\u2740',
+    brutalist_habitat: '\u25A6',
+    neo_ziggurat: '\u25EC',
+    inverted_ziggurat: '\u25BD',
+    helix_arcology: '\u29BF',
+    torus_ring: '\u25EF',
+    metabolism_tree: '\u2618\uFE0E',
     arena: '\u2B21',
     stadium: '\u2B21',
     theatre: '\u2726',
@@ -2331,13 +2471,19 @@ function boot() {
       opt.textContent = `${g} ${lm.name}`;
       sel.appendChild(opt);
     });
+    const creativeKinds = new Set([
+      'hanging_gardens', 'brutalist_habitat', 'neo_ziggurat', 'ziggurat',
+      'inverted_ziggurat', 'helix_arcology', 'torus_ring', 'metabolism_tree',
+    ]);
     controls.poiList = poiList.map((lm) => ({
       name: lm.name,
       x: lm.x,
       y: (lm.h || lm.y || 75) * heightScale,
       lookY: (lm.h || lm.y || 75) * 0.62 * heightScale,
       z: lm.z,
-      priority: lm.kind === 'media' || lm.kind === 'spaceport' || lm.kind === 'harbor' ? 1.45 : 1.0,
+      priority: creativeKinds.has(lm.kind)
+        ? 1.65
+        : (lm.kind === 'media' || lm.kind === 'spaceport' || lm.kind === 'harbor' ? 1.45 : 1.0),
     }));
   }
 
@@ -2588,8 +2734,39 @@ function boot() {
     if (patch.seed !== undefined) { seed = clampInt(patch.seed, 1, 999999999, seed); needRebuild = true; }
     if (patch.radius !== undefined) { cityRadius = clampInt(patch.radius, 1, 15, cityRadius); needRebuild = true; }
     if (patch.fov !== undefined) {
-      camera.fov = clampFloat(patch.fov, 18, 115, 58);
-      camera.updateProjectionMatrix();
+      camFov = clampFloat(patch.fov, 15, 150, 58);
+      syncCameraOptics();
+    }
+    if (patch.roll !== undefined) {
+      camRollDeg = clampFloat(Number(patch.roll), -180, 180, 0);
+      syncCameraOptics();
+    }
+    if (patch.lensMode !== undefined) {
+      postState.lensMode = clampInt(patch.lensMode, 0, 9, 0);
+      syncCameraOptics();
+    }
+    if (patch.lensDistort !== undefined) {
+      postState.lensDistort = clampFloat(patch.lensDistort, -1, 1.25, 0);
+      syncCameraOptics();
+    }
+    if (patch.lensZoom !== undefined) {
+      postState.lensZoom = clampFloat(patch.lensZoom, 0.35, 2.5, 1);
+      syncCameraOptics();
+    }
+    if (patch.anamorphic !== undefined) {
+      postState.anamorphic = clampFloat(patch.anamorphic, 0, 1, 0);
+      syncCameraOptics();
+    }
+    if (patch.tiltShift !== undefined) {
+      postState.tiltShift = clampFloat(patch.tiltShift, 0, 1, 0);
+      syncCameraOptics();
+    }
+    if (patch.anglePreset !== undefined) {
+      const q = String(patch.anglePreset).toLowerCase();
+      const idx = Number.isFinite(Number(patch.anglePreset))
+        ? clampInt(patch.anglePreset, 0, CAMERA_ANGLE_PRESETS.length - 1, 0)
+        : CAMERA_ANGLE_PRESETS.findIndex((p) => p.id === q || p.label.toLowerCase().includes(q));
+      if (idx >= 0) applyAnglePresetByIndex(idx);
     }
     if (patch.motionStyle !== undefined) {
       camStyle = clampInt(patch.motionStyle, 0, 4, 0);

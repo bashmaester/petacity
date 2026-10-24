@@ -236,6 +236,26 @@ test('Phase-15 UI contract: high-frequency water shaders, turn damping, POI auto
   assert.ok(main.includes('MovieSetDirector'), 'main.js wires MovieSetDirector');
 });
 
+test('Phase-16 UI contract: camera optics, wide-angle, 360 projections, Dutch roll, anamorphic, tilt-shift & extreme angle presets', () => {
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  for (const id of [
+    'sel-lens-mode',
+    'sel-angle-preset',
+    'b-angle-apply',
+    'b-opt-reset',
+    'sl-cam-fov', 'cam-fov-label',
+    'sl-lens-distort', 'lens-distort-label',
+    'sl-lens-zoom', 'lens-zoom-label',
+    'sl-cam-roll', 'cam-roll-label',
+    'sl-anamorphic', 'anamorphic-label',
+    'sl-tilt-shift', 'tilt-shift-label',
+  ]) {
+    assert.ok(html.includes(`id="${id}"`), `#${id} present in index.html`);
+  }
+  assert.match(html, /id="sl-cam-fov"[^>]*min="15"[^>]*max="150"/, 'FOV slider spans 15 deg telephoto to 150 deg hyper-wide');
+  assert.match(html, /id="sl-cam-roll"[^>]*min="-180"[^>]*max="180"/, 'Roll slider spans -180 to +180 deg');
+});
+
 
 
 

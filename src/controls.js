@@ -10,7 +10,7 @@
 //     wall-proximity cushion + multi-substep swept sphere resolution (zero jerk).
 import * as THREE from '../vendor/three.module.js';
 
-const PITCH_LIMIT = 1.45;
+const PITCH_LIMIT = 1.553; // ~89.0 deg for extreme skyscraper worm's-eye & nadir angles
 const WHISKER_ANGLES = [-0.20, 0.20, -0.44, 0.44, -0.76, 0.76, -1.16, 1.16];
 
 export const CAMERA_STYLE_NAMES = [
@@ -85,6 +85,7 @@ export class FlyControls {
     this.yaw = 0;
     this.pitch = 0;
     this.roll = 0;
+    this.cameraRoll = 0;        // user / director Dutch roll offset (-PI .. +PI)
     this._targetYaw = 0;
     this._targetPitch = 0;
     this._yawVel = 0;
@@ -409,7 +410,15 @@ export class FlyControls {
       z: Math.round(p.z * 100) / 100,
       yaw: Math.round(this.yaw * 10000) / 10000,
       pitch: Math.round(this.pitch * 10000) / 10000,
+      roll: Math.round((this.cameraRoll || 0) * 10000) / 10000,
     };
+  }
+
+  setCameraRoll(rad = 0) {
+    this.cameraRoll = Number.isFinite(rad) ? rad : 0;
+    this.camera.quaternion.setFromEuler(
+      new THREE.Euler(this.pitch, this.yaw, this.roll + this.cameraRoll, 'YXZ')
+    );
   }
 
   setPose(pose, maybeTarget = null) {
@@ -425,6 +434,7 @@ export class FlyControls {
     }
     if (Number.isFinite(pose.yaw)) this.yaw = pose.yaw;
     if (Number.isFinite(pose.pitch)) this.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, pose.pitch));
+    if (Number.isFinite(pose.roll)) this.cameraRoll = pose.roll;
     this._targetYaw = this.yaw;
     this._targetPitch = this.pitch;
     this.moveYaw = this.yaw;
@@ -444,7 +454,7 @@ export class FlyControls {
     this._avoidYawRate = 0;
     this._avoidPitchRate = 0;
     this._avoidLiftVel = 0;
-    this.camera.quaternion.setFromEuler(new THREE.Euler(this.pitch, this.yaw, 0, 'YXZ'));
+    this.camera.quaternion.setFromEuler(new THREE.Euler(this.pitch, this.yaw, this.cameraRoll || 0, 'YXZ'));
   }
 
   setGlide(on) {
@@ -962,7 +972,9 @@ export class FlyControls {
     const targetRoll = decoupled ? 0 : Math.max(-maxBank, Math.min(maxBank, yawRate * bankGain));
     this.roll += (targetRoll - this.roll) * (1 - Math.exp(-clampedDt * (6.5 / Math.sqrt(smoothK * turnK))));
 
-    this.camera.quaternion.setFromEuler(new THREE.Euler(this.pitch, this.yaw, this.roll, 'YXZ'));
+    this.camera.quaternion.setFromEuler(
+      new THREE.Euler(this.pitch, this.yaw, this.roll + (this.cameraRoll || 0), 'YXZ')
+    );
   }
 
   get velocity() {

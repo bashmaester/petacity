@@ -641,15 +641,20 @@ function computeSpecialPalette(look, U, seed = 0.5) {
   const cTrim = new THREE.Color();
   const cGallery = new THREE.Color();
   const cPad = new THREE.Color();
+  const cFoliage = new THREE.Color();
+  const cBrutalist = new THREE.Color();
+  const cCascade = new THREE.Color();
   const tmpA = new THREE.Color();
   const tmpB = new THREE.Color();
 
   const s = ((seed % 1) + 1) % 1;
+  let isMono = false;
   if (look && look.tower) {
     const tw = look.tower;
     const gr = look.ground || {};
     const sig = look.signals || {};
     const lt = look.light || {};
+    isMono = Boolean(sig.billMono > 0.5 || look.id === 'metropolis');
     if (tw.usePalette > 0.5 && Array.isArray(tw.palette) && tw.palette.length > 0) {
       const pIdx = Math.floor(s * tw.palette.length) % tw.palette.length;
       const pIdx2 = (pIdx + 2) % tw.palette.length;
@@ -664,11 +669,30 @@ function computeSpecialPalette(look, U, seed = 0.5) {
     const accentHex = look.accent || tw.edgeCol || '#68e8ff';
     const billHex = sig.billA || tw.edgeCol || accentHex;
     cTrim.set(accentHex);
-    if (!(sig.billMono > 0.5)) cTrim.lerp(tmpA.set(billHex), s * 0.55);
+    if (!isMono) cTrim.lerp(tmpA.set(billHex), s * 0.55);
     const winHex = (!tw.winA || tw.winA === '#000000') ? accentHex : tw.winA;
     cGallery.set(winHex).lerp(cTrim, 0.28);
     cPad.set(gr.block || tw.baseA).lerp(tmpA.set(tw.baseA), 0.35);
+
+    if (isMono) {
+      cFoliage.copy(cSecondary).lerp(cTrim, 0.22);
+      cBrutalist.copy(cPrimary).lerp(cSecondary, 0.48);
+      cCascade.copy(cTrim).lerp(cPrimary, 0.32);
+    } else if (look.id === 'clay') {
+      cFoliage.set('#b8c9b0').lerp(cPrimary, 0.45);
+      cBrutalist.set('#d8d4cc').lerp(cPrimary, 0.52);
+      cCascade.set('#b8d4de').lerp(cTrim, 0.35);
+    } else if (look.id === 'tron') {
+      cFoliage.set('#0dd9a3').lerp(cTrim, 0.35);
+      cBrutalist.set('#14202e').lerp(cPrimary, 0.55);
+      cCascade.set('#18f2ff').lerp(cTrim, 0.42);
+    } else {
+      cFoliage.set('#228b54').lerp(tmpA.set('#46c478'), s * 0.55).lerp(cPrimary, 0.16);
+      cBrutalist.set('#6a6c70').lerp(tmpA.set('#848078'), s * 0.5).lerp(cPrimary, 0.36);
+      cCascade.set('#2eb8e6').lerp(cTrim, 0.38);
+    }
   } else {
+    isMono = Boolean(U.uSat && U.uSat.value < 0.08);
     if (U.uUsePal && U.uUsePal.value > 0.5 && U.uPal && U.uPal.value.length) {
       const pal = U.uPal.value;
       const pIdx = Math.floor(s * pal.length) % pal.length;
@@ -682,8 +706,26 @@ function computeSpecialPalette(look, U, seed = 0.5) {
     cGallery.copy(U.uWinA.value);
     if (cGallery.r + cGallery.g + cGallery.b < 0.03) cGallery.copy(cTrim);
     cPad.copy(U.uGBlock.value).lerp(U.uBaseA.value, 0.35);
+    if (isMono) {
+      cFoliage.copy(cSecondary).lerp(cTrim, 0.22);
+      cBrutalist.copy(cPrimary).lerp(cSecondary, 0.48);
+      cCascade.copy(cTrim).lerp(cPrimary, 0.32);
+    } else {
+      cFoliage.set('#248f59').lerp(cPrimary, 0.18);
+      cBrutalist.set('#707276').lerp(cPrimary, 0.38);
+      cCascade.set('#32bfe8').lerp(cTrim, 0.38);
+    }
   }
-  return { primary: cPrimary, secondary: cSecondary, trim: cTrim, gallery: cGallery, pad: cPad };
+  return {
+    primary: cPrimary,
+    secondary: cSecondary,
+    trim: cTrim,
+    gallery: cGallery,
+    pad: cPad,
+    foliage: cFoliage,
+    brutalist: cBrutalist,
+    cascade: cCascade,
+  };
 }
 
 /**
@@ -713,11 +755,21 @@ export function buildLandmarks(city, U, initialLook = null) {
     const secondaryMat = makeLandmarkMaterial(U, '#ffffff', 1);
     const trimMat = makeLandmarkMaterial(U, '#ffffff', 2);
     const galleryMat = makeLandmarkMaterial(U, '#ffffff', 3);
+    const foliageMat = makeLandmarkMaterial(U, '#ffffff', 4);
+    const brutalistMat = makeLandmarkMaterial(U, '#ffffff', 5);
+    const cascadeMat = makeLandmarkMaterial(U, '#ffffff', 6);
     primaryMat.uniforms.uCol.value.copy(pal.primary);
     secondaryMat.uniforms.uCol.value.copy(pal.secondary);
     trimMat.uniforms.uCol.value.copy(pal.trim);
     galleryMat.uniforms.uCol.value.copy(pal.gallery);
-    entries.push({ seed: lm.colorSeed, primaryMat, secondaryMat, trimMat, galleryMat });
+    foliageMat.uniforms.uCol.value.copy(pal.foliage);
+    brutalistMat.uniforms.uCol.value.copy(pal.brutalist);
+    cascadeMat.uniforms.uCol.value.copy(pal.cascade);
+    entries.push({
+      seed: lm.colorSeed,
+      primaryMat, secondaryMat, trimMat, galleryMat,
+      foliageMat, brutalistMat, cascadeMat,
+    });
 
     const m = new THREE.Group();
     m.position.set(lm.x, 0, lm.z);
@@ -1028,6 +1080,426 @@ export function buildLandmarks(city, U, initialLook = null) {
       halo.position.y = h * 0.84;
       halo.rotation.x = Math.PI / 2 - 0.32;
       m.add(halo);
+    } else if (kind === 'hanging_gardens') {
+      // Cascading Hanging-Gardens Biophilic Ziggurat: twin stepped amphitheatre wings flanking
+      // a central waterfall gorge, lush overhanging botanical terraces & vine curtains,
+      // rooftop infinity lagoon, conservatory biodomes & suspended canyon skybridges!
+      const tiers = 7;
+      const bodyH = h * 0.82;
+      const tierH = bodyH / tiers;
+      const gorgeHalf = r * 0.24;
+
+      // Misty illuminated plunge basin at street plaza level
+      addBox(m, gorgeHalf * 2.2, 3.2, r * 2.12, cascadeMat, 0, 8.2, 0);
+
+      for (let i = 0; i < tiers; i++) {
+        const frac = i / tiers;
+        const fullW = r * 2.40 * (1 - frac * 0.56);
+        const wingW = Math.max(r * 0.26, (fullW - gorgeHalf * 2) * 0.5);
+        const depthZ = r * 2.26 * (1 - frac * 0.50);
+        const yC = 8 + (i + 0.5) * tierH;
+        const tMat = i % 2 === 0 ? primaryMat : secondaryMat;
+
+        for (const sx of [-1, 1]) {
+          const wx = sx * (gorgeHalf + wingW * 0.5);
+          // Stepped masonry terrace block + illuminated colonnade gallery
+          addBox(m, wingW, tierH * 0.78, depthZ, tMat, wx, yC - tierH * 0.08, 0);
+          addBox(m, wingW * 0.94, tierH * 0.16, depthZ * 0.94, galleryMat, wx, yC + tierH * 0.36, 0);
+          // Lush overhanging botanical canopy + cascading vine planter drapes along outer & gorge edges
+          addBox(m, wingW * 1.08, tierH * 0.19, depthZ * 1.07, foliageMat, wx, yC + tierH * 0.49, 0);
+          addBox(m, r * 0.08, tierH * 0.52, depthZ * 0.96, foliageMat, sx * (gorgeHalf + 0.6), yC + tierH * 0.22, 0);
+          // Sculpted botanical tree domes sprouting on the terrace shelves
+          const domeR = Math.max(3.2, wingW * 0.24);
+          for (const sz of [-0.32, 0.32]) {
+            const treeCrown = new THREE.Mesh(
+              new THREE.SphereGeometry(domeR, 10, 7, 0, Math.PI * 2, 0, Math.PI * 0.68),
+              foliageMat
+            );
+            treeCrown.position.set(wx + sx * wingW * 0.18, yC + tierH * 0.55, sz * depthZ);
+            m.add(treeCrown);
+          }
+        }
+
+        // Stepped cascade waterfall spillways pouring down the central canyon gorge
+        const stepZ = depthZ * 0.42;
+        for (const sz of [-1, 1]) {
+          addBox(m, gorgeHalf * 1.65, tierH * 1.04, r * 0.11, cascadeMat, 0, yC, sz * stepZ, sz * 0.14, 0, 0);
+        }
+        // Canyon skybridges spanning between the lush garden wings on tiers 2, 4, 6
+        if (i === 1 || i === 3 || i === 5) {
+          addBox(m, gorgeHalf * 2.4, tierH * 0.15, r * 0.30, galleryMat, 0, yC + tierH * 0.34, 0);
+          addBox(m, gorgeHalf * 2.5, tierH * 0.06, r * 0.34, trimMat, 0, yC + tierH * 0.44, 0);
+          addBox(m, gorgeHalf * 2.2, tierH * 0.10, r * 0.36, foliageMat, 0, yC + tierH * 0.50, 0);
+        }
+      }
+
+      // Summit infinity sky-lagoon + arched glass conservatory biodome + solar botanical halo
+      const topY = 8 + bodyH;
+      addBox(m, r * 1.08, h * 0.045, r * 1.12, secondaryMat, 0, topY + h * 0.02, 0);
+      addBox(m, r * 0.96, h * 0.022, r * 1.00, cascadeMat, 0, topY + h * 0.048, 0);
+      const bioDome = new THREE.Mesh(
+        new THREE.SphereGeometry(r * 0.46, 20, 12, 0, Math.PI * 2, 0, Math.PI * 0.55),
+        galleryMat
+      );
+      bioDome.position.y = topY + h * 0.055;
+      m.add(bioDome);
+      for (let k = 0; k < 4; k++) {
+        const rib = new THREE.Mesh(new THREE.TorusGeometry(r * 0.47, r * 0.024, 6, 20, Math.PI), trimMat);
+        rib.position.y = topY + h * 0.055;
+        rib.rotation.y = (k / 4) * Math.PI;
+        m.add(rib);
+      }
+      const crownGrove = new THREE.Mesh(new THREE.SphereGeometry(r * 0.24, 10, 8), foliageMat);
+      crownGrove.position.y = topY + h * 0.08;
+      m.add(crownGrove);
+    } else if (kind === 'brutalist_habitat') {
+      // Brutalist Modular Housing Megastructure (Habitat 2099 / Beton-Brut Sky-Commune):
+      // splayed V-pilotis over open civic undercroft, 3D checkerboard cantilevered concrete
+      // housing modules, freestanding slip-form elevator cores & glazed "Streets in the Sky"!
+      const pilotiH = h * 0.16;
+      // 6 massive V-shaped raw concrete pilotis legs
+      for (const sx of [-0.72, 0, 0.72]) {
+        for (const sz of [-0.55, 0.55]) {
+          addBox(m, r * 0.20, pilotiH * 1.08, r * 0.24, brutalistMat, sx * r, pilotiH * 0.52, sz * r, 0.20, 0, 0);
+          addBox(m, r * 0.20, pilotiH * 1.08, r * 0.24, brutalistMat, sx * r, pilotiH * 0.52, sz * r, -0.20, 0, 0);
+        }
+      }
+      // Elevated Brutalist transfer transfer-table deck ("Podium Street")
+      addBox(m, r * 2.32, h * 0.048, r * 1.92, brutalistMat, 0, pilotiH + h * 0.024, 0);
+      addBox(m, r * 2.36, h * 0.014, r * 1.96, trimMat, 0, pilotiH + h * 0.050, 0);
+
+      // 3 freestanding cylindrical slip-form concrete vertical circulation & utility cores
+      for (const [cxOff, czOff, chMul] of [[-r * 0.78, -r * 0.58, 0.96], [r * 0.78, -r * 0.58, 0.88], [0, r * 0.64, 1.0]]) {
+        const coreH = h * chMul;
+        const cyl = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.19, r * 0.21, coreH, 12), brutalistMat);
+        cyl.position.set(cxOff, coreH * 0.5, czOff);
+        m.add(cyl);
+        addBox(m, r * 0.07, coreH * 0.90, r * 0.44, galleryMat, cxOff, coreH * 0.48, czOff);
+      }
+
+      // Twin brutalist waffle-grid spine slabs + 30 cantilevered modular Habitat housing boxes
+      const levels = 9;
+      const stackBase = pilotiH + h * 0.052;
+      const lvlH = (h * 0.74) / levels;
+      for (let lv = 0; lv < levels; lv++) {
+        const yL = stackBase + (lv + 0.5) * lvlH;
+        const taper = 1 - Math.max(0, lv - 4) * 0.08;
+        // Main concrete waffle housing bar
+        addBox(m, r * 1.95 * taper, lvlH * 0.86, r * 0.58, brutalistMat, 0, yL, -r * 0.16);
+
+        // 4 staggered cantilevered Habitat capsule modules per level jutting out N/S/E/W
+        for (let c = 0; c < 4; c++) {
+          const hVal = Math.sin((lv * 7 + c * 13 + lm.colorSeed * 53) * 1.73);
+          const xPos = ((c - 1.5) * 0.56 + hVal * 0.10) * r * taper;
+          const zJut = ((lv + c) % 2 === 0 ? 1 : -1) * r * (0.44 + Math.abs(hVal) * 0.34);
+          const modW = r * (0.44 + (c % 2) * 0.10);
+          const modD = r * (0.58 + ((lv + c) % 2) * 0.16);
+          addBox(m, modW, lvlH * 0.84, modD, brutalistMat, xPos, yL, zJut);
+          // Warm recessed loggia window strip & rooftop patio garden pocket on alternating modules
+          addBox(m, modW * 0.82, lvlH * 0.28, modD * 1.02, galleryMat, xPos, yL - lvlH * 0.08, zJut);
+          if ((lv + c) % 3 === 0) {
+            addBox(m, modW * 0.88, lvlH * 0.14, modD * 0.84, foliageMat, xPos, yL + lvlH * 0.48, zJut);
+          }
+        }
+
+        // Glazed "Streets in the Sky" pedestrian skywalk tubes linking cores on levels 2, 5, 8
+        if (lv === 2 || lv === 5 || lv === 7) {
+          addBox(m, r * 2.18, lvlH * 0.32, r * 0.22, galleryMat, 0, yL + lvlH * 0.12, r * 0.54);
+          addBox(m, r * 2.22, lvlH * 0.09, r * 0.26, trimMat, 0, yL + lvlH * 0.30, r * 0.54);
+          addBox(m, r * 0.20, lvlH * 0.32, r * 1.35, galleryMat, -r * 0.78, yL + lvlH * 0.12, 0);
+          addBox(m, r * 0.20, lvlH * 0.32, r * 1.35, galleryMat, r * 0.78, yL + lvlH * 0.12, 0);
+        }
+      }
+
+      // Sculptural Brutalist rooftop sun-scoop periscopes & concrete acoustic dish
+      const roofY = stackBase + levels * lvlH;
+      for (const sx of [-1, 1]) {
+        addBox(m, r * 0.34, h * 0.09, r * 0.30, brutalistMat, sx * r * 0.42, roofY + h * 0.04, -r * 0.14);
+        addBox(m, r * 0.28, h * 0.04, r * 0.34, galleryMat, sx * r * 0.42, roofY + h * 0.075, -r * 0.02);
+      }
+      const dish = new THREE.Mesh(
+        new THREE.SphereGeometry(r * 0.32, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.46),
+        trimMat
+      );
+      dish.rotation.x = Math.PI * 0.72;
+      dish.position.set(0, roofY + h * 0.10, r * 0.64);
+      m.add(dish);
+    } else if (kind === 'neo_ziggurat') {
+      // Uruk-9 Split-Core Cyber Megaziggurat: 9-tier stepped twin bastions cleaved by a glowing
+      // vertical energy chasm, ceremonial skybridges, inclined funicular rails & gyro-astrolabe!
+      const tiers = 9;
+      const bodyH = h * 0.80;
+      const tierH = bodyH / tiers;
+      const chasmHalf = r * 0.17;
+
+      // Glowing vertical central chasm core wall
+      addBox(m, chasmHalf * 1.1, bodyH * 0.96, r * 0.62, galleryMat, 0, 8 + bodyH * 0.48, 0);
+
+      for (let i = 0; i < tiers; i++) {
+        const frac = i / tiers;
+        const totalW = r * 2.48 * (1 - frac * 0.64);
+        const halfW = Math.max(r * 0.22, (totalW - chasmHalf * 2) * 0.5);
+        const depthZ = r * 2.36 * (1 - frac * 0.62);
+        const yC = 8 + (i + 0.5) * tierH;
+        const matUse = i % 2 === 0 ? primaryMat : secondaryMat;
+
+        for (const sx of [-1, 1]) {
+          const bx = sx * (chasmHalf + halfW * 0.5);
+          addBox(m, halfW, tierH * 0.84, depthZ, matUse, bx, yC - tierH * 0.04, 0);
+          addBox(m, halfW * 0.96, tierH * 0.14, depthZ * 0.96, galleryMat, bx, yC + tierH * 0.41, 0);
+          addBox(m, halfW * 1.03, tierH * 0.055, depthZ * 1.03, trimMat, bx, yC + tierH * 0.49, 0);
+        }
+        // Ceremonial chasm skybridges across tiers 2, 5, 8
+        if (i === 2 || i === 5 || i === 7) {
+          addBox(m, chasmHalf * 2.6, tierH * 0.22, depthZ * 0.34, secondaryMat, 0, yC + tierH * 0.25, 0);
+          addBox(m, chasmHalf * 2.7, tierH * 0.08, depthZ * 0.38, trimMat, 0, yC + tierH * 0.39, 0);
+        }
+      }
+
+      // 4 inclined diagonal funicular sky-rails climbing the N/S/E/W flanks
+      const run = r * 2.48 * 0.32;
+      const railL = Math.hypot(run, bodyH * 0.90);
+      const railAng = Math.atan2(run, bodyH * 0.90);
+      for (let d = 0; d < 4; d++) {
+        const fg = new THREE.Group();
+        fg.rotation.y = d * (Math.PI / 2);
+        const zM = r * 1.18 - run * 0.45;
+        addBox(fg, r * 0.24, railL, r * 0.14, secondaryMat, 0, 8 + bodyH * 0.45, zM, -railAng, 0, 0);
+        addBox(fg, r * 0.06, railL * 1.01, r * 0.17, trimMat, 0, 8 + bodyH * 0.45, zM + r * 0.04, -railAng, 0, 0);
+        m.add(fg);
+      }
+
+      // Twin summit ziggurat horns cradling a levitating triple-ring gyroscopic solar astrolabe!
+      const sumY = 8 + bodyH;
+      for (const sx of [-1, 1]) {
+        addBox(m, r * 0.22, h * 0.16, r * 0.48, secondaryMat, sx * (chasmHalf + r * 0.14), sumY + h * 0.08, 0);
+        addBox(m, r * 0.06, h * 0.17, r * 0.52, trimMat, sx * (chasmHalf + r * 0.03), sumY + h * 0.085, 0);
+      }
+      for (let ri = 0; ri < 3; ri++) {
+        const astro = new THREE.Mesh(
+          new THREE.TorusGeometry(r * (0.42 - ri * 0.08), r * 0.026, 6, 32),
+          ri === 1 ? galleryMat : trimMat
+        );
+        astro.position.y = sumY + h * 0.135;
+        astro.rotation.set(0.45 + ri * 0.72, ri * 0.85, 0.3 * ri);
+        m.add(astro);
+      }
+    } else if (kind === 'inverted_ziggurat') {
+      // Counter-Gravity Inverted Brutalist Ziggurat: narrow concrete core braced by 8 angled
+      // flying concrete compression struts, stepping WIDER tier by tier up to a rooftop sky-plaza!
+      const pedH = h * 0.24;
+      addBox(m, r * 0.88, pedH, r * 0.88, brutalistMat, 0, 8 + pedH * 0.5, 0);
+      addBox(m, r * 0.94, pedH * 0.14, r * 0.94, galleryMat, 0, 8 + pedH * 0.88, 0);
+
+      // 8 dramatic flying concrete compression struts fanning outward to carry the cantilevered upper mass
+      for (let k = 0; k < 8; k++) {
+        const a = (k / 8) * Math.PI * 2;
+        const sg = new THREE.Group();
+        sg.rotation.y = a;
+        addBox(sg, r * 0.15, h * 0.48, r * 0.24, brutalistMat, 0, 8 + h * 0.28, r * 0.72, 0.44, 0, 0);
+        addBox(sg, r * 0.045, h * 0.46, r * 0.06, trimMat, 0, 8 + h * 0.28, r * 0.84, 0.44, 0, 0);
+        m.add(sg);
+      }
+
+      // 6 inverted tiers expanding outward as elevation rises!
+      const tiers = 6;
+      const stackH = h * 0.60;
+      const tH = stackH / tiers;
+      const baseY = 8 + pedH * 0.85;
+      for (let i = 0; i < tiers; i++) {
+        const frac = i / Math.max(1, tiers - 1);
+        const w = r * (1.02 + frac * 1.26);
+        const yC = baseY + (i + 0.5) * tH;
+        addBox(m, w, tH * 0.78, w, i % 2 === 0 ? brutalistMat : primaryMat, 0, yC + tH * 0.06, 0);
+        // Downward-looking glowing soffit gallery under every dramatic overhang!
+        addBox(m, w * 0.97, tH * 0.16, w * 0.97, galleryMat, 0, yC - tH * 0.38, 0);
+        addBox(m, w * 1.02, tH * 0.055, w * 1.02, trimMat, 0, yC + tH * 0.46, 0);
+      }
+
+      // Vast rooftop Hanging Sky-Plaza + perimeter colonnade + sky-grove + obelisk needle
+      const topY = baseY + stackH;
+      const topW = r * 2.28;
+      addBox(m, topW * 0.86, h * 0.025, topW * 0.86, foliageMat, 0, topY + h * 0.015, 0);
+      for (const sx of [-1, 1]) {
+        for (const sz of [-1, 1]) {
+          addBox(m, r * 0.24, h * 0.08, r * 0.24, secondaryMat, sx * topW * 0.40, topY + h * 0.04, sz * topW * 0.40);
+        }
+      }
+      const obelisk = new THREE.Mesh(new THREE.ConeGeometry(r * 0.20, h * 0.16, 4), trimMat);
+      obelisk.rotation.y = Math.PI / 4;
+      obelisk.position.y = topY + h * 0.09;
+      m.add(obelisk);
+    } else if (kind === 'helix_arcology') {
+      // Double-Helix DNA Bio-Arcology Spire: central glazed atrium core, two intertwined
+      // 540-deg helical tower strands, horizontal skybridge rungs & spiraling pocket sky-gardens!
+      const coreH = h * 0.90;
+      const atrium = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.26, r * 0.30, coreH, 16), galleryMat);
+      atrium.position.y = 8 + coreH * 0.5;
+      m.add(atrium);
+
+      const steps = 20;
+      const stepH = (coreH * 0.92) / steps;
+      const helixR = r * 0.82;
+      for (let i = 0; i < steps; i++) {
+        const frac = i / steps;
+        const ang = frac * Math.PI * 3.0; // 540 deg twist
+        const yS = 10 + (i + 0.5) * stepH;
+        const curR = helixR * (1 - frac * 0.22);
+
+        for (let strand = 0; strand < 2; strand++) {
+          const a = ang + strand * Math.PI;
+          const px = Math.cos(a) * curR;
+          const pz = Math.sin(a) * curR;
+          const podMat = strand === 0 ? primaryMat : secondaryMat;
+          addBox(m, r * 0.46, stepH * 0.88, r * 0.38, podMat, px, yS, pz, 0, -a, 0);
+          addBox(m, r * 0.49, stepH * 0.14, r * 0.41, trimMat, px, yS + stepH * 0.42, pz, 0, -a, 0);
+          // Spiraling biophilic sky-garden terraces on every helical node
+          addBox(m, r * 0.40, stepH * 0.18, r * 0.34, foliageMat, px * 1.06, yS + stepH * 0.52, pz * 1.06, 0, -a, 0);
+        }
+
+        // Horizontal DNA base-pair skybridge rung linking both strands through the central atrium
+        if (i % 2 === 0) {
+          addBox(m, curR * 2.0, stepH * 0.24, r * 0.18, galleryMat, 0, yS, 0, 0, -ang, 0);
+          addBox(m, curR * 2.04, stepH * 0.06, r * 0.21, trimMat, 0, yS + stepH * 0.14, 0, 0, -ang, 0);
+        }
+      }
+
+      // Summit conservatory torus + spire antenna
+      const topY = 8 + coreH;
+      const crownTorus = new THREE.Mesh(new THREE.TorusGeometry(r * 0.68, r * 0.08, 8, 32), trimMat);
+      crownTorus.rotation.x = Math.PI / 2;
+      crownTorus.position.y = topY;
+      m.add(crownTorus);
+      const spire = new THREE.Mesh(new THREE.CylinderGeometry(0.4, r * 0.12, h * 0.11, 8), trimMat);
+      spire.position.y = topY + h * 0.055;
+      m.add(spire);
+    } else if (kind === 'torus_ring') {
+      // Ouroboros Vertical Sky-Ring Megastructure: colossal upright inhabited orbital loop
+      // cradled above a twin-pylon podium, radial spoke sky-lifts & suspended central hub sphere!
+      const cradleH = h * 0.26;
+      for (const sx of [-1, 1]) {
+        addBox(m, r * 0.40, cradleH, r * 0.72, secondaryMat, sx * r * 0.68, 6 + cradleH * 0.5, 0, 0, 0, sx * 0.16);
+        addBox(m, r * 0.07, cradleH * 0.96, r * 0.76, trimMat, sx * r * 0.88, 6 + cradleH * 0.5, 0, 0, 0, sx * 0.16);
+      }
+
+      const ringR = Math.min(r * 1.06, h * 0.36);
+      const tubeR = ringR * 0.22;
+      const centerY = 10 + cradleH * 0.78 + ringR;
+
+      // Primary inhabited vertical torus casing + concentric glowing accelerator trim rings
+      const mainRing = new THREE.Mesh(new THREE.TorusGeometry(ringR, tubeR, 14, 40), primaryMat);
+      mainRing.position.y = centerY;
+      m.add(mainRing);
+
+      for (const zOff of [-tubeR * 0.88, tubeR * 0.88]) {
+        const accentRing = new THREE.Mesh(new THREE.TorusGeometry(ringR * 1.01, tubeR * 0.11, 8, 40), trimMat);
+        accentRing.position.set(0, centerY, zOff);
+        m.add(accentRing);
+      }
+      const innerGalRing = new THREE.Mesh(new THREE.TorusGeometry(ringR * 0.77, tubeR * 0.18, 8, 36), galleryMat);
+      innerGalRing.position.y = centerY;
+      m.add(innerGalRing);
+
+      // 12 articulated modular habitat bays girdling the outer perimeter of the vertical ring
+      for (let k = 0; k < 12; k++) {
+        const a = (k / 12) * Math.PI * 2;
+        const bx = Math.cos(a) * ringR;
+        const by = centerY + Math.sin(a) * ringR;
+        addBox(m, tubeR * 1.35, tubeR * 0.85, tubeR * 2.25, k % 2 === 0 ? secondaryMat : galleryMat, bx, by, 0, 0, 0, a);
+      }
+
+      // 6 radial spoke sky-elevator tubes converging on a suspended central zero-G sphere hub!
+      for (let s = 0; s < 3; s++) {
+        const a = (s / 3) * Math.PI;
+        addBox(m, ringR * 1.62, tubeR * 0.20, tubeR * 0.24, secondaryMat, 0, centerY, 0, 0, 0, a);
+        addBox(m, ringR * 1.56, tubeR * 0.07, tubeR * 0.28, trimMat, 0, centerY, 0, 0, 0, a);
+      }
+      const hubSphere = new THREE.Mesh(new THREE.SphereGeometry(tubeR * 0.92, 16, 12), galleryMat);
+      hubSphere.position.y = centerY;
+      m.add(hubSphere);
+      const hubBelt = new THREE.Mesh(new THREE.TorusGeometry(tubeR * 1.18, tubeR * 0.09, 6, 28), trimMat);
+      hubBelt.rotation.x = Math.PI / 2;
+      hubBelt.position.y = centerY;
+      m.add(hubBelt);
+    } else if (kind === 'metabolism_tree') {
+      // Metabolist Sky-Tree & Suspended Lantern-Pod Arcology: fluted hexagonal concrete/steel
+      // mega-trunk branching out into 9 cable-stayed cantilevered boughs carrying multi-story
+      // habitable sky-lantern pods & rooftop botanical groves!
+      const trunkH = h * 0.92;
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.26, r * 0.44, trunkH, 8), brutalistMat);
+      trunk.position.y = 6 + trunkH * 0.5;
+      m.add(trunk);
+
+      // 4 vertical glowing elevator tracks & root buttress ribs
+      for (let i = 0; i < 4; i++) {
+        const a = i * (Math.PI / 2);
+        addBox(m, r * 0.18, h * 0.26, r * 0.65, brutalistMat, Math.cos(a) * r * 0.55, 6 + h * 0.13, Math.sin(a) * r * 0.55, 0, -a, 0.22);
+        addBox(m, r * 0.06, trunkH * 0.94, r * 0.08, trimMat, Math.cos(a + 0.4) * r * 0.34, 6 + trunkH * 0.48, Math.sin(a + 0.4) * r * 0.34);
+      }
+
+      // 9 staggered cantilevered boughs with suspended octagonal lantern pods & sky-gardens
+      const boughCount = 9;
+      for (let b = 0; b < boughCount; b++) {
+        const frac = (b + 0.6) / (boughCount + 0.5);
+        const yB = 6 + trunkH * (0.20 + frac * 0.70);
+        const az = b * 2.39996 + lm.colorSeed * 4.0; // golden-angle phyllotaxis spiral!
+        const reach = r * (0.98 - Math.abs(frac - 0.45) * 0.36);
+
+        const bg = new THREE.Group();
+        bg.position.y = yB;
+        bg.rotation.y = az;
+
+        // Horizontal bough truss + upper cable-stay tie-rod anchored higher on the trunk
+        addBox(bg, reach, h * 0.024, r * 0.18, secondaryMat, reach * 0.5, 0, 0);
+        addBox(bg, reach * 0.96, r * 0.045, r * 0.045, trimMat, reach * 0.48, h * 0.036, 0, 0, 0, -0.36);
+
+        // Multi-story octagonal habitable lantern pod + glowing observation belly + rooftop sky-grove
+        const podR = r * (0.34 - frac * 0.06);
+        const podH = h * 0.085;
+        const podBody = new THREE.Mesh(
+          new THREE.CylinderGeometry(podR, podR * 0.86, podH, 8),
+          b % 2 === 0 ? primaryMat : brutalistMat
+        );
+        podBody.position.set(reach, -podH * 0.18, 0);
+        bg.add(podBody);
+
+        const podBelly = new THREE.Mesh(
+          new THREE.CylinderGeometry(podR * 0.84, podR * 0.52, podH * 0.32, 8),
+          galleryMat
+        );
+        podBelly.position.set(reach, -podH * 0.74, 0);
+        bg.add(podBelly);
+
+        const podRim = new THREE.Mesh(new THREE.TorusGeometry(podR * 1.03, r * 0.025, 6, 16), trimMat);
+        podRim.rotation.x = Math.PI / 2;
+        podRim.position.set(reach, podH * 0.24, 0);
+        bg.add(podRim);
+
+        const podGarden = new THREE.Mesh(
+          new THREE.SphereGeometry(podR * 0.78, 10, 7, 0, Math.PI * 2, 0, Math.PI * 0.58),
+          foliageMat
+        );
+        podGarden.position.set(reach, podH * 0.25, 0);
+        bg.add(podGarden);
+
+        m.add(bg);
+      }
+
+      // Crown canopy dome + beacon spire
+      const crownY = 6 + trunkH;
+      const canopy = new THREE.Mesh(
+        new THREE.SphereGeometry(r * 0.52, 14, 9, 0, Math.PI * 2, 0, Math.PI * 0.52),
+        foliageMat
+      );
+      canopy.position.y = crownY;
+      m.add(canopy);
+      const crownRing = new THREE.Mesh(new THREE.TorusGeometry(r * 0.62, r * 0.035, 6, 28), trimMat);
+      crownRing.rotation.x = Math.PI / 2;
+      crownRing.position.y = crownY + 1.5;
+      m.add(crownRing);
+      const mastTop = new THREE.Mesh(new THREE.CylinderGeometry(0.4, r * 0.08, h * 0.10, 8), trimMat);
+      mastTop.position.y = crownY + h * 0.06;
+      m.add(mastTop);
     } else { // needle
       for (let i = 0; i < 3; i++) {
         const a = (i / 3) * Math.PI * 2;
@@ -1071,6 +1543,9 @@ export function buildLandmarks(city, U, initialLook = null) {
       ent.secondaryMat.uniforms.uCol.value.copy(pal.secondary);
       ent.trimMat.uniforms.uCol.value.copy(pal.trim);
       ent.galleryMat.uniforms.uCol.value.copy(pal.gallery);
+      ent.foliageMat.uniforms.uCol.value.copy(pal.foliage);
+      ent.brutalistMat.uniforms.uCol.value.copy(pal.brutalist);
+      ent.cascadeMat.uniforms.uCol.value.copy(pal.cascade);
     }
   };
   return group;

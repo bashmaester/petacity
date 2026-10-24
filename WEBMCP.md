@@ -57,6 +57,7 @@ iframe.contentWindow.postMessage({
 | `petacity_what_am_i_looking_at` | Exact 3D raycast from screen coordinates `(ndcX, ndcY)` (`0,0` = center crosshair) + frustum scan across buildings, landmarks, billboards, holograms, vehicles, river, ocean & parks. |
 | `petacity_list_entities` | List world entities (`landmarks`, `buildings`, `billboards`, `holograms`, `vehicles`, `transit`, `bridges`, `parks`) sorted by proximity to camera. |
 | `petacity_set_camera_pose` | Set `[x,y,z]`, `yaw`/`pitch`, or `lookAt` (`[x,y,z]` or `{ buildingId, vehicleId, landmark }`), `fov`, `motionStyle` (`0..4`), `smoothness`, `turnSmooth`, and `freelook`. |
+| `petacity_set_camera_pose` | Position or aim the camera, set `fov` (`15..150°`), `lensMode` (`0..9` incl. Panini, Anamorphic, Tilt-Shift, 180° Fisheye, 360° Panorama, Little Planet, Inception Fold, 250° Probe, Kaleidoscope), `lensDistort`, `lensZoom`, `roll` (`-180..+180°` Dutch/inverted), `anamorphic`, `tiltShift`, `anglePreset`, `motionStyle`, and `turnSmooth`. |
 | `petacity_autopilot_route` | Control smooth Autopilot cruise, hover (`speed: 0`), POI `autoLook` cinematography, and multi-stop `waypoints` / landmark routes. |
 | `petacity_run_camera_script` | Run multi-shot keyframed camera choreography (`cut`, `dolly`, `orbit` with C2 quintic easing), `followVehicleId` pursuit chase-cam, or continuous `orbitTarget`. |
 | `petacity_takeover_building` | Override any skyscraper's window shader (`normal`, `blackout`, `solid`, `pulse`, `strobe`, `dim`) and/or wrap a **4-sided glowing LED window-matrix message marquee** around its facade. |
@@ -187,5 +188,24 @@ await window.petacity.callTool('petacity_autopilot_route', {
   speed: 0,                     // stationary aerial hover (or 22 for slow airship drift)
   autoLook: true,               // smoothly pans & contemplates nearby landmarks/vistas
   turnSmooth: 2.2,              // ultra-silky 2nd-order angular rate damping
+});
+```
+
+### Recipe 8 — 360° Little Planet, 180° Fisheye, Panini Wide & Dutch Noir Optics
+```js
+// Switch to a 360° Stereographic "Little Planet" view high over the skyline:
+await window.petacity.callTool('petacity_set_camera_pose', {
+  anglePreset: 'little_planet', // or 'wormseye' | 'dutch_noir' | 'panini_arch' | 'fisheye_dome' | 'inception_fold' | 'vr_360' | 'miniature_tilt'
+});
+
+// Or dial custom anamorphic Dutch-angle barrel optics aimed at a Hanging Gardens or Brutalist Habitat PoI:
+await window.petacity.callTool('petacity_set_camera_pose', {
+  lookAt: { landmark: 'Babylon Sky-Terraces' },
+  immediateLook: true,
+  lensMode: 1,                  // 1 = Panini Architectural Wide (0..9)
+  fov: 112,
+  lensDistort: 0.28,            // +barrel / -pincushion
+  roll: -26,                    // -26 deg Dutch tilt
+  anamorphic: 0.55,
 });
 ```

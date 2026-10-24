@@ -7,7 +7,10 @@ import { LOOKS, LOOK_BY_ID, syncCustomLook } from '../src/looks.js';
 import * as SHADERS from '../src/shaders.js';
 import { WEATHER_VERT, SKY_FRAG, GROUND_FRAG, CLOUD_VERT, CLOUD_FRAG } from '../src/shaders.js';
 import * as POST from '../src/post.js';
-import { makePostProcessor, ART_STYLE_NAMES, POST_VERT, BRIGHT_FRAG, BLUR_FRAG, COMP_FRAG } from '../src/post.js';
+import {
+  makePostProcessor, ART_STYLE_NAMES, LENS_MODE_NAMES, CAMERA_ANGLE_PRESETS,
+  POST_VERT, BRIGHT_FRAG, BLUR_FRAG, CUBE_LENS_FRAG, COMP_FRAG,
+} from '../src/post.js';
 import {
   makeUniforms, makeWorld, growCity, syncCityEnvironmentUniforms,
   applyLook, applyTime, bendWorldPoint,
@@ -2091,6 +2094,126 @@ test('Phase-15 scene, motion, audio evolution & WebMCP Movie-Set Director end-to
     globalThis.window = prevWin;
     Object.defineProperty(globalThis, 'navigator', { configurable: true, value: prevNav });
   }
+});
+
+test('Phase-16 scene: camera lens distortion, Panini wide, 6-face 360/Fisheye/LittlePlanet/Inception/Kaleidoscope optics, extreme roll/pitch & 16 creative PoI sculptures', async () => {
+  // 1) Optical projection modes (0..9), 14 extreme-angle presets, single-pass & 6-face omnidirectional cubemap render paths
+  assert.equal(LENS_MODE_NAMES.length, 10, '10 optical projection modes');
+  assert.equal(CAMERA_ANGLE_PRESETS.length, 14, '14 extreme & strange angle presets');
+  assert.ok(CUBE_LENS_FRAG.includes('samplerCube tCube'), 'CUBE_LENS_FRAG samples 6-face omnidirectional cubemap');
+  assert.ok(COMP_FRAG.includes('warpOpticalUv') && COMP_FRAG.includes('sampleTiltShiftBokeh'), 'COMP_FRAG implements Panini/Brown-Conrady distortion + 12-tap Vogel tilt-shift bokeh');
+
+  let cubeCalls = 0;
+  const cubeRenderer = {
+    coordinateSystem: THREE.WebGLCoordinateSystem,
+    xr: { enabled: false },
+    getRenderTarget() { return null; },
+    getActiveCubeFace() { return 0; },
+    getActiveMipmapLevel() { return 0; },
+    setRenderTarget() {},
+    render() { cubeCalls++; },
+  };
+  const post = makePostProcessor(cubeRenderer);
+  const cam = new THREE.PerspectiveCamera(58, 16 / 9, 2, 28000);
+  cam.position.set(120, 180, 240);
+  cam.updateMatrixWorld();
+
+  // Single-pass modes (0..3) run 7 render calls (scene + bright + 4 blurs + comp)
+  for (const mode of [0, 1, 2, 3]) {
+    cubeCalls = 0;
+    post.configure({ lensMode: mode, lensDistort: 0.42, lensZoom: 1.1, anamorphic: 0.5, tiltShift: 0.6, tiltAngle: 0.4 });
+    post.render(new THREE.Scene(), cam, 3.0);
+    assert.equal(cubeCalls, 7, `single-pass lensMode=${mode} executes 7 render calls`);
+  }
+  assert.equal(post.compMat.uniforms.uLensDistort.value, 0.42);
+  assert.equal(post.compMat.uniforms.uAnamorphic.value, 0.5);
+  assert.equal(post.compMat.uniforms.uTiltShift.value, 0.6);
+
+  // Omnidirectional 6-face cubemap modes (4..9: Fisheye, 360 Equirect, Little Planet, Inception, 250 Probe, Kaleidoscope)
+  // execute 6 cube faces + 1 cubeLens projection + 1 bright + 4 blurs + 1 composite = 13 render calls!
+  for (const mode of [4, 5, 6, 7, 8, 9]) {
+    cubeCalls = 0;
+    post.configure({ lensMode: mode, lensDistort: 0.2, lensZoom: 0.85 });
+    post.render(new THREE.Scene(), cam, 5.0);
+    assert.equal(cubeCalls, 13, `omnidirectional 6-face cubemap lensMode=${mode} executes 13 render calls`);
+    assert.ok(post.cubeRT instanceof THREE.WebGLCubeRenderTarget, 'cubeRT lazily allocated on omnidirectional mode');
+  }
+
+  // 2) FlyControls supports extreme Dutch roll (-180..+180 deg) + +/-89 deg worm's-eye & nadir pitch + lossless preset roundtrip
+  const prevWin = globalThis.window;
+  globalThis.window = { addEventListener() {}, removeEventListener() {} };
+  try {
+    const fakeDom = { addEventListener() {}, removeEventListener() {} };
+    const ctl = new FlyControls(cam, fakeDom);
+    ctl.setPose({ x: 50, y: 240, z: 90, yaw: 0.5, pitch: -1.50, roll: Math.PI });
+    const pose = ctl.getPose();
+    assert.ok(Math.abs(pose.pitch - (-1.50)) < 1e-3, 'supports -86 deg nadir pitch');
+    assert.ok(Math.abs(pose.roll - Math.PI) < 1e-3, 'supports 180 deg upside-down skyline roll');
+
+    const encoded = encodeExactState({
+      seed: 4417,
+      post: { lensMode: 6, lensDistort: 0.35, lensZoom: 0.82, anamorphic: 0.45, tiltShift: 0.7 },
+      camera: { ...pose, fov: 132 },
+    });
+    const decoded = decodeExactState(encoded);
+    assert.equal(decoded.post.lensMode, 6);
+    assert.equal(decoded.post.lensDistort, 0.35);
+    assert.equal(decoded.post.lensZoom, 0.82);
+    assert.equal(decoded.post.anamorphic, 0.45);
+    assert.equal(decoded.post.tiltShift, 0.7);
+    assert.equal(decoded.camera.fov, 132);
+    assert.ok(Math.abs(decoded.camera.roll - Math.PI) < 1e-3);
+  } finally {
+    globalThis.window = prevWin;
+  }
+
+  // 3) All 16 creative PoI landmark kinds build rich multi-role 3D sculptures (including foliage role=4, brutalist role=5 & cascade role=6)
+  //    and keep Metropolis strictly monochrome!
+  const U = makeUniforms();
+  const world = makeWorld(U);
+  const { city } = growCity(4417, 5, world.towerMat, 0.5, { U, waterMode: 1 });
+  // Ensure every single one of the 16 LM_KINDS is exercised in buildLandmarks
+  const existingKinds = new Set(city.landmarks.map((l) => l.kind));
+  const all16 = [
+    'arch', 'spire', 'dome', 'mast', 'crown', 'needle',
+    'pyramid', 'cantilever', 'ziggurat',
+    'hanging_gardens', 'brutalist_habitat', 'neo_ziggurat',
+    'inverted_ziggurat', 'helix_arcology', 'torus_ring', 'metabolism_tree',
+  ];
+  for (const k of all16) {
+    if (!existingKinds.has(k)) {
+      city.landmarks.push({ kind: k, name: `Test ${k}`, x: 0, z: 0, r: 42, h: 240, rot: 0, hero: false, bi: 0, bj: 0, colorSeed: 0.42 });
+    }
+  }
+  const lmGroup = buildLandmarks(city, U, LOOK_BY_ID.bladerunner);
+  assert.equal(lmGroup.children.length, city.landmarks.length);
+  const rolesSeen = new Set();
+  lmGroup.traverse((o) => {
+    if (o.isMesh && o.material?.uniforms?.uRole) {
+      rolesSeen.add(o.material.uniforms.uRole.value);
+    }
+  });
+  for (const rRole of [0, 1, 2, 3, 4, 5, 6]) {
+    assert.ok(rolesSeen.has(rRole), `buildLandmarks exercises architectural shader uRole=${rRole}`);
+  }
+
+  // Verify foliage role=4 is lush green on Blade Runner, and switches to warm sepia-silver monochrome on Metropolis!
+  let brGreenSeen = false;
+  lmGroup.traverse((o) => {
+    if (o.isMesh && o.material?.uniforms?.uRole?.value === 4) {
+      const c = o.material.uniforms.uCol.value;
+      if (c.g > c.r + 0.12) brGreenSeen = true;
+    }
+  });
+  assert.equal(brGreenSeen, true, 'biophilic foliage (uRole=4) is lush green on chromatic themes');
+
+  lmGroup.setLook(LOOK_BY_ID.metropolis);
+  lmGroup.traverse((o) => {
+    if (o.isMesh && o.material?.uniforms?.uCol) {
+      const c = o.material.uniforms.uCol.value;
+      assert.ok(c.g <= c.r + 0.03 && c.b <= c.g + 0.03, `Metropolis keeps landmark role=${o.material.uniforms.uRole?.value} sepia-silver monochrome (rgb=${c.r.toFixed(2)},${c.g.toFixed(2)},${c.b.toFixed(2)})`);
+    }
+  });
 });
 
 

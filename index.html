@@ -620,6 +620,79 @@ button.icon-btn.rec-on, button.action.rec-on {
       </div>
     </details>
 
+    <!-- 2C. Camera Optics, Wide-Angle, 360° & Strange Angles -->
+    <details class="subpanel" open>
+      <summary>Camera Optics, Wide-Angle &amp; 360°</summary>
+      <div class="subpanel-body">
+        <div class="drop-row" style="margin-bottom: 5px;" title="Optical lens projection model (rectilinear, Panini wide, anamorphic, fisheye, 360° sphere, Little Planet, Inception fold &amp; kaleidoscope)">
+          <select id="sel-lens-mode" aria-label="Camera optical projection mode" title="Camera optical projection mode">
+            <option value="0" selected>Optics · Rectilinear Cinema Lens</option>
+            <option value="1">Optics · Panini Architectural Wide</option>
+            <option value="2">Optics · Anamorphic Scope 2.39:1</option>
+            <option value="3">Optics · Tilt-Shift Miniature</option>
+            <option value="4">Optics · 180° Hemispherical Fisheye</option>
+            <option value="5">Optics · 360° Equirectangular Panorama</option>
+            <option value="6">Optics · Little Planet (360° Nadir)</option>
+            <option value="7">Optics · Inception Folded Sky-City</option>
+            <option value="8">Optics · Hyper-Fisheye 250° Probe</option>
+            <option value="9">Optics · Mirage Prismatic Kaleidoscope</option>
+          </select>
+          <button id="b-opt-reset" type="button" class="icon-btn" aria-label="Reset camera optics and roll" title="Reset camera optics, FOV, distortion &amp; roll to standard 58°">&#x21BA;</button>
+        </div>
+        <div class="drop-row" style="margin-bottom: 6px;" title="One-click extreme &amp; strange camera angle / optical presets">
+          <select id="sel-angle-preset" aria-label="Extreme and strange angle presets" title="Extreme &amp; strange camera angle presets">
+            <option value="0" selected>Shot · Standard Cinema (58° · Clean)</option>
+            <option value="1">Shot · Ultra-Wide Worm's-Eye (+54° Up)</option>
+            <option value="2">Shot · Noir Dutch Cant (+28° Oblique)</option>
+            <option value="3">Shot · Telephoto Stack (18° Long Lens)</option>
+            <option value="4">Shot · Panini Super-Wide (130° Straight)</option>
+            <option value="5">Shot · Skyscraper Nadir Drop (-86° Down)</option>
+            <option value="6">Shot · 180° Circular Fisheye Dome</option>
+            <option value="7">Shot · 360° Little Planet Floating City</option>
+            <option value="8">Shot · Inception Folded Horizon Ceiling</option>
+            <option value="9">Shot · 360° Equirectangular Full Sphere</option>
+            <option value="10">Shot · 250° Hyper-Fisheye Bug-Eye Probe</option>
+            <option value="11">Shot · Mirage Prismatic Kaleidoscope</option>
+            <option value="12">Shot · Upside-Down Skyline (180° Roll)</option>
+            <option value="13">Shot · Tabletop Miniature (Tilt-Shift)</option>
+          </select>
+          <button id="b-angle-apply" type="button" class="icon-btn" aria-label="Apply selected extreme angle preset" title="Apply selected extreme / strange camera preset">&#x27A4;</button>
+        </div>
+        <div class="slider-grid">
+          <div class="slider-row wide" title="Camera Field of View (15° extreme telephoto compression … 58° standard … 150° hyper-wide)">
+            <span>&#x2220;</span>
+            <input id="sl-cam-fov" type="range" min="15" max="150" step="1" value="58" aria-label="Camera field of view">
+            <em id="cam-fov-label">FOV 58°</em>
+          </div>
+          <div class="slider-row wide" title="Brown-Conrady Lens Distortion (-1.0 pincushion … 0.0 rectilinear … +1.25 heavy barrel / fisheye)">
+            <span>&#x29BF;</span>
+            <input id="sl-lens-distort" type="range" min="-1" max="1.25" step="0.02" value="0" aria-label="Lens barrel and pincushion distortion">
+            <em id="lens-distort-label">Dist 0%</em>
+          </div>
+          <div class="slider-row wide" title="Optical Projection Scale &amp; Aperture Zoom (zoom < 0.9 reveals circular fisheye dome rim)">
+            <span>&#x2315;</span>
+            <input id="sl-lens-zoom" type="range" min="0.35" max="2.5" step="0.02" value="1" aria-label="Optical projection zoom">
+            <em id="lens-zoom-label">Zoom 1.0×</em>
+          </div>
+          <div class="slider-row wide" title="Dutch Roll / Oblique Horizon Angle (-180° inverted … 0° level … +180° inverted)">
+            <span>&#x2935;</span>
+            <input id="sl-cam-roll" type="range" min="-180" max="180" step="1" value="0" aria-label="Camera Dutch roll angle">
+            <em id="cam-roll-label">Roll 0°</em>
+          </div>
+          <div class="slider-row wide" title="Anamorphic Cinema Squeeze, Oval Bokeh &amp; Horizontal Streak Flare">
+            <span>&#x29C9;</span>
+            <input id="sl-anamorphic" type="range" min="0" max="1" step="0.02" value="0" aria-label="Anamorphic cinema squeeze">
+            <em id="anamorphic-label">Ana 0%</em>
+          </div>
+          <div class="slider-row wide" title="Scheimpflug Tilt-Shift Miniature Diorama Focus Blur">
+            <span>&#x25EB;</span>
+            <input id="sl-tilt-shift" type="range" min="0" max="1" step="0.02" value="0" aria-label="Tilt-shift miniature blur">
+            <em id="tilt-shift-label">Tilt 0%</em>
+          </div>
+        </div>
+      </div>
+    </details>
+
     <!-- 3. Water, Rivers & Shoreline -->
     <details class="subpanel" open>
       <summary>Water, Rivers &amp; Shoreline</summary>

@@ -5,7 +5,7 @@
 
 import { LOOKS } from './looks.js';
 import { WATER_SHADER_NAMES } from './scene.js';
-import { ART_STYLE_NAMES } from './post.js';
+import { ART_STYLE_NAMES, LENS_MODE_NAMES, CAMERA_ANGLE_PRESETS } from './post.js';
 import { CAMERA_STYLE_NAMES } from './controls.js';
 import { RADIO_STATIONS } from './audio.js';
 import { WATER_MODE_NAMES } from './city.js';
@@ -37,6 +37,8 @@ export function buildPetacityTools(ctx) {
           state: st,
           availableLooks: LOOKS.map((l) => l.id),
           availablePostStyles: ART_STYLE_NAMES.map((n, i) => ({ index: i, name: n })),
+          availableLensModes: LENS_MODE_NAMES.map((n, i) => ({ index: i, name: n })),
+          availableAnglePresets: CAMERA_ANGLE_PRESETS.map((p, i) => ({ index: i, id: p.id, label: p.label })),
           availableWaterModes: WATER_MODE_NAMES.map((n, i) => ({ index: i, name: n })),
           availableWaterShaders: WATER_SHADER_NAMES.map((n, i) => ({ index: i, name: n })),
           availableCameraStyles: CAMERA_STYLE_NAMES.map((n, i) => ({ index: i, name: n })),
@@ -55,7 +57,7 @@ export function buildPetacityTools(ctx) {
             radius: city.radius,
             towers: city.towers,
             buildings: city.count || 0,
-            landmarks: (city.landmarks || []).map((l) => ({ name: l.name, x: Math.round(l.x), y: Math.round(l.h || l.y || 140), z: Math.round(l.z) })),
+            landmarks: (city.landmarks || []).map((l) => ({ kind: l.kind, name: l.name, x: Math.round(l.x), y: Math.round(l.h || l.y || 140), z: Math.round(l.z) })),
             billboards: city.bills?.length || 0,
             holograms: city.holos?.length || 0,
             bridges: city.bridges?.length || 0,
@@ -182,16 +184,23 @@ export function buildPetacityTools(ctx) {
 
     {
       name: 'petacity_set_camera_pose',
-      description: 'Position or aim the camera immediately or smoothly, configure FOV, motion style (0..4 including Silk Airship slow turns), inertia smoothness, turn damping (turnSmooth), and decoupled freelook.',
+      description: 'Position or aim the camera, configure FOV (15..150 deg), optical lens projection (0=Rectilinear, 1=Panini Wide, 2=Anamorphic Scope, 3=Tilt-Shift, 4=180 Fisheye, 5=360 Panorama, 6=Little Planet, 7=Inception Fold, 8=250 Probe, 9=Kaleidoscope), barrel/pincushion distortion, zoom, Dutch roll (-180..+180 deg), anamorphic squeeze, tilt-shift, extreme-angle presets, motion style, and turn damping.',
       inputSchema: {
         type: 'object',
         properties: {
           position: { type: 'array', items: { type: 'number' }, description: '[x, y, z] camera world coordinates' },
           yaw: { type: 'number', description: 'Camera yaw in radians' },
-          pitch: { type: 'number', description: 'Camera pitch in radians' },
+          pitch: { type: 'number', description: 'Camera pitch in radians (-1.55..+1.55 for nadir/worm-eye)' },
+          roll: { type: 'number', description: 'Camera Dutch roll / oblique angle in degrees (-180..+180)' },
           lookAt: { description: '[x, y, z] array or { buildingId, vehicleId, landmark } object to aim at' },
           immediateLook: { type: 'boolean', description: 'Snap aim immediately instead of smooth turn-damped pan', default: false },
-          fov: { type: 'number', description: 'Vertical field of view in degrees (18..115)' },
+          fov: { type: 'number', description: 'Vertical field of view in degrees (15..150)' },
+          lensMode: { type: 'number', description: '0=Rectilinear, 1=Panini Wide, 2=Anamorphic 2.39:1, 3=Tilt-Shift, 4=180 Fisheye, 5=360 Equirectangular, 6=Little Planet, 7=Inception Fold, 8=Hyper-Fisheye 250, 9=Kaleidoscope' },
+          lensDistort: { type: 'number', description: 'Brown-Conrady lens distortion (-1.0 pincushion .. 0.0 clean .. +1.25 barrel)' },
+          lensZoom: { type: 'number', description: 'Optical projection scale / zoom (0.35..2.5; <0.9 reveals circular fisheye rim)' },
+          anamorphic: { type: 'number', description: 'Anamorphic cinema squeeze & horizontal streak flare (0..1)' },
+          tiltShift: { type: 'number', description: 'Scheimpflug tilt-shift miniature diorama bokeh blur (0..1)' },
+          anglePreset: { description: 'Extreme/strange preset id or index (e.g. "wormseye", "dutch_noir", "telephoto", "panini_arch", "nadir_drop", "fisheye_dome", "little_planet", "inception_fold", "vr_360", "probe_250", "kaleido_prism", "inverted_sky", "miniature_tilt")' },
           motionStyle: { type: 'number', description: '0=Cinema Drone, 1=FPV Agile, 2=Steadicam Crane, 3=Orbital Glider, 4=Silk Airship (Slow Turns)' },
           smoothness: { type: 'number', description: 'Translational inertia smoothing (0.2..3.0)' },
           turnSmooth: { type: 'number', description: 'Angular turn-rate damping (0.2..3.5; higher = slower, silkier turns)' },
@@ -220,7 +229,14 @@ export function buildPetacityTools(ctx) {
           }
         }
         const patch = {};
+        if (args.anglePreset !== undefined) patch.anglePreset = args.anglePreset;
         if (args.fov !== undefined) patch.fov = Number(args.fov);
+        if (args.roll !== undefined) patch.roll = Number(args.roll);
+        if (args.lensMode !== undefined) patch.lensMode = Number(args.lensMode);
+        if (args.lensDistort !== undefined) patch.lensDistort = Number(args.lensDistort);
+        if (args.lensZoom !== undefined) patch.lensZoom = Number(args.lensZoom);
+        if (args.anamorphic !== undefined) patch.anamorphic = Number(args.anamorphic);
+        if (args.tiltShift !== undefined) patch.tiltShift = Number(args.tiltShift);
         if (args.motionStyle !== undefined) patch.motionStyle = Number(args.motionStyle);
         if (args.smoothness !== undefined) patch.camSmooth = Number(args.smoothness);
         if (args.turnSmooth !== undefined) patch.turnSmooth = Number(args.turnSmooth);

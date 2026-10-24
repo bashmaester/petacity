@@ -782,6 +782,27 @@ test('Phase-15 city: shoreDist-exact ocean river mouths, river-aware streets, an
   }
 });
 
+test('Phase-16 city: 16 futuristic & creative PoI buildings (hanging gardens, brutalist habitat, split/inverted ziggurats, double-helix, sky-ring & metabolist tree)', () => {
+  assert.equal(LM_KINDS.length, 16, 'LM_KINDS has 16 architectural landmark archetypes');
+  const creative = [
+    'ziggurat', 'hanging_gardens', 'brutalist_habitat', 'neo_ziggurat',
+    'inverted_ziggurat', 'helix_arcology', 'torus_ring', 'metabolism_tree',
+  ];
+  for (const k of creative) {
+    assert.ok(LM_KINDS.includes(k), `LM_KINDS includes ${k}`);
+  }
+
+  const c = generateCity({ seed: 4417, radius: 5, waterMode: 1 });
+  const kindsPresent = new Set(c.landmarks.map((l) => l.kind));
+  for (const k of creative) {
+    assert.ok(kindsPresent.has(k), `default r=5 city generates creative PoI kind "${k}"`);
+  }
+  for (const lm of c.landmarks) {
+    assert.equal(isPointInWater(c, lm.x, lm.z, 0), false, `creative PoI "${lm.name}" (${lm.kind}) sits on dry land`);
+    assert.ok(lm.r > 8 && lm.h > 100, `creative PoI "${lm.name}" has monumental scale (r=${lm.r}, h=${lm.h})`);
+  }
+});
+
 
 
 

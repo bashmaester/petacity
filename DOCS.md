@@ -116,6 +116,13 @@ To prevent open-ocean blotchiness and screen-space Moiré shimmer at grazing ang
 - **Minimap Smooth Route Queue (`enqueueWaypoint`) & Seamless Manual Course Trim**:
   - Clicking any landmark or coordinate on the radar minimap (`#minimap`) enqueues a smooth flight route (`Shift+Click` chains multi-stop routes!) rendered as a live cyan dashed trajectory with target rings — flying smoothly there instead of teleporting.
   - Dragging or pressing `A/D/Q/E` during Autopilot smoothly trims the flight course without fighting or snapping back; releasing input automatically re-orients scenic touring toward landmarks ahead of your new heading (`onCourseReorient`).
+- **Camera Optics, Wide-Angle, 360° Projections & Strange Angles (`src/post.js`, `src/controls.js`, Subpanel `2C`)**:
+  - **10 Optical Lens Projections (`LENS_MODE_NAMES`, `0..9`)**:
+    - Single-pass optical modes (`0..3` in `COMP_FRAG`): `0` *Rectilinear Cinema Lens* (Brown-Conrady `k1/k2` barrel/pincushion/mustache distortion + peripheral radial chromatic dispersion), `1` *Panini Architectural Wide* (cylindrical stereographic projection keeping vertical skyscraper lines plumb up to `140°+`), `2` *Anamorphic Scope 2.39:1* (oval squeeze, cinema letterbox & horizontal cyan/amber flare streaks), and `3` *Tilt-Shift Miniature* (12-tap Vogel-disk Scheimpflug bokeh).
+    - True 6-face omnidirectional cubemap modes (`4..9` via lazy `WebGLCubeRenderTarget` + `CubeCamera` + `CUBE_LENS_FRAG`): `4` *180° Hemispherical Fisheye* (equisolid-angle dome with circular fisheye rim when `lensZoom < 0.96`), `5` *360° Equirectangular Panorama* (`360° × 180°` spherical lat-long view), `6` *Little Planet (360° Nadir)* (stereographic downward projection turning the city into a floating mini-world), `7` *Inception Folded Sky-City* (inverse stereographic projection folding distant districts overhead), `8` *Hyper-Fisheye 250° Probe*, and `9` *Mirage Prismatic Kaleidoscope*.
+  - **Extreme / Strange Angles (`CAMERA_ANGLE_PRESETS`)**: Full `-180°..+180°` Dutch/inverted roll (`controls.setCameraRoll`), `±89°` worm's-eye canyon look-up & `90°` nadir skyscraper drop, `15°..150°` telephoto-to-hyper-wide FOV, and 14 one-click shot presets.
+- **16 Monumental Futuristic & Creative PoI Buildings (`LM_KINDS` in `src/city.js`, `buildLandmarks` in `src/scene.js`, `LANDMARK_FRAG` roles `0..6`)**:
+  - Includes **Hanging Gardens** (`hanging_gardens` — 7 staggered cantilevered biophilic sky-terraces, lush foliage/vine overhangs `uRole = 4`, glowing botanical atrium dome & `loopPhase` cascading sky-waterfalls `uRole = 6`), **Brutalist Housing Complex** (`brutalist_habitat` — Habitat-67 / Barbican-inspired monolithic piloti megastructure of 34 interlocked cantilevered raw béton-brut concrete housing modules `uRole = 5` with recessed warm circadian loggias & elevated sky-streets), **Ziggurat & Split Neo-Ziggurat Arcologies** (`ziggurat`, `neo_ziggurat` — monumental stepped pyramids with battered diagonal buttress ribs, grand staircases, split sky-canyon skybridges & apex beacons), **Inverted Ziggurat** (`inverted_ziggurat`), **Double-Helix Bio-Arcology** (`helix_arcology`), **Levitated Torus Sky-Ring** (`torus_ring`), and **Metabolist Capsule Tree** (`metabolism_tree`), alongside `arch`, `spire`, `dome`, `mast`, `crown`, `needle`, `pyramid`, and `cantilever`.
 
 ---
 
@@ -140,6 +147,6 @@ To prevent open-ocean blotchiness and screen-space Moiré shimmer at grazing ang
 # Start local static server on port 8000
 npm run serve   # or: python3 -m http.server 8000 --bind 0.0.0.0
 
-# Run full 78-test Node verification suite (city, scene, shaders, UI contract & JSDOM boot)
+# Run full 81-test Node verification suite (city, scene, shaders, optics, PoIs, UI contract & JSDOM boot)
 npm test
 ```

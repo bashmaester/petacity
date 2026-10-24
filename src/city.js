@@ -23,7 +23,12 @@ const clamp01 = (x) => Math.max(0, Math.min(1, x));
 export const KIND = { WALL: 0, SLAB: 1, MAST: 2, BAND: 3 };
 
 /** Landmark (place of interest) silhouettes — built from three.js primitives in scene.js. */
-export const LM_KINDS = ['arch', 'spire', 'dome', 'mast', 'crown', 'needle', 'pyramid', 'cantilever', 'ziggurat'];
+export const LM_KINDS = [
+  'arch', 'spire', 'dome', 'mast', 'crown', 'needle',
+  'pyramid', 'cantilever', 'ziggurat',
+  'hanging_gardens', 'brutalist_habitat', 'neo_ziggurat',
+  'inverted_ziggurat', 'helix_arcology', 'torus_ring', 'metabolism_tree',
+];
 
 const LM_NAMES = {
   arch: ['Meridian Gate', 'Sunset Arc', 'Harbor Arch', 'The Gateway', 'Twin Curve', 'Old Mill Arch'],
@@ -32,9 +37,16 @@ const LM_NAMES = {
   mast: ['Signal Crown', 'Broadcast One', 'Relay Tower', 'North Mast', 'Sky Radio', 'The Aerial'],
   crown: ['Imperial Terrace', 'Regalia Tower', 'Stepped Palace', 'Court of Blocks', 'High Terrace', 'Sovereign Crown'],
   needle: ['Needle Nine', 'Orbital Needle', 'Slim Jim', 'The Lancet', 'Pin Tower', 'Vector Needle'],
-  pyramid: ['Tyrell Pyramid', 'Solaris Arcology', 'Obsidian Pyramid', 'Apex Tetrahedron', 'Giza Arcology', 'Sun Pyramid'],
+  pyramid: ['Solaris Pyramid', 'Apex Arcology', 'Obsidian Pyramid', 'Aethelgard Tetrahedron', 'Helios Arcology', 'Sun Pyramid'],
   cantilever: ['Skywing Cantilever', 'Overhang Citadel', 'Horizon Cantilever', 'Cloudbridge Wing', 'Aerie Overhang', 'Kestrel Tower'],
-  ziggurat: ['Babylon Ziggurat', 'Hanging Terraces', 'Nineveh Steps', 'Cascading Sanctum', 'Etemenanki Vault', 'Seven-Step Ziggurat'],
+  ziggurat: ['Babylon Ziggurat', 'Nineveh Steps', 'Cascading Sanctum', 'Etemenanki Vault', 'Seven-Step Ziggurat', 'Sumerian Terrace'],
+  hanging_gardens: ['Hanging Gardens Sanctuary', 'Semiramis Sky-Cascades', 'Verdant Gorge Terraces', 'Eden Biophilic Ziggurat', 'Sylvan Waterfall Vault', 'Botanical Sky-Amphitheatre'],
+  brutalist_habitat: ['Habitat 2099 Complex', 'Beton Brut Sky-Commune', 'Modular Collective Block', 'Unite Concrete Megablock', 'Sky-Street Brutalist Ward', 'Cantilever Capsule Complex'],
+  neo_ziggurat: ['Uruk-9 Split Megaziggurat', 'Akkadian Chasm Ziggurat', 'Ziggurat of the Zenith', 'Nanna Twin-Bastion', 'Epoch Stepped Monolith', 'Astrolabe Ziggurat'],
+  inverted_ziggurat: ['Inverted Ziggurat Ministry', 'Counter-Gravity Citadel', 'The Anvil Monolith', 'Upside-Down Sky-Fortress', 'Overhang Archive', 'Crown-Heavy Ziggurat'],
+  helix_arcology: ['Double-Helix Bio-Arcology', 'Caduceus Spiral Tower', 'Genome Sky-Sanctuary', 'Helix Conservatory Spire', 'Twisted Strand Citadel', 'Bio-Spiral Nine'],
+  torus_ring: ['Ouroboros Sky-Ring', 'Chronos Loop Megastructure', 'Orbital Ring Forum', 'Halo Sky-Citadel', 'Solstice Ring Hotel', 'The Great Sky-Wheel'],
+  metabolism_tree: ['Metabolist Sky-Tree', 'Yggdrasil Pod Arcology', 'Suspended Lantern Tower', 'Banyan Cloud Megastructure', 'Canopy Bough Spire', 'Arboreal Pod Citadel'],
 };
 
 /** Public-space kinds — living, lit, low-rise places (geometry lives in scene.js). */
@@ -650,7 +662,10 @@ export function generateCity(
     !inWater(cx - halfSpan, cz + halfSpan, 10) &&
     !inWater(cx + halfSpan, cz + halfSpan, 10)
   );
-  const heroPool = ['arch', 'pyramid', 'cantilever', 'ziggurat', 'crown'];
+  const heroPool = [
+    'arch', 'pyramid', 'cantilever', 'ziggurat',
+    'hanging_gardens', 'brutalist_habitat', 'neo_ziggurat', 'torus_ring', 'helix_arcology',
+  ];
   const heroKind = seed === 4417 ? 'arch' : heroPool[Math.floor(hash2i(2, 19, seed) * heroPool.length) % heroPool.length];
   let heroBi = 0, heroBj = 0;
   if (!cellDryFor(CELL * 0.5, CELL * 0.5, 58)) {
@@ -669,17 +684,25 @@ export function generateCity(
   }
   addLandmarkData(landmarks, lmCells, heroKind, heroBi, heroBj, seed, true);
 
-  const mustHaveLm = radius >= 3
-    ? ['pyramid', 'cantilever', 'ziggurat'].filter((k) => k !== heroKind)
-    : radius >= 2 ? ['pyramid', 'cantilever'].filter((k) => k !== heroKind) : [];
-  const extraLmCount = 3 + Math.floor(hash2i(3, 17, seed) * 4); // 3..6 more
+  const mustHaveLm = radius >= 4
+    ? [
+      'pyramid', 'cantilever', 'ziggurat',
+      'hanging_gardens', 'brutalist_habitat', 'neo_ziggurat',
+      'inverted_ziggurat', 'helix_arcology', 'torus_ring', 'metabolism_tree',
+    ].filter((k) => k !== heroKind)
+    : radius >= 3
+      ? ['pyramid', 'cantilever', 'ziggurat', 'hanging_gardens', 'brutalist_habitat'].filter((k) => k !== heroKind)
+      : radius >= 2 ? ['pyramid', 'cantilever', 'hanging_gardens'].filter((k) => k !== heroKind) : [];
+  const extraLmCount = radius >= 4
+    ? 2 + Math.floor(hash2i(3, 17, seed) * 3)
+    : 3 + Math.floor(hash2i(3, 17, seed) * 4);
   const wantLmKinds = [...mustHaveLm];
   for (let k = 0; k < extraLmCount; k++) {
     wantLmKinds.push(LM_KINDS[Math.floor(hash2i(k, 5, seed) * LM_KINDS.length) % LM_KINDS.length]);
   }
   for (let k = 0; k < wantLmKinds.length; k++) {
     const kind = wantLmKinds[k];
-    for (let attempt = 0; attempt < 48; attempt++) {
+    for (let attempt = 0; attempt < 72; attempt++) {
       const bi = Math.floor(hash2i(k * 19 + attempt, 101, seed) * (radius * 2)) - radius;
       const bj = Math.floor(hash2i(k * 19 + attempt, 211, seed) * (radius * 2)) - radius;
       const key = bi + ',' + bj;
@@ -687,7 +710,7 @@ export function generateCity(
       const lcx = bi * CELL + CELL / 2;
       const lcz = bj * CELL + CELL / 2;
       if (!cellDryFor(lcx, lcz, 56)) continue;
-      if (attempt < 24 && nearBoulevard(lcx, lcz, 64)) continue;
+      if (attempt < 28 && nearBoulevard(lcx, lcz, 64)) continue;
       addLandmarkData(landmarks, lmCells, kind, bi, bj, seed, false);
       break;
     }
@@ -1284,8 +1307,19 @@ function addLandmarkData(landmarks, lmCells, kind, bi, bj, seed, hero) {
   else if (kind === 'pyramid') { r = Math.min(54, (38 + r0 * 14) * m); h = (195 + r1 * 155) * m; }
   else if (kind === 'cantilever') { r = Math.min(48, (28 + r0 * 14) * m); h = (290 + r1 * 210) * 1.15; }
   else if (kind === 'ziggurat') { r = Math.min(54, (36 + r0 * 15) * m); h = (210 + r1 * 170) * m; }
+  else if (kind === 'hanging_gardens') { r = Math.min(54, (40 + r0 * 12) * m); h = (195 + r1 * 135) * m; }
+  else if (kind === 'brutalist_habitat') { r = Math.min(54, (42 + r0 * 11) * m); h = (165 + r1 * 125) * m; }
+  else if (kind === 'neo_ziggurat') { r = Math.min(54, (40 + r0 * 13) * m); h = (225 + r1 * 165) * m; }
+  else if (kind === 'inverted_ziggurat') { r = Math.min(50, (34 + r0 * 13) * m); h = (205 + r1 * 145) * m; }
+  else if (kind === 'helix_arcology') { r = Math.min(46, (28 + r0 * 13) * m); h = (285 + r1 * 210) * 1.15; }
+  else if (kind === 'torus_ring') { r = Math.min(52, (38 + r0 * 12) * m); h = (215 + r1 * 145) * m; }
+  else if (kind === 'metabolism_tree') { r = Math.min(48, (32 + r0 * 13) * m); h = (255 + r1 * 195) * 1.15; }
   else { r = (11 + r0 * 9) * 1.1; h = (430 + r1 * 300) * 1.15; }
-  const cardinal = kind === 'pyramid' || kind === 'ziggurat' || kind === 'cantilever';
+  const cardinal = (
+    kind === 'pyramid' || kind === 'ziggurat' || kind === 'cantilever' ||
+    kind === 'hanging_gardens' || kind === 'brutalist_habitat' ||
+    kind === 'neo_ziggurat' || kind === 'inverted_ziggurat' || kind === 'torus_ring'
+  );
   const rot = cardinal ? Math.floor(rnd(71) * 4) * (Math.PI * 0.5) : rnd(71) * Math.PI * 2;
   landmarks.push({
     kind, name, x: cx, z: cz, r, h,

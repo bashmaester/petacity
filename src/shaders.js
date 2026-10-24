@@ -2543,13 +2543,73 @@ void main() {
     float pulse = 0.88 + 0.12 * loopSin(uTime, 0.28, wy * 0.045);
     vec3 em = saturate3(uCol, uSat) * (0.72 + uBandGlow * 0.95 * max(uLightK, 0.32)) * pulse;
     col = mix(col, em, 0.86);
-  } else if (uRole > 2.5) {
+  } else if (uRole > 2.5 && uRole < 3.5) {
     // Role 3: Panoramic illuminated sky-gallery / observation deck / atrium skylight
     float colSil = step(0.18, fract(uCoord / 3.4));
     float mull = step(0.14, fract(wy / 3.6));
     vec3 galCol = saturate3(mix(uWinA, uWinB, 0.32), uSat);
     float galK = (0.55 + uWinGlow * 0.82) * max(uLightK, 0.35);
     col = mix(col * 0.45, galCol * galK, (0.35 + 0.65 * colSil * mull));
+  } else if (uRole > 3.5 && uRole < 4.5) {
+    // Role 4: Biophilic Hanging-Garden Botanical Canopy, Moss & Trailing Vines
+    float leafLo = vnoise(vFlat.xz * 0.28 + vec2(wy * 0.14, wy * -0.11));
+    float leafHi = vnoise(vFlat.xz * 0.95 + vec2(uCoord * 0.55, wy * 0.62));
+    float vine = (abs(ln.y) < 0.55)
+      ? smoothstep(0.32, 0.82, vnoise(vec2(uCoord * 1.45, wy * 0.22)))
+      : 1.0;
+    vec3 lushCol = saturate3(uCol * (0.68 + 0.58 * leafLo + 0.26 * leafHi), uSat);
+    float sunLeaf = pow(max(dot(n, normalize(uSunDir)), 0.0), 0.72);
+    vec3 litLeaf = lushCol * (amb * 1.12 + uSunCol * uSunK * (0.32 + 0.88 * sunLeaf));
+    col = mix(litLeaf, lushCol, uFlat * 0.75) * (0.78 + 0.22 * vine);
+    // Subtle nocturnal garden fairy-lantern / bioluminescent firefly motes
+    vec2 gCell = floor(vec2(uCoord * 0.55 + vFlat.x * 0.12, wy * 0.55 + vFlat.z * 0.12));
+    float gRnd = hash12(gCell + vec2(41.2, 13.8));
+    if (gRnd > 0.88) {
+      float twinkle = 0.55 + 0.45 * loopSin(uTime, 0.35 + fract(gRnd * 7.3) * 0.4, gRnd * 60.0);
+      vec3 glowTone = saturate3(mix(uCol * 1.45, uWinA, 0.48), uSat);
+      col += glowTone * twinkle * max(uLightK, 0.22) * (0.35 + 0.45 * uWinGlow);
+    }
+  } else if (uRole > 4.5 && uRole < 5.5) {
+    // Role 5: Brutalist Board-Formed Beton-Brut Concrete & Recessed Waffle-Slab Loggias
+    float shutterY = fract(wy / 2.8);
+    float boardGrain = 0.90 + 0.13 * vnoise(vec2(uCoord * 0.35, floor(wy / 2.8) * 3.7));
+    float jointLine = smoothstep(0.0, 0.07, shutterY) * smoothstep(1.0, 0.93, shutterY);
+    vec2 tieUv = fract(vec2(uCoord / 3.2, wy / 2.8)) - 0.5;
+    float tieHole = 1.0 - 0.25 * (1.0 - smoothstep(0.04, 0.09, length(tieUv)));
+    col *= boardGrain * (0.86 + 0.14 * jointLine) * tieHole;
+
+    if (abs(ln.y) < 0.32) {
+      // Deep coffered residential loggia bays + concrete brise-soleil fins
+      vec2 wGrid = vec2(uCoord / 5.2, wy / 3.6);
+      vec2 wId = floor(wGrid);
+      vec2 wf = fract(wGrid);
+      float recess = step(0.15, wf.x) * step(wf.x, 0.85) * step(0.18, wf.y) * step(wf.y, 0.84);
+      col *= 1.0 - 0.42 * recess * (1.0 - uFlat * 0.7);
+      float wr = hash12(wId + vec2(29.1, 7.4));
+      float wCirc = evalCircadian24(uDayPhase, wr, fract(wr * 5.7), 0.12);
+      float wSw = evalLoopedToggle(uTime, 0.08 + fract(wr * 8.3) * 0.12, wId, wr * 23.0);
+      float wOn = step(mix(wr, wSw, 0.32), (uWinDensity * 0.82 + 0.14) * wCirc) * recess;
+      // Warm recessed apartment window behind balcony balustrade
+      float paneMask = step(0.34, wf.y) * step(0.24, wf.x) * step(wf.x, 0.76);
+      vec3 aptCol = saturate3(mix(uWinA, uWinB, step(0.62, hash12(wId + 4.9))), uSat);
+      col += aptCol * wOn * paneMask * uWinGlow * 0.96;
+    }
+  } else if (uRole > 5.5) {
+    // Role 6: Cascading Sky-Waterfall Veil & Shimmering Terrace Infinity Pool
+    float fallPhase = loopPhase(uTime, 14.0);
+    float streamA = sin(uCoord * 3.2) * 0.5 + 0.5;
+    float cascadeWave = 0.5 + 0.5 * sin(wy * 1.35 + fallPhase * 6.0 + streamA * 3.1);
+    float fineSpray = vnoise(vec2(uCoord * 2.4, wy * 0.75 + sin(fallPhase) * 4.0));
+    float crestFoam = (ln.y > 0.65)
+      ? 0.25 + 0.35 * fineSpray
+      : (0.32 + 0.48 * cascadeWave * fineSpray);
+    vec3 aquaBase = saturate3(uCol, uSat);
+    vec3 foamTone = saturate3(mix(uCol * 1.55 + vec3(0.24), uSunCol + vec3(0.45), 0.35), uSat);
+    float fres = pow(1.0 - max(dot(-vdir, n), 0.0), 2.4);
+    vec3 wLit = mix(aquaBase * (0.55 + 0.55 * max(uSunK, 0.35)), foamTone, clamp(crestFoam + fres * 0.45, 0.0, 1.0));
+    // Nocturnal underwater architectural uplighting
+    wLit += saturate3(mix(uCol, uWinB, 0.35), uSat) * max(uLightK, 0.25) * (0.38 + 0.35 * uBandGlow);
+    col = mix(col, wLit, 0.90);
   } else {
     // Roles 0 & 1: Monumental architectural facades (vertical walls + sloped pyramid/ziggurat faces)
     float densRole = (uRole > 0.5) ? 0.34 : 0.88;
