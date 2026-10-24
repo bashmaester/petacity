@@ -108,6 +108,7 @@ body.ui-off .panel {
 body.ui-off .panel-body,
 body.ui-off .brand,
 body.ui-off #b-glide,
+body.ui-off #b-autolook,
 body.ui-off #b-freelook,
 body.ui-off #b-avoid,
 body.ui-off #b-collide,
@@ -480,9 +481,10 @@ button.icon-btn.rec-on, button.action.rec-on {
   <div class="panel-head">
     <div class="brand" title="One seed grows the whole city — swap the look or bend the world into a globe">Peta<b>city</b></div>
     <div class="head-actions">
-      <button id="b-glide" class="icon-btn" type="button" aria-pressed="false" aria-label="Glide mode" title="Start Glide mode — drag to steer, wheel for speed (G)">&#x2708;&#xFE0E;</button>
+      <button id="b-glide" class="icon-btn" type="button" aria-pressed="false" aria-label="Glide mode" title="Start Autopilot Glide — drag or A/D to steer course smoothly, wheel for speed (G)">&#x2708;&#xFE0E;</button>
+      <button id="b-autolook" class="icon-btn" type="button" aria-pressed="false" aria-label="Autopilot POI auto-look" title="Autopilot POI Auto-Look — automatically gaze at nearby landmarks &amp; vistas while cruising slowly or hovering (O)">&#x29BF;</button>
       <button id="b-freelook" class="icon-btn" type="button" aria-pressed="false" aria-label="Free look-around mode" title="Free look-around mode — decouple head gaze from flight travel direction (L)">&#x25CE;</button>
-      <button id="b-radio" class="icon-btn" type="button" aria-pressed="false" aria-label="Toggle synth radio" title="Play / mute modular space-ambient synth radio — Vangelis &amp; Aphex Twin pure code (M)">&#x266B;</button>
+      <button id="b-radio" class="icon-btn" type="button" aria-pressed="false" aria-label="Toggle synth radio" title="Play / mute pure-code evolving generative synth radio (M)">&#x266B;</button>
       <button id="b-avoid" class="icon-btn on" type="button" aria-pressed="true" aria-label="Anticipatory obstacle avoidance" title="Anticipatory shallow-angle obstacle &amp; terrain avoidance: on (V)">&#x2934;</button>
       <button id="b-collide" class="icon-btn on" type="button" aria-pressed="true" aria-label="Toggle collision detection" title="Collision: on — toggle noclip (C)">&#x2B21;</button>
       <button id="b-fold-all" class="icon-btn" type="button" aria-label="Collapse or expand all subpanels" title="Collapse / expand all control subpanels">&#x229F;</button>
@@ -587,10 +589,11 @@ button.icon-btn.rec-on, button.action.rec-on {
           <div class="slider-row wide" title="Camera flight physics &amp; motion style">
             <span>&#x2708;&#xFE0E;</span>
             <select id="sel-camstyle" aria-label="Camera motion style">
-              <option value="0" selected>Motion · Cinematic Glide</option>
-              <option value="1">Motion · Agile Drone</option>
-              <option value="2">Motion · Canyon Skimmer</option>
-              <option value="3">Motion · Heavy Airship</option>
+              <option value="0" selected>Motion · Cinema Drone (Balanced)</option>
+              <option value="1">Motion · FPV Agile (Crisp)</option>
+              <option value="2">Motion · Steadicam Crane (Ultra-Smooth)</option>
+              <option value="3">Motion · Orbital Glider (Wide Bank)</option>
+              <option value="4">Motion · Silk Airship (Slow Turns)</option>
             </select>
           </div>
           <div class="slider-row wide" title="Camera flight &amp; cruise speed multiplier">
@@ -607,6 +610,11 @@ button.icon-btn.rec-on, button.action.rec-on {
             <span>&#x223F;</span>
             <input id="sl-camsmooth" type="range" min="0" max="1" step="0.02" value="0.72" aria-label="Camera motion smoothness">
             <em id="camsmooth-label">72%</em>
+          </div>
+          <div class="slider-row wide" title="2nd-Order Angular Turn-Rate Damping (higher eliminates fast turns &amp; whip-pans)">
+            <span>&#x21BA;</span>
+            <input id="sl-turnsmooth" type="range" min="0.2" max="3.5" step="0.05" value="1.25" aria-label="Turn rate damping">
+            <em id="turnsmooth-label">1.25×</em>
           </div>
         </div>
       </div>
@@ -625,6 +633,16 @@ button.icon-btn.rec-on, button.action.rec-on {
               <option value="2">Water · Archipelago &amp; Peninsula</option>
               <option value="3">Water · Great Crater Lake</option>
               <option value="4">Water · None (No Shoreline / Dry Basin)</option>
+            </select>
+          </div>
+          <div class="slider-row wide" title="High-Frequency Water Surface Shader Architecture (derivative-clamped micro-facets)">
+            <span>&#x2726;</span>
+            <select id="sel-watershader" aria-label="High-frequency water shader mode">
+              <option value="0" selected>Shader · Capillary Micro-Facet Sea</option>
+              <option value="1">Shader · Diamond Wind-Chop &amp; Glitter</option>
+              <option value="2">Shader · Crystalline Caustic Filigree</option>
+              <option value="3">Shader · Storm Swell &amp; Whitecap Spray</option>
+              <option value="4">Shader · Obsidian Silk &amp; Mirror Filaments</option>
             </select>
           </div>
           <div class="slider-row wide" title="Water Amount (0 = completely dry / off · 1 = normal · 2 = wide seas &amp; rivers)">
@@ -763,6 +781,16 @@ button.icon-btn.rec-on, button.action.rec-on {
             <input id="sl-cloud-lac" type="range" min="1.4" max="3.2" step="0.02" value="2.08" aria-label="Cloud noise lacunarity">
             <em id="cloud-lac-label">Lac 2.08</em>
           </div>
+          <div class="slider-row wide" title="Prevailing Wind Azimuth (coherently aligns cloud streets, altitude shear &amp; wave chop)">
+            <span>&#x27A4;</span>
+            <input id="sl-windang" type="range" min="0" max="360" step="2" value="30" aria-label="Prevailing wind direction">
+            <em id="windang-label">30&deg;</em>
+          </div>
+          <div class="slider-row wide" title="Prevailing Wind Speed &amp; Cloud Streamline Stretch (0 = calm domes … 2.5 = jet-stream streets)">
+            <span>&#x2248;</span>
+            <input id="sl-windstr" type="range" min="0" max="2.5" step="0.05" value="1" aria-label="Wind strength and cloud stretch">
+            <em id="windstr-label">1.0×</em>
+          </div>
         </div>
       </div>
     </details>
@@ -899,10 +927,12 @@ button.icon-btn.rec-on, button.action.rec-on {
         </div>
         <div class="drop-row" style="margin-bottom: 6px;" title="Select pure-code generative synthesizer radio station (zero samples)">
           <select id="sel-radio-station" aria-label="Modular synth radio station">
-            <option value="0" selected>Vangelis · Tyrell 2019 (CS-80 Space Blues)</option>
-            <option value="1">Aphex Twin · Selected Ambient Works (Drift)</option>
-            <option value="2">Vangelis · Albedo &amp; Spiral (Sequencer)</option>
-            <option value="3">Aphex Twin · Polygon Window (IDM Acid)</option>
+            <option value="0" selected>99.4 FM · Rain on Neon Glass</option>
+            <option value="1">101.7 FM · Velvet Sub-Level</option>
+            <option value="2">104.2 FM · Midnight Monorail</option>
+            <option value="3">106.8 FM · Sodium &amp; Mercury</option>
+            <option value="4">88.9 FM · Foghorn &amp; Starlight</option>
+            <option value="5">93.1 FM · Hanging Sky-Gardens</option>
           </select>
           <button id="b-radio-play" type="button" class="icon-btn" aria-pressed="false" aria-label="Play or pause modular synth radio" title="Play / stop pure-code modular synth radio (M)">&#x25B6;</button>
           <button id="b-radio-next" type="button" class="icon-btn" aria-label="Next radio station" title="Switch to next generative synth station">&#x23ED;</button>
@@ -919,7 +949,7 @@ button.icon-btn.rec-on, button.action.rec-on {
             <input id="sl-radio-space" type="range" min="0" max="1.5" step="0.02" value="0.9" aria-label="Synth space reverb and delay">
             <em id="radio-space-label">Space 90%</em>
           </div>
-          <div class="slider-row wide" title="Analog CS-80 / Ladder Filter Cutoff &amp; Harmonic Brilliance">
+          <div class="slider-row wide" title="Analog Poly-Filter Cutoff &amp; Harmonic Brilliance">
             <span>&#x223F;</span>
             <input id="sl-radio-warmth" type="range" min="0.1" max="1.5" step="0.02" value="0.8" aria-label="Synth filter cutoff and warmth">
             <em id="radio-warmth-label">Tone 80%</em>

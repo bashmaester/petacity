@@ -15,8 +15,8 @@ import {
   makeVehicles, makeSearchlights, makeLightPools,
   buildWater, buildBoulevards, buildBillboards, buildTrees, buildSculptures,
   makeWeather, WEATHER_NAMES, CLOUD_TYPE_NAMES, CLOUD_LAYER_PRESETS,
-  WATER_MODE_NAMES, TERRAIN_MODE_NAMES, TREE_MODE_NAMES, GLYPH_STYLE_NAMES, describeMoonPhase,
-  buildSigns, buildHolos,
+  WATER_MODE_NAMES, WATER_SHADER_NAMES, TERRAIN_MODE_NAMES, TREE_MODE_NAMES, GLYPH_STYLE_NAMES, describeMoonPhase,
+  buildSigns, buildHolos, projectorFrustumGeometry,
   buildTransitInfrastructure, buildBridges, buildHarbor, buildSpaceport,
   buildStreetInfrastructure, evalTrafficSignalState,
 } from '../src/scene.js';
@@ -27,8 +27,10 @@ import { FlyControls, CAMERA_STYLE_NAMES } from '../src/controls.js';
 import { CameraPathRecorder, makeSceneExporter } from '../src/recorder.js';
 import { makeMinimap } from '../src/minimap.js';
 import {
-  RADIO_STATIONS, midiToHz, buildSpaceImpulseData, evalStationHarmony, ModularRadioEngine,
+  RADIO_STATIONS, RADIO_MOVEMENTS, midiToHz, buildSpaceImpulseData, evalStationHarmony, ModularRadioEngine,
 } from '../src/audio.js';
+import { MovieSetDirector, buildGlyphMatrixTexture } from '../src/director.js';
+import { registerPetacityWebMCP } from '../src/webmcp.js';
 import { isPointInWater, makeCityCollider } from '../src/city.js';
 
 test('every look preset has a complete schema', () => {
@@ -1474,7 +1476,7 @@ test('Phase-13 scene: small adjustable camera collider + freelook, minimap + pat
     const fakeDom = { addEventListener() {}, setPointerCapture() {} };
     const ctl = new FlyControls(cam, fakeDom);
     assert.ok(ctl.colliderRadius <= 2.5, `default camera colliderRadius (${ctl.colliderRadius}m) is much smaller than old 9m`);
-    assert.equal(CAMERA_STYLE_NAMES.length, 4, '4 camera motion styles available');
+    assert.equal(CAMERA_STYLE_NAMES.length, 5, '5 camera motion styles available (including Silk Airship slow turns)');
 
     // Construct a synthetic narrow 5.0m alley crack between two tall towers (x in [-24, -2.5] and [+2.5, +24])
     const crackCollider = makeCityCollider({
@@ -1762,15 +1764,19 @@ test('Phase-14 scene: anti-aliased multi-band water shader controls, selectable 
   infra.setDensity(0);
   assert.equal(infra.activeSignalCount, 0);
 
-  // 4) Pure-code Modular Synth Radio (Vangelis & Aphex Twin, zero audio samples)
-  assert.equal(RADIO_STATIONS.length, 4, '4 Vangelis & Aphex Twin generative stations');
+  // 4) Pure-code Modular Synth Radio (6 original evocative stations + 4-movement evolution, zero audio samples)
+  assert.equal(RADIO_STATIONS.length, 6, '6 evocative original generative stations');
+  for (const st of RADIO_STATIONS) {
+    const joined = `${st.id} ${st.name} ${st.shortName} ${st.artistHint}`.toLowerCase();
+    assert.ok(!/vangelis|aphex|tyrell|selected ambient|polygon window|cs-80|albedo/.test(joined), `station ${st.id} uses 100% original evocative titles`);
+  }
   assert.ok(Math.abs(midiToHz(69) - 440) < 1e-6, 'A4 = 440Hz');
   const ir = buildSpaceImpulseData(8000, 0.5, 42);
   assert.equal(ir.left.length, 4000);
   assert.ok(ir.left.some((x) => Math.abs(x) > 0.05), 'procedural FDN space impulse response generated in code');
   const h0 = evalStationHarmony(RADIO_STATIONS[0], 0);
-  const h1 = evalStationHarmony(RADIO_STATIONS[1], 4);
-  assert.ok(h0.padMidi.length >= 4 && h1.scaleMidi.length >= 5, 'generative chord & modal scale harmony evaluated');
+  const h1 = evalStationHarmony(RADIO_STATIONS[1], 4, { useBridge: true, modalShift: 5 });
+  assert.ok(h0.padMidi.length >= 4 && h1.scaleMidi.length >= 5, 'generative chord & modal bridge harmony evaluated');
 
   // Test ModularRadioEngine against a lightweight mock WebAudio AudioContext
   let createdOscs = 0;
@@ -1842,7 +1848,7 @@ test('Phase-14 scene: anti-aliased multi-band water shader controls, selectable 
   radio.update(0.1, { altitude: 640, speed: 95, night: 0.9 });
   assert.ok(createdOscs >= 6 && createdBuffers >= 2, 'pure-code oscillators + procedural noise/IR buffers synthesized');
   radio.nextStation();
-  assert.equal(radio.station.id, 'aphex-saw-drift', 'switched to Aphex Twin SAW station');
+  assert.equal(radio.station.id, 'velvet-sublevel', 'switched to second original evocative station');
   radio.ctx.currentTime = 0.75;
   radio.update(0.2, { altitude: 220, speed: 40, night: 0.5 });
 
@@ -1880,6 +1886,213 @@ test('Phase-14 scene: anti-aliased multi-band water shader controls, selectable 
   assert.equal(dec.radio.station, 2);
   assert.equal(dec.radio.space, 1.1);
 });
+
+test('Phase-15 scene, motion, audio evolution & WebMCP Movie-Set Director end-to-end', async () => {
+  const prevWin = globalThis.window;
+  const prevNav = globalThis.navigator;
+  const listeners = new Map();
+  globalThis.window = {
+    addEventListener(ev, fn) { listeners.set(ev, fn); },
+    postMessage() {},
+  };
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: {},
+  });
+
+  try {
+    const U = makeUniforms();
+    const world = makeWorld(U);
+    const grown = growCity(4417, 4, world.towerMat, 0.85, { waterMode: 1, waterAmount: 1.0, shoreDist: 1.0, transitAmt: 1.0, signAmt: 1.1, U });
+    const city = grown.city;
+    syncCityEnvironmentUniforms(U, city);
+
+    // 1) 5 High-Frequency Water Shaders + Wind-Guided Cloud Uniforms
+    assert.equal(WATER_SHADER_NAMES.length, 5, '5 selectable high-frequency water shader solutions');
+    for (let s = 0; s < 5; s++) {
+      applyLook(U, LOOK_BY_ID.bladerunner, { waterShader: s, windAngle: 135, windStrength: 1.8 });
+      assert.equal(U.uWaterShader.value, s);
+    }
+    assert.ok(Math.abs(U.uWindAngle.value - (135 * Math.PI) / 180) < 1e-4, 'windAngle uniform synced in radians');
+    assert.equal(U.uWindStrength.value, 1.8, 'windStrength uniform synced');
+
+    // 2) Twin Bumper Headlights + Varied Light Profiles + Varied Searchlights + Holo Projector Cones
+    const veh = makeVehicles(city, world.trailMat, 260, grown.collider, { U, world });
+    veh.update(0.1, 1.0, 1.0);
+    assert.ok(veh.heroCount > 80, 'hero vehicles created');
+    let glowOnlyCount = 0;
+    let brightBeamCount = 0;
+    for (let i = 0; i < veh.heroCount; i++) {
+      if (veh.beamReach[i] === 0) glowOnlyCount++;
+      else if (veh.beamReach[i] > 0.5) brightBeamCount++;
+    }
+    assert.ok(glowOnlyCount >= 5 && brightBeamCount >= 20, 'vehicles exhibit both glow-only front lamps and varied twin headlight beams');
+
+    const sl = makeSearchlights(city, world.beamMat, 34);
+    let beamArchetypes = new Set();
+    sl.group.traverse((m) => {
+      const attr = m.geometry?.getAttribute?.('aBeamMeta');
+      if (attr) beamArchetypes.add(Math.round(attr.getX(0)));
+    });
+    assert.ok(beamArchetypes.size >= 3, `searchlights span multiple distinct cone archetypes (${[...beamArchetypes].join(',')})`);
+
+    const holos = buildHolos(city, world.holoMat, world.beamMat);
+    let foundPod = false;
+    let foundFrustum = false;
+    holos.traverse((m) => {
+      if (m.isInstancedMesh) foundPod = true;
+      const meta = m.geometry?.getAttribute?.('aBeamMeta');
+      if (meta && Math.round(meta.getX(0)) === 4) foundFrustum = true;
+    });
+    assert.ok(foundPod && foundFrustum, 'city holograms include physical projector pods and terminating projector frustum beams');
+
+    // 3) Smooth 2nd-Order Turn-Rate-Limited Motion, Hover POI Auto-Look & Minimap Route Queue
+    const cam = new THREE.PerspectiveCamera(58, 1.6, 2, 28000);
+    cam.position.set(0, 160, 420);
+    const ctl = new FlyControls(cam, { addEventListener() {}, setPointerCapture() {} });
+    ctl.collider = grown.collider;
+    ctl.motionStyle = 4; // Silk Airship (Slow Turns)
+    ctl.turnSmooth = 2.4;
+    ctl._targetYaw = ctl.yaw + Math.PI * 0.9; // command a huge 162° snap
+    const prevYaw = ctl.yaw;
+    ctl.update(0.05);
+    const turnRate = Math.abs(ctl.yaw - prevYaw) / 0.05;
+    assert.ok(turnRate < 0.65, `turnSmooth + Silk Airship strictly caps angular turn rate (${turnRate.toFixed(3)} rad/s < 0.65 rad/s)`);
+
+    // Hovering Autopilot (glideSpeed = 0) with POI Auto-Look smoothly pans toward landmarks
+    ctl.poiList = city.landmarks.map((l) => ({ name: l.name, x: l.x, y: l.y || 140, z: l.z }));
+    ctl.setGlide(true);
+    ctl.glideSpeed = 0;
+    ctl.setAutoLook(true);
+    const yawBeforeLook = ctl.yaw;
+    for (let k = 0; k < 20; k++) ctl.update(0.05);
+    assert.ok(Math.abs(ctl.yaw - yawBeforeLook) > 0.005, 'Auto-Look gimbal smoothly pans toward POIs even while hovering at speed=0');
+
+    // Route Queue smoothly flies toward queued waypoints
+    ctl.glideSpeed = 140;
+    ctl.enqueueWaypoint({ name: 'Stop A', x: 120, y: 180, z: 120 }, { append: false });
+    ctl.enqueueWaypoint({ name: 'Stop B', x: -160, y: 190, z: -80 }, { append: true });
+    assert.equal(ctl.routeQueue.length, 2, 'Shift+click / append queues multi-stop smooth flight route');
+
+    // 4) Evolving Generative Radio: 4-movement arc + modal key shifts over 64+ bars
+    assert.equal(RADIO_MOVEMENTS.length, 4);
+    const evoRadio = new ModularRadioEngine({ station: 0 });
+    evoRadio.start();
+    const seenMovements = new Set([evoRadio.movementName]);
+    const seenChords = new Set([evoRadio.currentChordName]);
+    for (let s = 0; s < 440; s++) {
+      evoRadio.update(0.6);
+      seenMovements.add(evoRadio.movementName);
+      seenChords.add(evoRadio.currentChordName);
+    }
+    assert.equal(seenMovements.size, 4, 'generative music evolves through all 4 compositional movements over time');
+    assert.ok(seenChords.size >= 6, `harmony pivots across primary & bridge chord banks (${seenChords.size} distinct chords)`);
+
+    // 5) MovieSetDirector + WebMCP (`navigator.modelContext` + `window.petacity`)
+    const scene = new THREE.Scene();
+    scene.add(grown.mesh);
+    const director = new MovieSetDirector({
+      scene,
+      camera: cam,
+      controls: ctl,
+      uniforms: U,
+      getCity: () => city,
+      getVehicles: () => veh,
+    });
+    const rec = new CameraPathRecorder();
+    const mcp = registerPetacityWebMCP({
+      director,
+      getState: () => ({ seed: 4417, lookId: 'bladerunner' }),
+      applyPartialState: () => {},
+      getCity: () => city,
+      getVehicles: () => veh,
+      controls: ctl,
+      camera: cam,
+      radio: evoRadio,
+      recorder: rec,
+      exporter: null,
+      enqueueSpotRoute: (sp, opts) => ctl.enqueueWaypoint(sp, opts),
+    });
+
+    assert.ok(globalThis.navigator.modelContext, 'navigator.modelContext registered');
+    assert.ok(globalThis.window.petacity === mcp, 'window.petacity SDK exposed');
+    assert.equal(mcp.listTools().length, 14, 'all 14 Movie-Set WebMCP tools registered');
+
+    // Aim directly at a tall building and ask WebMCP `petacity_what_am_i_looking_at`
+    let targetBoxIdx = 0;
+    for (let i = 0; i < city.count; i++) {
+      if (city.y[i] + city.h[i] * 0.5 > 95) { targetBoxIdx = i; break; }
+    }
+    const tbx = city.x[targetBoxIdx];
+    const tbz = city.z[targetBoxIdx];
+    const tbh = city.y[targetBoxIdx] + city.h[targetBoxIdx] * 0.5;
+    const tbhz = city.d[targetBoxIdx] * 0.5;
+    cam.position.set(tbx, tbh * 0.65, tbz + tbhz + 18);
+    cam.lookAt(tbx, tbh * 0.65, tbz);
+    cam.updateMatrixWorld();
+    const perception = await mcp.callTool('petacity_what_am_i_looking_at', {});
+    assert.equal(perception.hit.buildingId, targetBoxIdx, 'whatAmILookingAt raycasts exact building in crosshairs');
+
+    // Take over that building's lights and display a glowing 4-sided LED facade message
+    const bldgRes = await mcp.callTool('petacity_takeover_building', {
+      building: 'lookingAt',
+      mode: 'pulse',
+      color: '#00ffcc',
+      message: 'HELLO WORLD',
+      subtext: 'SCENE 01',
+    });
+    assert.equal(bldgRes.ok, true);
+    assert.equal(bldgRes.buildingId, targetBoxIdx);
+    assert.ok(U.uOverrideBldg.value.w > 0, 'TOWER_FRAG uOverrideBldg uniform activated');
+    assert.equal(director.buildingGroup.children.length, 1, '4-sided LED facade text mesh mounted on building');
+
+    // Hijack signage
+    const signRes = await mcp.callTool('petacity_takeover_signage', {
+      sign: 0,
+      text: 'ON AIR',
+      color: '#ff4fd8',
+    });
+    assert.equal(signRes.ok, true);
+    assert.equal(director.signGroup.children.length, 1, 'hijacked billboard mesh mounted');
+
+    // Project hologram directly in front of camera (with emitter pod + terminating frustum)
+    const projRes = await mcp.callTool('petacity_project_hologram', {
+      text: 'AGENT ONLINE',
+      shape: 'diamond',
+      distance: 32,
+      followCamera: true,
+    });
+    assert.equal(projRes.ok, true);
+    assert.equal(director.holoGroup.children.length, 1, 'camera hologram + projector cone spawned');
+
+    // Take over a car, park it in front of the camera with glow-only headlights, then run a camera dolly shot
+    const carRes = await mcp.callTool('petacity_control_vehicle', {
+      vehicle: 0,
+      parkInFrontOfCamera: true,
+      headlights: 'glow-only',
+      color: '#ff2a6d',
+    });
+    assert.equal(carRes.ok, true);
+    assert.equal(carRes.state.overridden, true);
+
+    const shotRes = await mcp.callTool('petacity_run_camera_script', {
+      shots: [{ type: 'dolly', to: [tbx + 40, tbh * 0.8, tbz + 120], lookAt: { buildingId: targetBoxIdx }, duration: 1.0 }],
+    });
+    assert.equal(shotRes.ok, true);
+    director.update(0.5);
+
+    // Reset movie set cleanly
+    await mcp.callTool('petacity_reset_movie_set', {});
+    assert.equal(U.uOverrideBldg.value.w, 0, 'building override cleared');
+    assert.equal(director.buildingGroup.children.length, 0);
+    assert.equal(director.signGroup.children.length, 0);
+    assert.equal(director.holoGroup.children.length, 0);
+  } finally {
+    globalThis.window = prevWin;
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, value: prevNav });
+  }
+});
+
 
 
 

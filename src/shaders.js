@@ -690,6 +690,8 @@ uniform float uMoonPhase;
 uniform float uFlash;
 uniform float uWorldCurve;
 uniform float uPlanetR;
+uniform float uWindAngle;
+uniform float uWindStrength;
 varying vec3 vDir;
 ${GLSL_NOISE}
 ${GLSL_UTIL}
@@ -708,9 +710,13 @@ vec2 intersectSphereShell(vec3 oc, vec3 rd, float rad) {
 // 0 = Cumulus, 1 = Cumulonimbus thunderheads, 2 = Stratocumulus deck,
 // 3 = High ice Cirrus, 4 = Multi-layer Altocumulus + Cirrus, 5 = Low Sea-of-Clouds
 float skyCumulusDensity(vec3 p, float h01, float covK, float cType, float t) {
-  // Closed circular orbital drift & 4D evolution in noise space -> 100% seamless loop at PC_LOOP = 120s!
-  vec2 orbWind = loopOrbit(t, 440.0, 1.0);
-  vec3 wind = vec3(orbWind.x, 0.0, orbWind.y * 0.65);
+  // Coherent prevailing wind streamlines + altitude Ekman veer (100% seamless loop at PC_LOOP = 120s!)
+  float wAng = uWindAngle + h01 * 0.26;
+  float cwA = cos(wAng);
+  float swA = sin(wAng);
+  vec2 orbWind = loopOrbit(t, 440.0 * mix(0.65, 1.35, clamp(uWindStrength, 0.0, 2.0)), 1.0);
+  vec3 wind = vec3(cwA * orbWind.x - swA * orbWind.y * 0.45, 0.0, swA * orbWind.x + cwA * orbWind.y * 0.45);
+  vec3 pw = vec3(p.x * cwA + p.z * swA, p.y, -p.x * swA + p.z * cwA);
   float w4 = loopSin(t, 0.025, 0.0) * 1.85 * max(uCloudEvol, 0.0) + loopCos(t, 0.017, 1.1) * 0.95 * max(uCloudEvol, 0.0);
   float lac = clamp(uCloudLac, 1.25, 3.4);
   float sOff = uCloudSeed;
@@ -719,10 +725,10 @@ float skyCumulusDensity(vec3 p, float h01, float covK, float cType, float t) {
   float multiDeck = 0.78 + 0.22 * cos(h01 * 9.42 + sOff);
 
   if (cType > 2.5 && cType < 3.5) {
-    // 3: High ice-crystal Cirrus & wind-sheared mares' tails
-    vec3 cw = (p + wind * 2.1 + vec3(h01 * 520.0, 0.0, -h01 * 210.0)) * vec3(0.00019, 0.0014, 0.00052);
+    // 3: High ice-crystal Cirrus & wind-sheared mares' tails aligned with prevailing wind
+    vec3 cw = (pw + vec3(orbWind.x * 2.1 + h01 * 560.0, 0.0, orbWind.y * 0.45)) * vec3(0.00018, 0.0014, 0.00054);
     float warp = fbm4Cloud(cw * 0.85, w4 * 0.7, lac, sOff);
-    float wisps = fbm4Cloud(cw * vec3(1.6, 1.0, 3.4) + vec3(warp * 2.4, 0.0, -warp * 1.6), w4, lac, sOff + 3.1);
+    float wisps = fbm4Cloud(cw * vec3(1.5, 1.0, 3.5) + vec3(warp * 2.4, 0.0, -warp * 1.6), w4, lac, sOff + 3.1);
     float fine = vnoise4(vec4(cw * vec3(4.5, 1.8, 7.5), w4 * 1.3 + sOff));
     float prof = smoothstep(0.05, 0.45, h01) * smoothstep(1.0, 0.48, h01);
     float shape = (wisps * 0.72 + fine * 0.28) * (0.65 + 0.55 * prof);
@@ -731,9 +737,9 @@ float skyCumulusDensity(vec3 p, float h01, float covK, float cType, float t) {
   }
 
   if (cType > 1.5 && cType < 2.5) {
-    // 2: Stratocumulus cellular rolls & unbroken overcast ceiling at high cover
-    vec3 sq = (p + wind * 0.85) * vec3(0.00028, 0.00125, 0.00044);
-    float rolls = fbm4Cloud(sq * vec3(0.85, 1.0, 1.55), w4 * 0.8, lac, sOff);
+    // 2: Stratocumulus wind-streets & cellular rolls aligned along wind streamlines
+    vec3 sq = (pw + vec3(orbWind.x * 0.85, 0.0, orbWind.y * 0.35)) * vec3(0.00026, 0.00125, 0.00046);
+    float rolls = fbm4Cloud(sq * vec3(0.80, 1.0, 1.60), w4 * 0.8, lac, sOff);
     float cells = fbm4Cloud(sq * 2.6 + vec3(4.1, -1.3, 2.7), w4 * 1.15, lac, sOff + 5.7);
     float detail = vnoise4(vec4(sq * 5.4, w4 * 1.4 + sOff));
     float prof = smoothstep(0.03, 0.26, h01) * smoothstep(1.0, 0.44, h01);
@@ -743,10 +749,10 @@ float skyCumulusDensity(vec3 p, float h01, float covK, float cType, float t) {
   }
 
   if (cType > 0.5 && cType < 1.5) {
-    // 1: Towering Cumulonimbus storm cells with sheared glaciated anvil tops
+    // 1: Towering Cumulonimbus storm cells with downwind-sheared glaciated anvil tops
     float anvilShear = smoothstep(0.58, 0.96, h01);
-    vec3 tp = p + wind * (0.9 + anvilShear * 1.15) - vec3(anvilShear * 680.0, 0.0, anvilShear * 240.0);
-    vec3 tq = tp * vec3(mix(0.00028, 0.00017, anvilShear), 0.00042, mix(0.00028, 0.00019, anvilShear));
+    vec3 tp = pw + vec3(orbWind.x * (0.9 + anvilShear * 1.15) - anvilShear * 720.0, 0.0, orbWind.y * 0.4);
+    vec3 tq = tp * vec3(mix(0.00028, 0.00016, anvilShear), 0.00042, mix(0.00028, 0.00020, anvilShear));
     float core = fbm4Cloud(tq, w4, lac, sOff);
     float turret = fbm4Cloud(tq * 2.45 + vec3(2.9, -3.1, 4.7), w4 * 1.35, lac, sOff + 7.9);
     float detail = vnoise4(vec4(tq * 5.6, w4 * 1.6 + sOff));
@@ -1072,6 +1078,8 @@ uniform float uCloudRange;
 uniform vec3 uCloudLayerElev;
 uniform vec3 uCloudLayerThick;
 uniform vec3 uCloudLayerDens;
+uniform float uWindAngle;
+uniform float uWindStrength;
 varying vec3 vWorld;
 varying vec3 vCenterW;
 varying vec3 vAxisX;
@@ -1124,12 +1132,24 @@ void main() {
     scl *= vec3(1.90, 0.54, 1.85);
   }
 
+  // Wind-guided coherent streamline orientation:
+  // Nearby clouds share smooth atmospheric wind streamlines + tropospheric Ekman altitude veer
+  // (low stratus -> mid cumulus -> high cirrus), eliminating chaotic random angles between puffs!
+  float wStr = clamp(uWindStrength, 0.0, 2.5);
+  scl.z *= mix(1.0, 1.38, clamp(wStr * 0.55, 0.0, 1.0));
   vHalfExt = max(scl * 0.5, vec3(1.0));
   vCenterW = bendWorld(ctr);
   vec3 upAxis = normalize(bendNormal(ctr.xz, vec3(0.0, 1.0, 0.0)));
-  float yaw = aSeed * 6.2831853;
-  vec3 refH = vec3(cos(yaw), 0.0, sin(yaw));
-  vec3 axX = cross(upAxis, refH);
+  float crossWind = dot(ctr.xz, vec2(-sin(uWindAngle), cos(uWindAngle)));
+  float alongWind = dot(ctr.xz, vec2(cos(uWindAngle), sin(uWindAngle)));
+  float streamWave = 0.22 * sin(crossWind * 0.00038 + alongWind * 0.00017)
+    + 0.09 * cos(crossWind * 0.00085 - alongWind * 0.00029);
+  float ekmanVeer = aLayer * 0.22;
+  float localEddy = (aSeed - 0.5) * mix(0.26, 0.11, clamp(wStr * 0.7, 0.0, 1.0));
+  float yaw = uWindAngle + streamWave + ekmanVeer + localEddy;
+  // Align axZ (major puff stretch axis in cirrus/stratocumulus) cleanly along the wind streamline!
+  vec3 windH = vec3(cos(yaw), 0.0, sin(yaw));
+  vec3 axX = cross(upAxis, windH);
   if (dot(axX, axX) < 1e-4) axX = cross(upAxis, vec3(1.0, 0.0, 0.0));
   axX = normalize(axX);
   vec3 axZ = normalize(cross(axX, upAxis));
@@ -1314,6 +1334,10 @@ uniform float uTerrainMode;
 uniform float uTerrainScale;
 uniform float uCoastAngle;
 uniform vec2 uTerrainSeed;
+uniform vec4 uRiverOrigin;
+uniform vec4 uRiverShape;
+uniform vec4 uLagoon;
+uniform vec2 uPondCenter;
 
 float envWaveFbm(vec2 p, vec2 ts) {
   vec2 q = p * 0.00052 + ts * 0.17;
@@ -1387,13 +1411,69 @@ float evalCoastSignedDist(vec2 p) {
   return (length(dL) + lWarp) - lakeR;
 }
 
+float evalRiverSignedDist(vec2 p) {
+  if (uWaterAmt <= 0.005 || uRiverShape.z < 0.5) return 9999.0;
+  float rAng = uRiverOrigin.z;
+  float maxLen = max(uRiverOrigin.w, 600.0);
+  float ca = cos(rAng);
+  float sa = sin(rAng);
+  vec2 d = p - uRiverOrigin.xy;
+  float u = d.x * ca + d.y * sa;
+  float v = -d.x * sa + d.y * ca;
+  float oceanMouth = uRiverShape.w;
+  float uMin = oceanMouth > 0.5 ? -260.0 : -95.0;
+  float uC = clamp(u, uMin, maxLen);
+  float t = clamp(uC / maxLen, 0.0, 1.0);
+  float sx = uTerrainSeed.x;
+  float sz = uTerrainSeed.y;
+  float latBias = uRiverShape.x;
+  float amtScale = max(uRiverShape.y, 0.25);
+
+  float sBend1 = sin(uC * 0.00155 + sx);
+  float sBend2 = cos(uC * 0.00068 - sz);
+  float sBend3 = sin(uC * 0.00310 + sx * 1.7);
+  float meander = latBias * t
+    + sBend1 * (115.0 + t * 255.0)
+    + sBend2 * (55.0 + t * 165.0)
+    + sBend3 * (22.0 + t * 38.0);
+  float dMeander = latBias / maxLen
+    + cos(uC * 0.00155 + sx) * 0.00155 * (115.0 + t * 255.0)
+    - sin(uC * 0.00068 - sz) * 0.00068 * (55.0 + t * 165.0)
+    + cos(uC * 0.00310 + sx * 1.7) * 0.00310 * (22.0 + t * 38.0);
+
+  float perpDist = abs(v - meander) / sqrt(1.0 + dMeander * dMeander);
+  float uExcess = u < uMin ? (uMin - u) : (u > maxLen ? (u - maxLen) : 0.0);
+  float distToCenter = uExcess > 0.0 ? length(vec2(perpDist, uExcess)) : perpDist;
+
+  float bendSwelling = abs(sBend1) * 14.0 + (1.0 - clamp(t * 3.5, 0.0, 1.0)) * 18.0;
+  float mouthFlare = oceanMouth > 0.5 ? (56.0 * (1.0 - smoothstep(-180.0, 95.0, uC))) : 0.0;
+  float halfW = (34.0 + t * 44.0 + bendSwelling + mouthFlare + sin(uC * 0.0085 + sx) * 6.0) * amtScale;
+  return distToCenter - halfW;
+}
+
+float evalWaterBodySignedDist(vec2 p) {
+  float d = evalCoastSignedDist(p);
+  d = min(d, evalRiverSignedDist(p));
+  if (uWaterAmt > 0.005 && uLagoon.z > 1.0) {
+    d = min(d, length(p - uLagoon.xy) - uLagoon.z * 0.94);
+  }
+  if (uWaterAmt > 0.005 && uLagoon.w > 1.0) {
+    d = min(d, length(p - uPondCenter) - uLagoon.w * 0.92);
+  }
+  return d;
+}
+
 float evalTerrainHeight(vec2 p) {
   float coastDist = evalCoastSignedDist(p);
   if (coastDist < 0.0) {
     return -18.0 * smoothstep(0.0, 240.0, -coastDist);
   }
+  float riverDist = evalRiverSignedDist(p);
+  if (riverDist < 0.0) {
+    return -3.4 * smoothstep(0.0, 22.0, -riverDist);
+  }
   float r = length(p);
-  float shoreEase = smoothstep(0.0, 290.0, coastDist);
+  float shoreEase = smoothstep(0.0, 290.0, coastDist) * smoothstep(0.0, 65.0, riverDist);
 
   float ca = cos(uCoastAngle);
   float sa = sin(uCoastAngle);
@@ -1600,14 +1680,16 @@ void main() {
   float aveFade = 1.0 - smoothstep(spanBoost * 0.94, spanBoost * 1.32, rDist);
 
   float walkW = 4.6;
-  // Strictly cut off core streets, sidewalks & lane markings before the shoreline/beach!
-  float shoreDryRoad = smoothstep(14.0, 38.0, coastDist);
+  // Strictly cut off ALL core streets, sidewalks, lane markings & suburban roads before coastlines, rivers & harbors!
+  float riverDist = evalRiverSignedDist(p);
+  float waterDist = evalWaterBodySignedDist(p);
+  float shoreDryRoad = smoothstep(11.0, 32.0, waterDist);
   float roadX = step(dx, swx * 0.5 - walkW) * mix(gridFade, aveFade, isAveX) * shoreDryRoad;
   float roadZ = step(dz, swz * 0.5 - walkW) * mix(gridFade, aveFade, isAveZ) * shoreDryRoad;
   float coreRoad = max(roadX, roadZ);
 
   // 2. Road-Aligned Curvilinear Trapezoid Blocks, High-Density Painted Suburban Sprawl & Lots
-  float dryMask = smoothstep(18.0, 62.0, coastDist) * (1.0 - slopeSteep);
+  float dryMask = smoothstep(14.0, 44.0, waterDist) * (1.0 - slopeSteep);
   float blockH = fract(sin(rw.cellU * 12.9898 + rw.cellV * 78.233 + uTerrainSeed.x * 3.1) * 43758.5453);
   float blockH2 = fract(blockH * 13.71 + rw.cellV * 0.37);
 
@@ -1827,6 +1909,17 @@ void main() {
     col = mix(col, grassCol, duneGrass * (1.0 - road) * 0.55);
   }
 
+  // 5b. Riverwalk Stone Embankment Quays (urban core) & Riparian Gravel/Reed Banks (suburbs & countryside)!
+  if (uWaterAmt > 0.005 && riverDist < 24.0 && coastDist > 8.0) {
+    float bankBand = (1.0 - smoothstep(0.0, mix(20.0, 12.5, gridFade), max(riverDist, 0.0))) * smoothstep(-4.0, 0.5, riverDist);
+    vec3 quayStone = mix(uGStreet * 1.18 + vec3(0.06, 0.06, 0.065), vec3(0.32, 0.34, 0.37) + uGLine * 0.05, 0.48);
+    float quayCope = (1.0 - smoothstep(0.0, 2.2, abs(riverDist - 1.4))) * gridFade;
+    quayStone += vec3(0.09) * quayCope;
+    vec3 riparian = mix(vec3(0.28, 0.25, 0.20) + uGBlock * 0.35, vec3(0.14, 0.24, 0.13) + uGBlock * 0.35, smoothstep(2.5, 14.0, riverDist));
+    vec3 bankSurf = mix(riparian, quayStone, gridFade);
+    col = mix(col, bankSurf, bankBand * 0.90);
+  }
+
   // Centre lines, multi-lane dashes on core avenues, storm-drain curbs & zebra crosswalks (clipped before beach/water!)
   float dashZ = step(0.42, fract(p.y / 14.0));
   float dashX = step(0.42, fract(p.x / 14.0));
@@ -1958,6 +2051,8 @@ uniform float uSignAmt;
 uniform float uMegaWrap;
 uniform float uGlyphStyle;
 uniform float uSignAnim;
+uniform vec4 uOverrideBldg;
+uniform vec3 uOverrideColor;
 varying vec3 vLocal;
 varying vec3 vN;
 varying vec3 vFlat;
@@ -2240,6 +2335,24 @@ void main() {
         vec3 glassSky = mix(uAmbG * 0.85, mix(uAmb, uFogCol, 0.45) * 1.35, skyUp) * paneVar
           + uSunCol * sunGlint * uSunK * 0.55;
         col = mix(col, saturate3(glassSky, uSat), win * (1.0 - litWin * 0.75) * dayStrength * 0.52);
+      }
+
+      // Director / WebMCP per-building window takeover (0=off, 1=blackout, 2=solid/pulse, 3=strobe, 4=dim-for-text)
+      if (uOverrideBldg.w > 0.5) {
+        vec2 dOv = abs(vFlat.xz - uOverrideBldg.xy);
+        if (max(dOv.x, dOv.y) < uOverrideBldg.z) {
+          if (uOverrideBldg.w < 1.5) {
+            litWin = 0.0;
+          } else if (uOverrideBldg.w < 2.5) {
+            litWin = win * (0.78 + 0.22 * sin(uTime * 3.2 + gid.y * 0.35));
+            wc = uOverrideColor;
+          } else if (uOverrideBldg.w < 3.5) {
+            litWin = win * step(0.35, fract(uTime * 4.5 + gid.y * 0.08));
+            wc = uOverrideColor;
+          } else {
+            litWin *= 0.08;
+          }
+        }
       }
 
       col += saturate3(wc, uSat) * litWin * (glow + 0.24 * dayOffice * (1.0 - uLightK));
@@ -2887,15 +3000,21 @@ void main() {
 }
 `;
 
-/* ---------------------------------------------------------- searchlights */
+/* ---------------------------------------------------------- searchlights & projector cones */
 
 export const BEAM_VERT = /* glsl */ `
+attribute vec4 aBeamMeta;
+attribute vec3 aBeamTint;
 varying float vT;
 varying float vW;
+varying vec4 vBeamMeta;
+varying vec3 vBeamTint;
 ${GLSL_CURVE}
 void main() {
   vT = uv.y;
   vW = uv.x;
+  vBeamMeta = aBeamMeta;
+  vBeamTint = aBeamTint;
   vec4 wp = vec4(position, 1.0);
   #ifdef USE_INSTANCING
     wp = instanceMatrix * wp;
@@ -2913,16 +3032,66 @@ uniform float uTime;
 uniform float uLightK;
 varying float vT;
 varying float vW;
+varying vec4 vBeamMeta;
+varying vec3 vBeamTint;
 ${GLSL_NOISE}
 
 void main() {
   if (uBeamK <= 0.002) discard;
-  float core = sin(3.14159 * clamp(vW, 0.0, 1.0));
-  float along = pow(max(1.0 - vT, 0.0), 1.35);
+  float bKind = vBeamMeta.x;
+  float bGain = vBeamMeta.y > 0.001 ? vBeamMeta.y : 1.0;
+  float bFalloff = vBeamMeta.z > 0.01 ? vBeamMeta.z : 1.35;
+  float bPhase = vBeamMeta.w;
+  vec3 tintCol = dot(vBeamTint, vBeamTint) > 0.001 ? vBeamTint : uBeamCol;
+
+  float uClamped = clamp(vW, 0.0, 1.0);
+  float baseCore = sin(3.14159 * uClamped);
   vec2 orbB = loopOrbit(uTime, 1.8, 3.0);
-  float wobble = 0.72 + 0.28 * vnoise(vec2(vT * 5.0 + orbB.x, orbB.y));
-  float a = core * along * wobble * uBeamK * max(uLightK, 0.12);
-  gl_FragColor = vec4(uBeamCol * (0.6 + 0.8 * along), clamp(a, 0.0, 0.95));
+  float dust = 0.74 + 0.26 * vnoise(vec2(vT * 6.0 + orbB.x + bPhase * 5.0, orbB.y - bPhase * 3.0));
+
+  float a = 0.0;
+  vec3 emitCol = tintCol;
+  if (bKind < 0.5) {
+    // 0: Classic Cinema Carbon-Arc Searchlight (bright hot axial filament + soft Mie halo)
+    float hotCore = pow(baseCore, 2.4) * 0.72 + pow(baseCore, 0.75) * 0.36;
+    float along = pow(max(1.0 - vT, 0.0), bFalloff);
+    a = hotCore * along * dust;
+    emitCol = tintCol * (0.65 + 0.90 * along);
+  } else if (bKind < 1.5) {
+    // 1: Coherent Sky-Piercer Laser (razor-thin collimated beam reaching high clouds + dust sparkle)
+    float laserCore = pow(baseCore, 7.5) * 1.45 + pow(baseCore, 2.2) * 0.22;
+    float along = pow(max(1.0 - vT, 0.0), max(0.55, bFalloff * 0.55));
+    float scint = 0.78 + 0.34 * sin(vT * 38.0 - uTime * 9.0 + bPhase * 25.0);
+    a = laserCore * along * dust * scint;
+    emitCol = mix(tintCol, vec3(1.0), 0.28) * (0.85 + 0.85 * along);
+  } else if (bKind < 2.5) {
+    // 2: Wide Architectural Flood Wash (broad Gaussian atmospheric wash, faster distance decay)
+    float floodCore = pow(baseCore, 0.58) * 0.78;
+    float along = pow(max(1.0 - vT, 0.0), bFalloff * 1.45) * smoothstep(0.0, 0.08, vT);
+    a = floodCore * along * dust;
+    emitCol = tintCol * (0.55 + 0.70 * along);
+  } else if (bKind < 3.5) {
+    // 3: Pulsed Aerial Fan Curtain (sheet fan with travelling interference ribbons)
+    float fanRibs = 0.68 + 0.32 * sin(uClamped * 28.0 + uTime * 2.5 + bPhase * 12.0);
+    float along = pow(max(1.0 - vT, 0.0), bFalloff * 0.95);
+    float pulse = 0.76 + 0.24 * sin(uTime * 3.4 + bPhase * 19.0);
+    a = pow(baseCore, 0.85) * fanRibs * along * pulse * dust;
+    emitCol = tintCol * (0.62 + 0.82 * along);
+  } else {
+    // 4: Volumetric Holo-Projector Frustum (tight emitter lens at vT=0 focusing onto hologram screen at vT=1!)
+    float lensGlow = exp(-vT * 9.5) * pow(baseCore, 1.6) * 0.95;
+    float screenFocus = smoothstep(0.58, 0.995, vT) * (1.0 - smoothstep(0.995, 1.005, vT)) * 0.82;
+    float coneBody = (0.26 + 0.58 * vT) * pow(baseCore, 0.65);
+    float scan = 0.75 + 0.25 * sin(vT * 64.0 - uTime * 14.0 + bPhase * 17.0);
+    float rays = 0.72 + 0.28 * sin(uClamped * 34.0 + bPhase * 23.0);
+    a = (coneBody * scan * rays + lensGlow + screenFocus) * dust;
+    vec3 chroma = tintCol + vec3(0.14, 0.02, -0.10) * sin(uClamped * 18.0 + uTime * 4.0);
+    emitCol = mix(chroma, vec3(1.0), lensGlow * 0.45 + screenFocus * 0.22);
+  }
+
+  float nightBoost = (bKind > 3.5) ? max(uLightK, 0.42) : max(uLightK, 0.12);
+  a *= bGain * uBeamK * nightBoost;
+  gl_FragColor = vec4(emitCol, clamp(a, 0.0, 0.95));
 }
 `;
 
@@ -2979,12 +3148,15 @@ void main() {
 export const WATER_FRAG = /* glsl */ `
 uniform vec3 uWaterDeep;
 uniform vec3 uWaterShallow;
+uniform float uWaterShader;
 uniform float uWaterScale;
 uniform float uWaterChop;
 uniform float uWaterFoam;
 uniform float uWaterRefl;
 uniform float uWaterContrast;
 uniform float uWaterWarp;
+uniform float uWindAngle;
+uniform float uWindStrength;
 uniform vec3 uSunDir;
 uniform vec3 uSkySunCol;
 uniform vec3 uFogCol;
@@ -3004,6 +3176,39 @@ ${GLSL_UTIL}
 ${GLSL_CURVE}
 ${GLSL_TERRAIN}
 
+// Derivative-clamped Nyquist weight so high-frequency 0.15m..1.5m capillary ripples stay
+// razor-crisp at EVERY camera altitude while band-limiting cleanly before sub-pixel aliasing!
+float nyquistWeight(float k, float pxSize) {
+  return 1.0 - smoothstep(0.95, 2.65, k * pxSize);
+}
+
+// Fast animated 2D cellular micro-facet ridge for diamond chop & caustic filigree
+vec3 evalCellularFacet(vec2 uv, float phase) {
+  vec2 ip = floor(uv);
+  vec2 fp = fract(uv);
+  float d1 = 8.0;
+  float d2 = 8.0;
+  vec2 bestV = vec2(0.0);
+  for (int j = -1; j <= 1; j++) {
+    for (int i = -1; i <= 1; i++) {
+      vec2 g = vec2(float(i), float(j));
+      float h = hash12(ip + g);
+      vec2 o = 0.5 + 0.42 * sin(phase + 6.2831853 * vec2(h, fract(h * 17.3)));
+      vec2 r = g + o - fp;
+      float d = dot(r, r);
+      if (d < d1) {
+        d2 = d1;
+        d1 = d;
+        bestV = r;
+      } else if (d < d2) {
+        d2 = d;
+      }
+    }
+  }
+  float ridge = clamp(1.0 - (sqrt(d2) - sqrt(d1)) * 1.65, 0.0, 1.0);
+  return vec3(bestV * 1.4, ridge);
+}
+
 void main() {
   if (uWaterAmt <= 0.005) discard;
   vec2 xz = vFlat.xz;
@@ -3022,97 +3227,190 @@ void main() {
   float dist = length(viewVec);
   vec3 vdir = viewVec / max(dist, 1e-4);
 
+  // Screen-space footprint in world metres for crisp Nyquist-clamped high-frequency detail
+  float pxSize = clamp(max(length(dFdx(xz)), length(dFdy(xz))), 0.025, 36.0);
+
   float ca = cos(uCoastAngle);
   float sa = sin(uCoastAngle);
-  vec2 shoreDir = vec2(-ca, -sa); // inward from open sea toward shore
+  vec2 shoreDir = vec2(-ca, -sa);
   vec2 longDir = vec2(-sa, ca);
+  vec2 windDir = vec2(cos(uWindAngle), sin(uWindAngle));
+  vec2 windPerp = vec2(-windDir.y, windDir.x);
 
-  // Physically calibrated multi-band directional Gerstner/trochoidal wave spectrum:
-  // Wavelengths ~22m, 13.5m, 6.8m, 3.2m & 1.35m (scaled by uWaterScale) with distance filtering
-  // so waves match 180m ships & 140m blocks up close and NEVER alias or blotch at distance!
   float sc = max(0.18, uWaterScale);
-  float chopK = clamp(uWaterChop, 0.0, 2.8);
+  float chopK = clamp(uWaterChop, 0.0, 2.8) * mix(0.82, 1.25, clamp(uWindStrength * 0.5, 0.0, 1.0));
   float foamK = clamp(uWaterFoam, 0.0, 2.8);
   float reflK = clamp(uWaterRefl, 0.0, 2.8);
   float contrastK = clamp(uWaterContrast, 0.0, 1.0);
   float warpK = clamp(uWaterWarp, 0.0, 2.2);
 
   // Seamless integer-harmonic wave phases over PC_LOOP = 120s
-  float ph1 = loopPhase(uTime, 32.0) * 6.2831853;
-  float ph2 = loopPhase(uTime, 47.0) * 6.2831853;
-  float ph3 = loopPhase(uTime, 67.0) * 6.2831853;
-  float ph4 = loopPhase(uTime, 94.0) * 6.2831853;
-  float ph5 = loopPhase(uTime, 128.0) * 6.2831853;
+  float ph1 = loopPhase(uTime, 36.0) * 6.2831853;
+  float ph2 = loopPhase(uTime, 58.0) * 6.2831853;
+  float ph3 = loopPhase(uTime, 89.0) * 6.2831853;
+  float ph4 = loopPhase(uTime, 136.0) * 6.2831853;
+  float ph5 = loopPhase(uTime, 198.0) * 6.2831853;
+  float ph6 = loopPhase(uTime, 280.0) * 6.2831853;
 
-  vec2 d1 = normalize(shoreDir + longDir * 0.22);
-  vec2 d2 = normalize(shoreDir * 0.80 - longDir * 0.60);
-  vec2 d3 = normalize(shoreDir * 0.42 + longDir * 0.91);
-  vec2 d4 = normalize(-shoreDir * 0.30 + longDir * 0.95);
-  vec2 d5 = normalize(shoreDir * 0.66 - longDir * 0.75);
+  // Base 8-band multiscale high-frequency directional dispersion cascade (wavelengths ~11m down to 0.16m!)
+  vec2 wdA = normalize(mix(shoreDir, windDir, 0.55) + windPerp * 0.24);
+  vec2 wdB = normalize(mix(shoreDir, windDir, 0.55) - windPerp * 0.31);
+  vec2 wdC = normalize(windDir * 0.72 + longDir * 0.69);
+  vec2 wdD = normalize(windDir * 0.58 - longDir * 0.81);
+  vec2 wdE = normalize(-shoreDir * 0.35 + windPerp * 0.94);
 
-  // Distance band-limiting prevents Moire aliasing on distant ocean pixels while keeping close ripples crisp
-  float att1 = exp(-dist * 0.00018);
-  float att2 = exp(-dist * 0.00032);
-  float att3 = exp(-dist * 0.00068);
-  float att4 = exp(-dist * 0.00145);
-  float att5 = exp(-dist * 0.00310);
+  float kWarp = 0.22 / sc;
+  float bendW = (sin(dot(xz, windPerp) * kWarp + ph1 * 0.25) * 0.60
+    + cos(dot(xz, wdC) * (kWarp * 1.65) - ph2 * 0.25) * 0.40) * warpK * 0.85;
 
-  // Non-blotchy crossed wave-front curvature (zero scalar fbm blobs!)
-  float kWarp = 0.145 / sc;
-  float bendW = (sin(dot(xz, longDir) * kWarp + ph1 * 0.25) * 0.65
-    + cos(dot(xz, shoreDir * 0.7 + longDir * 0.7) * (kWarp * 1.45) - ph2 * 0.25) * 0.35) * warpK * 0.95;
+  float k1 = 0.58 / sc;   // ~10.8m primary swell
+  float k2 = 1.28 / sc;   // ~4.9m short gravity wave
+  float k3 = 2.75 / sc;   // ~2.3m harbor chop
+  float k4 = 5.90 / sc;   // ~1.06m crisp wind wavelets
+  float k5 = 12.60 / sc;  // ~0.50m fine capillary facets
+  float k6 = 25.50 / sc;  // ~0.25m micro-glint ripples
+  float k7 = 46.00 / sc;  // ~0.14m ultra-fine silk capillary
 
-  float k1 = 0.285 / sc;
-  float k2 = 0.465 / sc;
-  float k3 = 0.920 / sc;
-  float k4 = 1.960 / sc;
-  float k5 = 4.650 / sc;
+  float nyq1 = nyquistWeight(k1, pxSize);
+  float nyq2 = nyquistWeight(k2, pxSize);
+  float nyq3 = nyquistWeight(k3, pxSize);
+  float nyq4 = nyquistWeight(k4, pxSize);
+  float nyq5 = nyquistWeight(k5, pxSize);
+  float nyq6 = nyquistWeight(k6, pxSize);
+  float nyq7 = nyquistWeight(k7, pxSize);
 
-  float th1 = dot(xz, d1) * k1 + bendW - ph1;
-  float th2 = dot(xz, d2) * k2 - bendW * 0.75 - ph2;
-  float th3 = dot(xz, d3) * k3 + bendW * 0.45 + ph3;
-  float th4 = dot(xz, d4) * k4 - ph4;
-  float th5 = dot(xz, d5) * k5 + ph5;
+  float th1 = dot(xz, wdA) * k1 + bendW - ph1;
+  float th2 = dot(xz, wdB) * k2 - bendW * 0.7 - ph2;
+  float th3 = dot(xz, wdC) * k3 + bendW * 0.45 + ph3;
+  float th4 = dot(xz, wdD) * k4 - ph4;
+  float th5 = dot(xz, wdA * 0.8 + wdE * 0.6) * k5 + ph5;
+  float th6 = dot(xz, wdB * 0.7 - wdE * 0.7) * k6 - ph6;
+  float th7 = dot(xz, windDir * 0.9 + windPerp * 0.43) * k7 + ph6 * 1.5;
 
   float s1 = sin(th1); float c1 = cos(th1);
   float s2 = sin(th2); float c2 = cos(th2);
   float s3 = sin(th3); float c3 = cos(th3);
   float s4 = sin(th4); float c4 = cos(th4);
   float s5 = sin(th5); float c5 = cos(th5);
+  float s6 = sin(th6); float c6 = cos(th6);
+  float s7 = sin(th7); float c7 = cos(th7);
 
-  // Sharpened trochoidal wave crests (broad calm troughs, narrow crisp wave ridges)
-  float w1 = pow(0.5 + 0.5 * s1, 2.15) * att1;
-  float w2 = pow(0.5 + 0.5 * s2, 2.25) * att2;
-  float w3 = pow(0.5 + 0.5 * s3, 2.40) * att3;
-  float w4 = (0.5 + 0.5 * s4) * att4;
-  float w5 = (0.5 + 0.5 * s5) * att5;
+  // 5 Distinct High-Frequency Water Shader Solutions selectable via uWaterShader (0..4):
+  //   0: Capillary Micro-Facet Sea (crisp 7-octave directional dispersion + GGX glints)
+  //   1: Diamond Wind-Chop & Glitter (crossed Phillips wind chop + Voronoi micro-facets + Langmuir streaks)
+  //   2: Crystalline Caustic Filigree (dual-layer cellular interference + luminous harbor/river caustics)
+  //   3: Storm Swell & Whitecap Spray (steep trochoidal rollers + 7-octave wind-whipped spray & crest lace)
+  //   4: Obsidian Silk & Hairline Ripples (ultra-fine capillary hairlines + mirror skyline filaments)
+  float waveH = 0.0;
+  vec2 gradH = vec2(0.0);
+  float extraFoam = 0.0;
+  float extraCaustic = 0.0;
+  float specTightPow = 180.0;
+  float specTightGain = 2.6;
+  float glitterMask = 0.5 + 0.5 * s5;
+  float reflBoost = 1.0;
 
-  float waveH = w1 * 0.38 + w2 * 0.29 + w3 * 0.18 + w4 * 0.10 + w5 * 0.05;
+  if (uWaterShader < 0.5) {
+    // Mode 0: Capillary Micro-Facet Sea (Default)
+    float w1 = pow(0.5 + 0.5 * s1, 2.0) * nyq1;
+    float w2 = pow(0.5 + 0.5 * s2, 2.2) * nyq2;
+    float w3 = pow(0.5 + 0.5 * s3, 2.3) * nyq3;
+    float w4 = (0.5 + 0.5 * s4) * nyq4;
+    float w5 = (0.5 + 0.5 * s5) * nyq5;
+    waveH = w1 * 0.26 + w2 * 0.25 + w3 * 0.22 + w4 * 0.16 + w5 * 0.11;
+    gradH = (
+      wdA * (c1 * 0.095 * nyq1) +
+      wdB * (c2 * 0.125 * nyq2) +
+      wdC * (c3 * 0.145 * nyq3) +
+      wdD * (c4 * 0.155 * nyq4) +
+      normalize(wdA * 0.8 + wdE * 0.6) * (c5 * 0.145 * nyq5) +
+      normalize(wdB * 0.7 - wdE * 0.7) * (c6 * 0.115 * nyq6) +
+      normalize(windDir * 0.9 + windPerp * 0.43) * (c7 * 0.085 * nyq7)
+    ) * chopK;
+    glitterMask = clamp(0.35 + 0.65 * (0.5 + 0.5 * s5) * (0.5 + 0.5 * s6), 0.2, 1.2);
+    extraFoam = smoothstep(0.76, 0.98, (w2 + w3) * 0.72 + w4 * 0.35) * 0.22;
+  } else if (uWaterShader < 1.5) {
+    // Mode 1: Diamond Wind-Chop & Glittering Ripples
+    float cellK = 2.35 / sc;
+    float cellNyq = nyquistWeight(cellK * 3.1, pxSize);
+    vec3 cf1 = evalCellularFacet(xz * cellK + windDir * (ph2 * 0.35), ph3 * 0.5);
+    vec3 cf2 = evalCellularFacet(xz * (cellK * 2.35) - windDir * (ph3 * 0.45), ph4 * 0.5);
+    waveH = cf1.z * 0.45 * cellNyq + cf2.z * 0.30 * nyq4 + (0.5 + 0.5 * s3) * 0.25 * nyq3;
+    gradH = (
+      cf1.xy * (0.24 * cellNyq) +
+      cf2.xy * (0.20 * nyq4) +
+      wdA * (c2 * 0.11 * nyq2) +
+      wdC * (c4 * 0.15 * nyq4) +
+      windDir * (c5 * 0.16 * nyq5) +
+      windPerp * (c6 * 0.13 * nyq6)
+    ) * chopK;
+    float langmuir = pow(0.5 + 0.5 * sin(dot(xz, windPerp) * (0.34 / sc) + s2 * 0.8), 8.0);
+    extraFoam = (smoothstep(0.72, 0.96, cf1.z * cf2.z * 1.45) * 0.30 + langmuir * 0.16 * nyq2);
+    specTightPow = 280.0;
+    specTightGain = 3.6;
+    glitterMask = 0.25 + 1.15 * cf1.z * (0.5 + 0.5 * s6);
+  } else if (uWaterShader < 2.5) {
+    // Mode 2: Crystalline Caustic Filigree & Crisp Harbor Chop
+    float cScale = 1.85 / sc;
+    float cNyq = nyquistWeight(cScale * 3.0, pxSize);
+    vec3 vA = evalCellularFacet(xz * cScale + vec2(ph1, -ph2) * 0.18, ph2 * 0.6);
+    vec3 vB = evalCellularFacet(xz * (cScale * 1.9) - vec2(ph2, ph3) * 0.16, ph3 * 0.6);
+    float filigree = pow(clamp(vA.z * 0.62 + vB.z * 0.52, 0.0, 1.0), 3.2) * cNyq;
+    waveH = (0.5 + 0.5 * s2) * 0.32 * nyq2 + (0.5 + 0.5 * s4) * 0.34 * nyq4 + vA.z * 0.34 * cNyq;
+    gradH = (
+      vA.xy * (0.16 * cNyq) +
+      vB.xy * (0.14 * nyq4) +
+      wdB * (c3 * 0.13 * nyq3) +
+      wdD * (c5 * 0.14 * nyq5) +
+      wdE * (c6 * 0.11 * nyq6)
+    ) * chopK;
+    extraCaustic = filigree * 0.52;
+    extraFoam = pow(filigree, 2.2) * 0.24;
+    reflBoost = 1.12;
+  } else if (uWaterShader < 3.5) {
+    // Mode 3: Storm Swell & Whitecap Spray
+    float sharp1 = pow(0.5 + 0.5 * sin(th1 + 0.42 * c1), 2.8) * nyq1;
+    float sharp2 = pow(0.5 + 0.5 * sin(th2 + 0.38 * c2), 2.6) * nyq2;
+    float sharp3 = pow(0.5 + 0.5 * s3, 2.4) * nyq3;
+    waveH = sharp1 * 0.42 + sharp2 * 0.32 + sharp3 * 0.16 + (0.5 + 0.5 * s5) * 0.10 * nyq5;
+    gradH = (
+      wdA * (c1 * (0.65 + 0.65 * s1) * 0.19 * nyq1) +
+      wdB * (c2 * (0.60 + 0.60 * s2) * 0.18 * nyq2) +
+      wdC * (c3 * 0.17 * nyq3) +
+      wdD * (c4 * 0.16 * nyq4) +
+      windDir * (c5 * 0.15 * nyq5 + c6 * 0.12 * nyq6)
+    ) * chopK * 1.22;
+    float sprayNoise = 0.55 + 0.45 * sin(dot(xz, windDir) * (8.5 / sc) - ph5 + s4 * 2.0);
+    extraFoam = smoothstep(0.52, 0.90, sharp1 * 0.68 + sharp2 * 0.58) * sprayNoise * 0.62;
+    specTightPow = 120.0;
+    specTightGain = 2.0;
+  } else {
+    // Mode 4: Obsidian Silk & Hairline Micro-Ripples (Architectural Mirror Water)
+    waveH = (0.5 + 0.5 * s4) * 0.35 * nyq4 + (0.5 + 0.5 * s5) * 0.35 * nyq5 + (0.5 + 0.5 * s6) * 0.30 * nyq6;
+    gradH = (
+      wdC * (c3 * 0.055 * nyq3) +
+      wdD * (c4 * 0.095 * nyq4) +
+      windDir * (c5 * 0.145 * nyq5) +
+      windPerp * (c6 * 0.155 * nyq6) +
+      normalize(windDir + windPerp) * (c7 * 0.135 * nyq7)
+    ) * chopK * 0.82;
+    specTightPow = 340.0;
+    specTightGain = 3.4;
+    reflBoost = 1.38;
+    glitterMask = 0.40 + 0.60 * (0.5 + 0.5 * s6) * (0.5 + 0.5 * s7);
+  }
 
-  // Analytical surface slope gradient scaled by uWaterChop
-  vec2 gradH = (
-    d1 * (c1 * (0.5 + 0.5 * s1) * 0.145 * att1) +
-    d2 * (c2 * (0.5 + 0.5 * s2) * 0.135 * att2) +
-    d3 * (c3 * 0.115 * att3) +
-    d4 * (c4 * 0.085 * att4) +
-    d5 * (c5 * 0.055 * att5)
-  ) * chopK;
-
-  // Cohesive deep ocean body absorption: uWaterShallow stays subtle on open sea (default uWaterContrast = 0.12)
-  // so high-contrast themes like Outrun & Blade Runner never turn into giant camouflage blotches!
-  vec3 crestBody = mix(uWaterDeep * 1.32 + vec3(0.015, 0.028, 0.038), uWaterShallow, 0.58);
-  vec3 col = mix(uWaterDeep, crestBody, smoothstep(0.22, 0.84, waveH) * contrastK);
+  // Cohesive deep ocean body absorption: uWaterShallow stays subtle on open sea so high-contrast themes never blotch!
+  vec3 crestBody = mix(uWaterDeep * 1.30 + vec3(0.014, 0.026, 0.036), uWaterShallow, 0.52);
+  vec3 col = mix(uWaterDeep, crestBody, smoothstep(0.24, 0.86, waveH) * contrastK);
 
   vec3 sd = normalize(uSunDir);
-  // Subtle translucent subsurface forward-scatter through sunlit wave crests
   float backLight = pow(max(dot(vdir, vec3(-sd.x, 0.0, -sd.z)), 0.0), 2.5) * max(sd.y + 0.25, 0.0);
-  col += uWaterShallow * smoothstep(0.46, 0.88, waveH) * backLight * 0.16 * chopK;
+  col += uWaterShallow * smoothstep(0.48, 0.88, waveH) * backLight * 0.15 * chopK;
 
-  // Delicate lacy open-water whitecaps ONLY where multi-directional wave trains constructively peak
-  vec3 foamTint = mix(vec3(0.88, 0.94, 1.0), uSkySunCol, 0.30);
-  float crestCross = w1 * w2 * 2.2 + waveH * 0.55;
-  float openWhitecap = smoothstep(0.76, 1.02, crestCross) * 0.24 * foamK * clamp(chopK, 0.0, 1.6);
-  col = mix(col, foamTint, clamp(openWhitecap, 0.0, 0.62));
+  vec3 foamTint = mix(vec3(0.90, 0.95, 1.0), uSkySunCol, 0.28);
+  col += mix(uWaterShallow, foamTint, 0.35) * extraCaustic * 0.38;
+  col = mix(col, foamTint, clamp(extraFoam * foamK * clamp(chopK, 0.15, 1.7), 0.0, 0.72));
 
   // Analytical V-Shaped Kelvin Ship Wakes & Turbulent Stern Prop-Wash behind Harbor Vessels!
   float wakeFoam = 0.0;
@@ -3144,10 +3442,10 @@ void main() {
   if (vAnalytical > 0.5 && uWaterMode > 0.5 && uWaterMode < 3.5) {
     float seaDist = max(0.0, -cDist);
     float shoal = 1.0 - smoothstep(0.0, 135.0, seaDist);
-    float caustA = abs(sin((xz.x * 0.42 + xz.y * 0.31) / sc + s2 * 1.4 - ph2));
-    float caustB = abs(sin((xz.x * 0.33 - xz.y * 0.44) / sc + s3 * 1.4 + ph3));
-    float caustic = pow(1.0 - min(caustA, caustB), 4.5) * shoal * att3;
-    col = mix(col, mix(uWaterDeep, uWaterShallow, 0.68) + foamTint * caustic * 0.22, shoal * 0.52);
+    float caustA = abs(sin((xz.x * 0.78 + xz.y * 0.59) / sc + s3 * 1.3 - ph3));
+    float caustB = abs(sin((xz.x * 0.61 - xz.y * 0.82) / sc + s4 * 1.3 + ph4));
+    float caustic = pow(1.0 - min(caustA, caustB), 4.5) * shoal * nyq3;
+    col = mix(col, mix(uWaterDeep, uWaterShallow, 0.68) + foamTint * caustic * 0.26, shoal * 0.54);
 
     // Preserved shoreward surf-breaking band (+ uTime advances phase shoreward, integer-periodic over PC_LOOP = 120.0!)
     float shoalK = pow(seaDist, 0.86);
@@ -3158,30 +3456,36 @@ void main() {
     float shoreLip = (1.0 - smoothstep(0.0, 4.5, seaDist)) * (0.65 + 0.35 * sin(ph3 + s1 * 2.2));
     col = mix(col, foamTint, clamp((surfFoam * 0.62 + shoreLip * 0.52) * foamK, 0.0, 0.88));
   } else {
-    // Polygon harbors, meandering rivers & multi-lobed ponds: subtle fine current shimmer
-    float caustR = pow(1.0 - min(abs(s3), abs(s4)), 4.0) * 0.14 * att3;
-    col += (uWaterShallow * 0.45 + foamTint * 0.20) * caustR;
+    // Polygon harbors, meandering rivers & multi-lobed ponds: bank ripples + downstream capillary current!
+    float rDist = evalRiverSignedDist(xz);
+    float bankRipple = (1.0 - smoothstep(-16.0, -0.5, rDist)) * step(-24.0, rDist);
+    float bankWave = 0.5 + 0.5 * sin(rDist * 2.8 - ph3);
+    float caustR = pow(1.0 - min(abs(s4), abs(s5)), 4.0) * 0.18 * nyq4;
+    col += (uWaterShallow * 0.45 + foamTint * 0.22) * caustR;
+    col = mix(col, foamTint, clamp(bankRipple * bankWave * 0.28 * foamK, 0.0, 0.45));
   }
 
-  // Normal-driven Fresnel Sky Reflection + Dual-Lobe Anisotropic Sun/Moon Glitter Path!
-  vec3 waveN = bendNormal(xz, normalize(vec3(-gradH.x * 2.6, 1.0, -gradH.y * 2.6)));
+  // High-frequency Micro-Facet Fresnel Sky Reflection + GGX Sun/Moon Glitter + Broken-Column Skyline Shimmer!
+  vec3 waveN = bendNormal(xz, normalize(vec3(-gradH.x * 2.4, 1.0, -gradH.y * 2.4)));
   vec3 reflDir = reflect(vdir, waveN);
   float reflElev = clamp(reflDir.y, 0.0, 1.0);
-  vec3 skyRefl = mix(uSunFogCol, mix(uFogCol, uWaterDeep * 1.25, 0.55), pow(reflElev, 0.55));
+  vec3 skyRefl = mix(uSunFogCol, mix(uFogCol, uWaterDeep * 1.25, 0.48), pow(reflElev, 0.52));
   float nDotV = max(dot(-vdir, waveN), 0.0);
-  float fres = 0.03 + 0.97 * pow(1.0 - nDotV, 4.2);
-  col = mix(col, skyRefl, clamp(fres * 0.54 * reflK, 0.0, 0.86));
+  float fres = 0.025 + 0.975 * pow(1.0 - nDotV, 4.6);
+  col = mix(col, skyRefl, clamp(fres * 0.58 * reflK * reflBoost, 0.0, 0.90));
 
   vec3 halfV = normalize(sd - vdir);
   float ndh = max(dot(waveN, halfV), 0.0);
-  float specTight = pow(ndh, 110.0) * 2.1;
-  float specGlitter = pow(ndh, 24.0) * 0.26 * (0.45 + 0.55 * w4);
+  float specTight = pow(ndh, specTightPow) * specTightGain;
+  float specGlitter = pow(ndh, 34.0) * 0.34 * glitterMask;
   float sunVisW = smoothstep(-0.08, 0.12, sd.y);
   col += uSkySunCol * (specTight + specGlitter) * reflK * (0.25 + 0.75 * sunVisW);
 
-  // Subtle waterfront city-light shimmer near the urban core at night
-  float nearCity = 1.0 - smoothstep(uCitySpan * 0.45, uCitySpan * 1.95, length(xz));
-  col += uPoolCol * nearCity * (0.25 + 0.75 * (w3 * 0.6 + w4 * 0.4)) * max(uLightK, 0.0) * 0.22 * reflK;
+  // Crisp capillary-broken city skyline & bridge reflection columns at dusk/night!
+  float nearCity = 1.0 - smoothstep(uCitySpan * 0.42, uCitySpan * 2.05, length(xz));
+  float colStreak = pow(0.5 + 0.5 * sin(atan(xz.y, xz.x) * 46.0 + gradH.x * 9.0), 4.0);
+  float microBreak = 0.35 + 0.65 * (0.5 + 0.5 * s5) * (0.5 + 0.5 * s6);
+  col += uPoolCol * nearCity * (0.18 + 0.82 * colStreak * microBreak) * max(uLightK, 0.0) * 0.32 * reflK * reflBoost;
 
   vec3 fogCol = mix(uFogCol, uSunFogCol, pow(max(dot(vdir, sd), 0.0), 6.0) * uHazeSun);
   float fogF = (1.0 - exp(-0.00024 * dist)) * (1.0 - uWorldCurve * 0.45);

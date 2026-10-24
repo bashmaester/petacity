@@ -8,7 +8,7 @@
 //     Look-Around mode is active) the independent view frustum cone.
 //   - Supports zoom in/out, camera-follow vs city-overview toggle, hover label,
 //     and click-to-fly to any site or map coordinate.
-import { CELL, evalCoastSignedDist } from './city.js';
+import { CELL, evalCoastSignedDist, evalRiverSignedDist } from './city.js';
 
 export function makeMinimap({
   canvas,
@@ -23,6 +23,8 @@ export function makeMinimap({
   let hoveredSite = null;
   let cachedBg = null;
   let cachedBgKey = '';
+  let lastCx = 0;
+  let lastCz = 0;
 
   const getCtx = () => {
     if (!canvas || typeof canvas.getContext !== 'function') return null;
@@ -135,21 +137,40 @@ export function makeMinimap({
       octx.stroke();
     }
 
-    // Core avenue & street grid (clipped to dry land)
+    // Core avenue & street grid (clipped to dry land AND riverbanks!)
     const r = city.radius;
     const coreSpan = r * CELL;
-    octx.strokeStyle = 'rgba(135, 165, 205, 0.16)';
-    octx.lineWidth = 0.75;
+    const isDryMapPt = (wx, wz) => {
+      if (city.waterAmount > 0.005) {
+        if (evalCoastSignedDist(wx, wz, coreSpan, city.coastAngle, city.waterMode, city.terrainSeedX, city.terrainSeedZ, city.shoreDist, city.waterAmount) < 12) return false;
+        if (evalRiverSignedDist(wx, wz, city.riverFlow) < 10) return false;
+      }
+      return true;
+    };
+    const strokeDryLine = (x0, z0, x1, z1) => {
+      const steps = 28;
+      let pen = false;
+      octx.beginPath();
+      for (let s = 0; s <= steps; s++) {
+        const f = s / steps;
+        const wx = x0 + (x1 - x0) * f;
+        const wz = z0 + (z1 - z0) * f;
+        if (isDryMapPt(wx, wz)) {
+          const m = worldToMap(wx, wz, cx, cz, w, h, span);
+          if (!pen) { octx.moveTo(m.px, m.py); pen = true; }
+          else octx.lineTo(m.px, m.py);
+        } else {
+          pen = false;
+        }
+      }
+      octx.stroke();
+    };
     for (let g = -r; g <= r; g++) {
       const isAve = g % 4 === 0;
       octx.strokeStyle = isAve ? 'rgba(170, 205, 245, 0.30)' : 'rgba(120, 150, 190, 0.12)';
       octx.lineWidth = isAve ? 1.15 : 0.65;
-      const a1 = worldToMap(g * CELL, -coreSpan, cx, cz, w, h, span);
-      const a2 = worldToMap(g * CELL, coreSpan, cx, cz, w, h, span);
-      octx.beginPath(); octx.moveTo(a1.px, a1.py); octx.lineTo(a2.px, a2.py); octx.stroke();
-      const b1 = worldToMap(-coreSpan, g * CELL, cx, cz, w, h, span);
-      const b2 = worldToMap(coreSpan, g * CELL, cx, cz, w, h, span);
-      octx.beginPath(); octx.moveTo(b1.px, b1.py); octx.lineTo(b2.px, b2.py); octx.stroke();
+      strokeDryLine(g * CELL, -coreSpan, g * CELL, coreSpan);
+      strokeDryLine(-coreSpan, g * CELL, coreSpan, g * CELL);
     }
 
     // Showcase & neighborhood parks
@@ -207,16 +228,23 @@ export function makeMinimap({
     return off;
   }
 
-  function render({ camera, controls, recorder }) {
+  function render(arg0, arg1, arg2) {
     if (!visible || !canvas) return;
     const ctx = getCtx();
     if (!ctx) return;
+
+    const isBag = arg0 && !arg0.isCamera && !arg0.position && (typeof arg0 === 'object');
+    const camera = isBag ? arg0.camera : arg0;
+    const controls = isBag ? arg0.controls : arg1;
+    const recorder = isBag ? arg0.recorder : arg2;
 
     const w = canvas.width || 184;
     const h = canvas.height || 184;
     const span = worldSpan();
     const cx = followCam && camera ? camera.position.x : 0;
     const cz = followCam && camera ? camera.position.z : 0;
+    lastCx = cx;
+    lastCz = cz;
 
     const bg = buildStaticWaterLayer(w, h, cx, cz, span);
     if (bg) {
@@ -307,13 +335,52 @@ export function makeMinimap({
       }
     }
 
-    // 3. Live Camera Position, Travel Heading Vector & Separate Freelook View Cone
+    // 2b. Live Autopilot Waypoint Route Queue (smooth minimap click-to-fly course!)
+    if (camera && controls && Array.isArray(controls.routeQueue) && controls.routeQueue.length > 0) {
+      ctx.save();
+      ctx.strokeStyle = '#53f3ff';
+      ctx.lineWidth = 1.85;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      const mStart = worldToMap(camera.position.x, camera.position.z, cx, cz, w, h, span);
+      ctx.moveTo(mStart.px, mStart.py);
+      for (const wp of controls.routeQueue) {
+        const mw = worldToMap(wp.x, wp.z, cx, cz, w, h, span);
+        ctx.lineTo(mw.px, mw.py);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+      for (let i = 0; i < controls.routeQueue.length; i++) {
+        const wp = controls.routeQueue[i];
+        const mw = worldToMap(wp.x, wp.z, cx, cz, w, h, span);
+        if (wp.via) {
+          ctx.fillStyle = 'rgba(83, 243, 255, 0.75)';
+          ctx.beginPath();
+          ctx.arc(mw.px, mw.py, 2.0, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          ctx.strokeStyle = '#5cff9d';
+          ctx.lineWidth = 1.6;
+          ctx.beginPath();
+          ctx.arc(mw.px, mw.py, 4.6, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.fillStyle = '#5cff9d';
+          ctx.beginPath();
+          ctx.arc(mw.px, mw.py, 1.9, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
+
+    // 3. Live Camera Position, Travel Heading Vector & Separate Freelook / Auto-Look View Cone
     if (camera) {
       const m = worldToMap(camera.position.x, camera.position.z, cx, cz, w, h, span);
       const viewYaw = controls ? controls.yaw : 0;
-      const moveYaw = controls && controls.freelook ? controls.moveYaw : viewYaw;
+      const decoupled = !!(controls && (controls.freelook || (controls.glide && controls.autoLook)));
+      const moveYaw = decoupled ? controls.moveYaw : viewYaw;
 
-      // View frustum wedge (shows Look-Around orientation!)
+      // View frustum wedge (shows Look-Around / Auto-Look orientation!)
       const vx = -Math.sin(viewYaw);
       const vz = -Math.cos(viewYaw);
       const fovHalf = ((camera.fov || 58) * Math.PI) / 360;
@@ -328,11 +395,11 @@ export function makeMinimap({
       ctx.lineTo(m.px + lx * coneLen, m.py + lz * coneLen);
       ctx.lineTo(m.px + rx * coneLen, m.py + rz * coneLen);
       ctx.closePath();
-      ctx.fillStyle = controls && controls.freelook ? 'rgba(92, 230, 255, 0.28)' : 'rgba(255, 255, 255, 0.20)';
+      ctx.fillStyle = decoupled ? 'rgba(92, 230, 255, 0.28)' : 'rgba(255, 255, 255, 0.20)';
       ctx.fill();
 
-      // Travel heading arrow when Freelook is decoupled from view!
-      if (controls && controls.freelook) {
+      // Travel heading arrow when Freelook or Auto-Look is decoupled from view!
+      if (decoupled) {
         const tx = -Math.sin(moveYaw);
         const tz = -Math.cos(moveYaw);
         ctx.strokeStyle = '#ff9e4a';
@@ -370,13 +437,13 @@ export function makeMinimap({
       let best = null;
       let bestD = 9.5;
       for (const st of sites) {
-        const m = worldToMap(st.x, st.z, 0, 0, canvas.width, canvas.height, span);
+        const m = worldToMap(st.x, st.z, lastCx, lastCz, canvas.width, canvas.height, span);
         const d = Math.hypot(m.px - px, m.py - py);
         if (d < bestD) { bestD = d; best = st; }
       }
       hoveredSite = best;
       if (labelEl) {
-        labelEl.textContent = best ? best.name : (followCam ? 'Radar · Follow' : 'City Map');
+        labelEl.textContent = best ? `Fly to · ${best.name}` : (followCam ? 'Radar · Follow' : 'City Map');
       }
     });
 
@@ -391,12 +458,13 @@ export function makeMinimap({
       const px = ((ev.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width;
       const py = ((ev.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height;
       const span = worldSpan();
+      const routeMeta = { append: !!ev.shiftKey, fromMinimap: true };
       if (hoveredSite) {
-        onSelectSpot(hoveredSite);
+        onSelectSpot(hoveredSite, routeMeta);
         return;
       }
-      const { wx, wz } = mapToWorld(px, py, 0, 0, canvas.width, canvas.height, span);
-      onSelectSpot({ name: 'Map Pin', x: wx, y: 135, z: wz });
+      const { wx, wz } = mapToWorld(px, py, lastCx, lastCz, canvas.width, canvas.height, span);
+      onSelectSpot({ name: 'Map Pin', x: wx, y: 135, z: wz }, routeMeta);
     });
 
     canvas.addEventListener('wheel', (ev) => {

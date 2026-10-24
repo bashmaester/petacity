@@ -14,7 +14,7 @@ import {
   makeVehicles, makeSearchlights, makeLightPools,
   buildWater, buildBoulevards, buildBillboards, buildTrees, buildSculptures,
   makeWeather, WEATHER_NAMES, CLOUD_TYPE_NAMES, CLOUD_LAYER_PRESETS, GLYPH_STYLE_NAMES,
-  WATER_MODE_NAMES, TERRAIN_MODE_NAMES, TREE_MODE_NAMES, describeMoonPhase,
+  WATER_MODE_NAMES, WATER_SHADER_NAMES, TERRAIN_MODE_NAMES, TREE_MODE_NAMES, describeMoonPhase,
   buildSigns, buildHolos,
   buildTransitInfrastructure, buildBridges, buildHarbor, buildSpaceport,
   buildStreetInfrastructure,
@@ -24,6 +24,8 @@ import { FlyControls, CAMERA_STYLE_NAMES } from './controls.js';
 import { CameraPathRecorder, makeSceneExporter } from './recorder.js';
 import { makeMinimap } from './minimap.js';
 import { ModularRadioEngine, RADIO_STATIONS } from './audio.js';
+import { MovieSetDirector } from './director.js';
+import { registerPetacityWebMCP } from './webmcp.js';
 
 // Colours are authored as plain sRGB and written straight out — keep THREE's
 // colour management out of the way.
@@ -201,7 +203,10 @@ let camSmooth = initialExact
   : (params.get('csm') !== null ? clampFloat(params.get('csm'), 0, 1, 0.72) : 0.72);
 let camStyle = initialExact
   ? (initialExact.camStyle ?? 0)
-  : clampInt(params.get('cst'), 0, 3, 0);
+  : clampInt(params.get('cst'), 0, 4, 0);
+let turnSmooth = initialExact
+  ? (initialExact.turnSmooth ?? 1.25)
+  : (params.get('tsm') !== null ? clampFloat(params.get('tsm'), 0.2, 3.5, 1.25) : 1.25);
 let pathSmooth = initialExact ? (initialExact.pathSmooth ?? 0.65) : 0.65;
 let heightScale = initialExact ? initialExact.heightScale : 1;
 
@@ -211,12 +216,13 @@ const tune = initialExact
   ? {
       tint: initLookDefTint,
       searchLight: 1, searchCount: 1, trafficLight: 1, sigDensity: 1, vehLight: 1, lampDensity: 1,
-      waterScale: 1, waterChop: 1, waterFoam: 0.85, waterRefl: 1.15, waterContrast: 0.12, waterWarp: 0.4,
+      waterShader: 0, waterScale: 1, waterChop: 1, waterFoam: 0.85, waterRefl: 1.15, waterContrast: 0.12, waterWarp: 0.4,
       cloudSeed: 0, cloudEvol: 0.35, cloudLac: 2.08, cloudElev: 1, cloudRange: 1,
       cloudLayersMode: 1,
       cloudLayerElev: [...defLayerPreset.elev],
       cloudLayerThick: [...defLayerPreset.thick],
       cloudLayerDens: [...defLayerPreset.dens],
+      windAngle: 30, windStrength: 1,
       glyphStyle: 0, signAnim: 1,
       ...initialExact.tune,
     }
@@ -229,6 +235,7 @@ const tune = initialExact
       sigDensity: params.get('sgd') !== null ? clampFloat(params.get('sgd'), 0, 1.5, 1) : 1,
       vehLight: params.get('vl') !== null ? clampFloat(params.get('vl'), 0, 2.5, 1) : 1,
       lampDensity: params.get('ld') !== null ? clampFloat(params.get('ld'), 0, 2, 1) : 1,
+      waterShader: clampInt(params.get('wsh'), 0, 4, 0),
       waterScale: params.get('ws') !== null ? clampFloat(params.get('ws'), 0.2, 4, 1) : 1,
       waterChop: params.get('wc') !== null ? clampFloat(params.get('wc'), 0, 2.5, 1) : 1,
       waterFoam: params.get('wf') !== null ? clampFloat(params.get('wf'), 0, 2.5, 0.85) : 0.85,
@@ -247,6 +254,8 @@ const tune = initialExact
       cloudLayerElev: [...((CLOUD_LAYER_PRESETS[clampInt(params.get('clm'), 0, 7, 1)] || defLayerPreset).elev || defLayerPreset.elev)],
       cloudLayerThick: [...((CLOUD_LAYER_PRESETS[clampInt(params.get('clm'), 0, 7, 1)] || defLayerPreset).thick || defLayerPreset.thick)],
       cloudLayerDens: [...((CLOUD_LAYER_PRESETS[clampInt(params.get('clm'), 0, 7, 1)] || defLayerPreset).dens || defLayerPreset.dens)],
+      windAngle: params.get('wang') !== null ? clampFloat(params.get('wang'), 0, 360, 30) : 30,
+      windStrength: params.get('wstr') !== null ? clampFloat(params.get('wstr'), 0, 2.5, 1) : 1,
       glyphStyle: clampInt(params.get('gl'), 0, 2, 0),
       signAnim: params.get('sa') !== null ? clampFloat(params.get('sa'), 0, 2.5, 1) : 1,
       haze: 1, sun: 1, vib: 1,
@@ -393,6 +402,7 @@ function boot() {
   let cityCollider = null;
   let poiList = [];
   let glideOn = initialExact ? !!initialExact.glide : false;
+  let autoLookOn = initialExact ? !!initialExact.autoLook : false;
   let freelookOn = initialExact ? !!initialExact.freelook : false;
   let collideOn = initialExact ? initialExact.collide !== false : true;
   let avoidOn = initialExact ? initialExact.avoidance !== false : true;
@@ -402,14 +412,72 @@ function boot() {
   controls.speedMul = camSpeed;
   controls.colliderRadius = camRadius;
   controls.smoothness = camSmooth;
+  controls.turnSmooth = turnSmooth;
   controls.motionStyle = camStyle;
+
+  const director = new MovieSetDirector({
+    scene,
+    camera,
+    controls,
+    uniforms: U,
+    getCity: () => city,
+    getVehicles: () => vehicles,
+  });
+
+  function enqueueSpotRoute(rawSpot, opts = {}) {
+    if (!rawSpot) return;
+    const spot = rawSpot.poi ? rawSpot.poi : rawSpot;
+    director.stopCameraScript();
+    const dist = spot.kind === 'media' ? Math.max(190, (spot.r || 90) * 1.05) : Math.max(150, (spot.r || 32) * 3.2);
+    const away = new THREE.Vector3(camera.position.x - spot.x, 0, camera.position.z - spot.z);
+    if (away.lengthSq() < 1) away.set(1, 0, 1);
+    away.normalize().multiplyScalar(dist * 0.65);
+    const terrAtTarget = cityCollider && cityCollider.groundHeightAt ? cityCollider.groundHeightAt(spot.x, spot.z) : 0;
+    const baseH = spot.h || spot.y || 65;
+    const cruiseY = Math.max(terrAtTarget + 44, terrAtTarget + baseH * 0.68 * heightScale + 26);
+    const curved = bendWorldPoint(spot.x + away.x, cruiseY, spot.z + away.z, worldCurve, U.uPlanetR.value);
+
+    const nStops = controls.enqueueWaypoint(
+      { name: spot.name || 'Map Pin', x: curved.x, y: curved.y, z: curved.z },
+      { append: !!opts.append, stopOnArrive: !!opts.stopOnArrive }
+    );
+    if (controls.glideSpeed < 55) controls.glideSpeed = 145;
+    if (!glideOn) setGlideState(true, false);
+    flash(opts.append && nStops > 1
+      ? `\u2708\uFE0E Route +Stop #${nStops} \u00B7 ${spot.name || 'Pin'}`
+      : `\u2708\uFE0E Flying route \u2192 ${spot.name || 'Map Pin'}`);
+  }
+
+  controls.onRouteArrive = (wp) => {
+    if (wp && wp.name) flash(`Arrived \u00B7 ${wp.name}`);
+  };
+
+  controls.onCourseReorient = (camPos, headingYaw) => {
+    const nodes = glideNodes();
+    if (!nodes.length) return null;
+    const fx = -Math.sin(headingYaw);
+    const fz = -Math.cos(headingYaw);
+    let bestIdx = glideIdx % nodes.length;
+    let bestScore = -Infinity;
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      const dx = n.x - camPos.x;
+      const dz = n.z - camPos.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist < 180) continue;
+      const align = (dx * fx + dz * fz) / dist;
+      const score = align * 2.2 - dist * 0.00025;
+      if (score > bestScore) { bestScore = score; bestIdx = i; }
+    }
+    glideIdx = bestIdx;
+    return nodes[bestIdx];
+  };
 
   const minimap = makeMinimap({
     canvas: $('#minimap'),
     labelEl: $('#minimap-label'),
-    onSelectSpot: (spot) => {
-      if (spot && spot.poi) flyToLandmark(spot.poi);
-      else if (spot) flyToLandmark(spot);
+    onSelectSpot: (spot, opts) => {
+      enqueueSpotRoute(spot, opts || {});
     },
   });
   const minimapZooms = [1.0, 2.0, 3.5];
@@ -539,6 +607,10 @@ function boot() {
     $('#stat-towers').textContent = city.towers.toLocaleString('en-US');
     $('#stat-boxes').textContent = city.count.toLocaleString('en-US');
     $('#stat-seed').textContent = String(seed);
+    director.onCityRebuilt();
+    U.uWaterShader.value = tune.waterShader ?? 0;
+    U.uWindAngle.value = ((tune.windAngle ?? 30) * Math.PI) / 180;
+    U.uWindStrength.value = tune.windStrength ?? 1.0;
     buildPois();
     minimap.setCity(city, LOOK_BY_ID[lookId]);
     syncGlideNode();
@@ -634,8 +706,8 @@ function boot() {
     $('#radio-pulse-label').textContent = radioState.pulse <= 0.01 ? 'Beatless' : `Pulse ${Math.round(radioState.pulse * 100)}%`;
     $('#radio-react-label').textContent = `City ${Math.round(radioState.react * 100)}%`;
     $('#radio-status').textContent = on
-      ? `\u266B ${st.artist} \u00B7 ${st.title} (${st.bpm} BPM)`
-      : `Standby \u00B7 ${st.artist} \u00B7 ${st.title} (press M)`;
+      ? `\u266B ${st.shortName} \u00B7 ${radioEngine.currentChordName} \u00B7 ${radioEngine.movementName}`
+      : `Standby \u00B7 ${st.shortName} (press M)`;
   }
 
   function syncFeatureLabels() {
@@ -652,6 +724,8 @@ function boot() {
     $('#cloudelev-label').textContent = `${(tune.cloudElev ?? 1).toFixed(2)}\u00D7`;
     $('#cloudrange-label').textContent = `${(tune.cloudRange ?? 1).toFixed(2)}\u00D7`;
     $('#cloud-lac-label').textContent = `Lac ${(tune.cloudLac ?? 2.08).toFixed(2)}`;
+    $('#windang-label').textContent = `${Math.round(tune.windAngle ?? 30)}\u00B0`;
+    $('#windstr-label').textContent = (tune.windStrength ?? 1) <= 0.02 ? 'Calm' : `${(tune.windStrength ?? 1).toFixed(2)}\u00D7`;
     syncCloudLayerInspector();
     $('#traffspeed-label').textContent = trafficSpeed <= 0.01 ? 'Paused' : `${trafficSpeed.toFixed(2)}\u00D7`;
     $('#dayspeed-label').textContent = `${daySpeed.toFixed(2)}\u00D7`;
@@ -676,6 +750,7 @@ function boot() {
     $('#camspeed-label').textContent = `${camSpeed.toFixed(2)}\u00D7`;
     $('#camrad-label').textContent = `${camRadius.toFixed(1)}m`;
     $('#camsmooth-label').textContent = `${Math.round(camSmooth * 100)}%`;
+    $('#turnsmooth-label').textContent = `${turnSmooth.toFixed(2)}\u00D7`;
     $('#pathsmooth-label').textContent = `Smooth ${Math.round(pathSmooth * 100)}%`;
     syncRadioUI();
   }
@@ -688,11 +763,13 @@ function boot() {
     $('#sl-camspeed').value = String(camSpeed);
     $('#sl-camrad').value = String(camRadius);
     $('#sl-camsmooth').value = String(camSmooth);
+    $('#sl-turnsmooth').value = String(turnSmooth);
     $('#sl-pathsmooth').value = String(pathSmooth);
     $('#sl-curve').value = String(worldCurve);
     $('#sl-radius').value = String(cityRadius);
     $('#sl-suburbs').value = String(suburbReach);
     $('#sel-water').value = String(waterMode);
+    $('#sel-watershader').value = String(tune.waterShader ?? 0);
     $('#sl-water-amt').value = String(waterAmount);
     $('#sl-shoredist').value = String(shoreDist);
     $('#sl-water-scale').value = String(tune.waterScale ?? 1);
@@ -733,6 +810,8 @@ function boot() {
     $('#sl-cloud-seed').value = String(tune.cloudSeed ?? 0);
     $('#sl-cloud-evol').value = String(tune.cloudEvol ?? 0.35);
     $('#sl-cloud-lac').value = String(tune.cloudLac ?? 2.08);
+    $('#sl-windang').value = String(tune.windAngle ?? 30);
+    $('#sl-windstr').value = String(tune.windStrength ?? 1);
     $('#sl-haze').value = String(tune.haze);
     $('#sl-sun').value = String(tune.sun);
     $('#sl-vib').value = String(tune.vib);
@@ -925,12 +1004,14 @@ function boot() {
       weatherMode,
       dustLevel,
       glide: glideOn,
+      autoLook: autoLookOn,
       freelook: freelookOn,
       collide: collideOn,
       avoidance: avoidOn,
       camSpeed,
       camRadius,
       camSmooth,
+      turnSmooth,
       camStyle,
       pathSmooth,
       tune: { ...tune },
@@ -989,11 +1070,13 @@ function boot() {
     camSpeed = st.camSpeed ?? 1;
     camRadius = st.camRadius ?? 2.2;
     camSmooth = st.camSmooth ?? 0.72;
+    turnSmooth = st.turnSmooth ?? 1.25;
     camStyle = st.camStyle ?? 0;
     pathSmooth = st.pathSmooth ?? 0.65;
     controls.speedMul = camSpeed;
     controls.colliderRadius = camRadius;
     controls.smoothness = camSmooth;
+    controls.turnSmooth = turnSmooth;
     controls.motionStyle = camStyle;
     weatherMode = st.weatherMode;
     dustLevel = st.dustLevel;
@@ -1033,6 +1116,7 @@ function boot() {
     if (st.avoidance !== avoidOn) setAvoidanceState(st.avoidance);
     if (st.collide !== collideOn) setCollisionState(st.collide);
     if (st.glide !== glideOn) setGlideState(st.glide);
+    if (!!st.autoLook !== autoLookOn) setAutoLookState(!!st.autoLook);
     if (!!st.freelook !== freelookOn) setFreelookState(!!st.freelook);
 
     if (applyBookmarks && st.bookmarks && st.bookmarks.length) {
@@ -1365,13 +1449,14 @@ function boot() {
     const st = radioEngine.setStation(idx);
     radioState.station = radioEngine.stationIndex;
     syncRadioUI();
-    flash(`\u266B Station \u00B7 ${st.artist} \u2014 ${st.title}`);
+    flash(`\u266B ${st.name}`);
   };
 
   window.addEventListener('keydown', (e) => {
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) return;
     if (e.key === 'h' || e.key === 'H') toggleUI();
     else if (e.key === 'g' || e.key === 'G') toggleGlide();
+    else if (e.key === 'o' || e.key === 'O') toggleAutoLook();
     else if (e.key === 'l' || e.key === 'L') toggleFreelook();
     else if (e.key === 'm' || e.key === 'M') toggleRadio();
     else if (e.key === 'v' || e.key === 'V') toggleAvoidance();
@@ -1406,9 +1491,9 @@ function boot() {
   });
   $('#sel-camstyle').value = String(camStyle);
   $('#sel-camstyle').onchange = (ev) => {
-    camStyle = clampInt(ev.target.value, 0, 3, 0);
+    camStyle = clampInt(ev.target.value, 0, 4, 0);
     controls.motionStyle = camStyle;
-    flash(`Camera · ${CAMERA_STYLE_NAMES[camStyle] || 'Cinematic Glide'}`);
+    flash(`Camera · ${CAMERA_STYLE_NAMES[camStyle] || 'Cinema Drone'}`);
   };
   bindSlider($('#sl-camspeed'), (v) => {
     camSpeed = clampFloat(v, 0.2, 3.5, 1);
@@ -1425,6 +1510,11 @@ function boot() {
     controls.smoothness = camSmooth;
     syncFeatureLabels();
   });
+  bindSlider($('#sl-turnsmooth'), (v) => {
+    turnSmooth = clampFloat(v, 0.2, 3.5, 1.25);
+    controls.turnSmooth = turnSmooth;
+    syncFeatureLabels();
+  });
   bindSlider($('#sl-curve'), (v) => {
     worldCurve = clampFloat(v, 0, 1, 0);
     syncWorldGeometry();
@@ -1439,6 +1529,13 @@ function boot() {
     rebuild();
     syncFeatureLabels();
     flash(`Water · ${WATER_MODE_NAMES[waterMode] || 'Shoreline'}`);
+  };
+  $('#sel-watershader').value = String(tune.waterShader ?? 0);
+  $('#sel-watershader').onchange = (ev) => {
+    tune.waterShader = clampInt(ev.target.value, 0, 4, 0);
+    U.uWaterShader.value = tune.waterShader;
+    refreshLook();
+    flash(`Water Shader · ${WATER_SHADER_NAMES[tune.waterShader] || 'Capillary Micro-Facet'}`);
   };
   bindSlider($('#sl-water-amt'), (v) => {
     waterAmount = clampFloat(v, 0, 2, 1);
@@ -1679,6 +1776,16 @@ function boot() {
   bindSlider($('#sl-cloud-seed'), (v) => { tune.cloudSeed = v; refreshLook(); });
   bindSlider($('#sl-cloud-evol'), (v) => { tune.cloudEvol = v; refreshLook(); });
   bindSlider($('#sl-cloud-lac'), (v) => { tune.cloudLac = v; refreshLook(); });
+  bindSlider($('#sl-windang'), (v) => {
+    tune.windAngle = clampFloat(v, 0, 360, 30);
+    U.uWindAngle.value = (tune.windAngle * Math.PI) / 180;
+    refreshLook();
+  });
+  bindSlider($('#sl-windstr'), (v) => {
+    tune.windStrength = clampFloat(v, 0, 2.5, 1);
+    U.uWindStrength.value = tune.windStrength;
+    refreshLook();
+  });
   bindSlider($('#sl-haze'), (v) => { tune.haze = v; refreshLook(); });
   bindSlider($('#sl-sun'), (v) => { tune.sun = v; refreshLook(); });
   bindSlider($('#sl-vib'), (v) => { tune.vib = v; refreshLook(); });
@@ -2053,11 +2160,30 @@ function boot() {
     }
   }
 
+  function setAutoLookState(on, announce = false) {
+    autoLookOn = !!on;
+    controls.setAutoLook(autoLookOn);
+    const b = $('#b-autolook');
+    b.classList.toggle('on', autoLookOn);
+    b.setAttribute('aria-pressed', String(autoLookOn));
+    b.title = `Autopilot POI Auto-Look — automatically gaze at nearby landmarks & vistas while cruising slowly or hovering: ${autoLookOn ? 'on' : 'off'} (O)`;
+    if (autoLookOn && !glideOn && announce) {
+      setGlideState(true, false);
+    }
+    if (announce) {
+      flash(autoLookOn
+        ? '\u29BF Autopilot POI Auto-Look on (wheel down to slow/hover & gaze around)'
+        : 'POI Auto-Look off');
+    }
+  }
+
   function toggleGlide() { setGlideState(!glideOn, true); }
+  function toggleAutoLook() { setAutoLookState(!autoLookOn, true); }
   function toggleFreelook() { setFreelookState(!freelookOn, true); }
   function toggleAvoidance() { setAvoidanceState(!avoidOn, true); }
   function toggleCollision() { setCollisionState(!collideOn, true); }
   $('#b-glide').onclick = toggleGlide;
+  $('#b-autolook').onclick = toggleAutoLook;
   $('#b-freelook').onclick = toggleFreelook;
   $('#b-avoid').onclick = toggleAvoidance;
   $('#b-collide').onclick = toggleCollision;
@@ -2205,6 +2331,14 @@ function boot() {
       opt.textContent = `${g} ${lm.name}`;
       sel.appendChild(opt);
     });
+    controls.poiList = poiList.map((lm) => ({
+      name: lm.name,
+      x: lm.x,
+      y: (lm.h || lm.y || 75) * heightScale,
+      lookY: (lm.h || lm.y || 75) * 0.62 * heightScale,
+      z: lm.z,
+      priority: lm.kind === 'media' || lm.kind === 'spaceport' || lm.kind === 'harbor' ? 1.45 : 1.0,
+    }));
   }
 
   $('#sel-poi').onchange = (ev) => {
@@ -2346,18 +2480,22 @@ function boot() {
           fly = null;
         }
       } else {
-        if (glideOn && controls.glideTarget) {
-          const dx = camera.position.x - controls.glideTarget.x;
-          const dy = camera.position.y - controls.glideTarget.y;
-          const dz = camera.position.z - controls.glideTarget.z;
-          if (Math.hypot(dx, dy * 0.5, dz) < 235) {
-            glideIdx++;
-            const next = syncGlideNode();
-            if (next && controls._idle > 1.6) flash(next.name);
+        const directorDriving = Boolean(director._activeShot || director._followSpec || director._orbitSpec);
+        if (!directorDriving) {
+          if (glideOn && controls.glideTarget && controls.routeQueue.length === 0) {
+            const dx = camera.position.x - controls.glideTarget.x;
+            const dy = camera.position.y - controls.glideTarget.y;
+            const dz = camera.position.z - controls.glideTarget.z;
+            if (Math.hypot(dx, dy * 0.5, dz) < 235) {
+              glideIdx++;
+              const next = syncGlideNode();
+              if (next && controls._idle > 1.6) flash(next.name);
+            }
           }
+          controls.update(dt);
         }
-        controls.update(dt);
       }
+      director.update(dt);
       if (pathRecorder.recording) {
         pathRecorder.recordSample(dt, camera);
         syncPathUI();
@@ -2387,16 +2525,126 @@ function boot() {
     }
   }
 
+  function applyPartialWebMCPState(patch = {}) {
+    if (!patch || typeof patch !== 'object') return;
+    let needRebuild = false;
+    let needRefreshLook = false;
+
+    if (patch.look !== undefined && LOOK_BY_ID[patch.look]) {
+      lookId = patch.look;
+      needRefreshLook = true;
+    }
+    if (patch.postStyle !== undefined) {
+      postState.artStyle = clampInt(patch.postStyle, 0, ART_STYLE_NAMES.length - 1, 0);
+      needRefreshLook = true;
+    }
+    if (patch.time !== undefined) {
+      timeOfDay = ((Number(patch.time) % 24) + 24) % 24;
+      needRefreshLook = true;
+    }
+    if (patch.waterShader !== undefined) {
+      tune.waterShader = clampInt(patch.waterShader, 0, 4, 0);
+      U.uWaterShader.value = tune.waterShader;
+      needRefreshLook = true;
+    }
+    if (patch.waterMode !== undefined) { waterMode = clampInt(patch.waterMode, 0, 4, waterMode); needRebuild = true; }
+    if (patch.shoreDist !== undefined) { shoreDist = clampFloat(patch.shoreDist, 0.35, 2.5, shoreDist); needRebuild = true; }
+    if (patch.waterWave !== undefined) { tune.waterScale = clampFloat(patch.waterWave, 0.2, 4, 1); needRefreshLook = true; }
+    if (patch.waterChop !== undefined) { tune.waterChop = clampFloat(patch.waterChop, 0, 2.5, 1); needRefreshLook = true; }
+    if (patch.waterFoam !== undefined) { tune.waterFoam = clampFloat(patch.waterFoam, 0, 2.5, 0.85); needRefreshLook = true; }
+    if (patch.clouds !== undefined) { tune.clouds = clampFloat(patch.clouds, 0, 2.4, 1); needRefreshLook = true; }
+    if (patch.cloudLayer !== undefined) {
+      const m = clampInt(patch.cloudLayer, 0, 7, 1);
+      tune.cloudLayersMode = m;
+      const pr = CLOUD_LAYER_PRESETS[m];
+      if (pr && pr.elev) {
+        tune.cloudLayerElev = [...pr.elev];
+        tune.cloudLayerThick = [...pr.thick];
+        tune.cloudLayerDens = [...pr.dens];
+      }
+      needRefreshLook = true;
+    }
+    if (patch.windAngle !== undefined) {
+      tune.windAngle = ((Number(patch.windAngle) % 360) + 360) % 360;
+      U.uWindAngle.value = (tune.windAngle * Math.PI) / 180;
+      needRefreshLook = true;
+    }
+    if (patch.windStrength !== undefined) {
+      tune.windStrength = clampFloat(patch.windStrength, 0, 2.5, 1);
+      U.uWindStrength.value = tune.windStrength;
+      needRefreshLook = true;
+    }
+    if (patch.fog !== undefined) { tune.fog = clampFloat(patch.fog, 0, 2.5, 1); needRefreshLook = true; }
+    if (patch.rain !== undefined) {
+      weatherMode = Number(patch.rain) > 0.5 ? 2 : (Number(patch.rain) > 0.05 ? 1 : 0);
+      weather.setMode(weatherMode);
+      needRefreshLook = true;
+    }
+    if (patch.trafficCount !== undefined) {
+      tune.traffic = Math.max(0, Math.min(MAX_TRAFFIC_DENSITY, Number(patch.trafficCount) / 320));
+      if (vehicles) vehicles.update(0, tune.traffic, heightScale);
+      syncTrafficLabel();
+    }
+    if (patch.seed !== undefined) { seed = clampInt(patch.seed, 1, 999999999, seed); needRebuild = true; }
+    if (patch.radius !== undefined) { cityRadius = clampInt(patch.radius, 1, 15, cityRadius); needRebuild = true; }
+    if (patch.fov !== undefined) {
+      camera.fov = clampFloat(patch.fov, 18, 115, 58);
+      camera.updateProjectionMatrix();
+    }
+    if (patch.motionStyle !== undefined) {
+      camStyle = clampInt(patch.motionStyle, 0, 4, 0);
+      controls.motionStyle = camStyle;
+    }
+    if (patch.camSmooth !== undefined) {
+      camSmooth = clampFloat(patch.camSmooth, 0, 3, 0.72);
+      controls.smoothness = camSmooth;
+    }
+    if (patch.turnSmooth !== undefined) {
+      turnSmooth = clampFloat(patch.turnSmooth, 0.2, 3.5, 1.25);
+      controls.turnSmooth = turnSmooth;
+    }
+    if (patch.glide !== undefined) setGlideState(!!patch.glide, false);
+    if (patch.autoLook !== undefined) setAutoLookState(!!patch.autoLook, false);
+    if (patch.freelook !== undefined) setFreelookState(!!patch.freelook, false);
+    if (patch.radioStation !== undefined) {
+      radioEngine.setStation(clampInt(patch.radioStation, 0, RADIO_STATIONS.length - 1, 0));
+      radioState.station = radioEngine.stationIndex;
+    }
+    if (patch.radioVol !== undefined) { radioState.volume = clampFloat(patch.radioVol, 0, 1.2, 0.68); radioEngine.setVolume(radioState.volume); }
+    if (patch.radioSpace !== undefined) { radioState.space = clampFloat(patch.radioSpace, 0, 1.5, 0.9); radioEngine.setSpace(radioState.space); }
+    if (patch.radioWarmth !== undefined) { radioState.warmth = clampFloat(patch.radioWarmth, 0.1, 1.5, 0.8); radioEngine.setWarmth(radioState.warmth); }
+    if (patch.radioPulse !== undefined) { radioState.pulse = clampFloat(patch.radioPulse, 0, 1.5, 0.55); radioEngine.setPulse(radioState.pulse); }
+    if (patch.radioReact !== undefined) { radioState.react = clampFloat(patch.radioReact, 0, 1, 0.65); radioEngine.setCityReactivity(radioState.react); }
+
+    if (needRebuild) rebuild();
+    if (needRefreshLook || needRebuild) refreshLook(false);
+    syncAllSliders();
+  }
+
   syncAllSliders();
   rebuild();
   refreshLook(!initialExact);
   setAvoidanceState(avoidOn, false);
   setCollisionState(collideOn, false);
   setFreelookState(freelookOn, false);
+  setAutoLookState(autoLookOn, false);
   if (glideOn) setGlideState(true, false);
   if (initialExact && initialExact.camera) {
     controls.setPose(initialExact.camera);
   }
+  registerPetacityWebMCP({
+    director,
+    getState: captureExactState,
+    applyPartialState: applyPartialWebMCPState,
+    getCity: () => city,
+    getVehicles: () => vehicles,
+    controls,
+    camera,
+    radio: radioEngine,
+    recorder: pathRecorder,
+    exporter,
+    enqueueSpotRoute,
+  });
   $('#loading').classList.add('out');
   animate();
 }

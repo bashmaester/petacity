@@ -18,13 +18,15 @@ export const CAMERA_STYLE_NAMES = [
   'FPV Agile (Crisp)',
   'Steadicam Crane (Ultra-Smooth)',
   'Orbital Glider (Wide Bank)',
+  'Silk Airship (Slow Turns)',
 ];
 
 const STYLE_PRESETS = [
-  { lookRate: 16.0, velRate: 6.8, maxBank: 0.14, glideBank: 0.36, bankGain: 0.075, glideBankGain: 0.22, avoidRate: 4.2 },
-  { lookRate: 30.0, velRate: 13.5, maxBank: 0.24, glideBank: 0.48, bankGain: 0.11,  glideBankGain: 0.28, avoidRate: 6.5 },
-  { lookRate: 8.5,  velRate: 3.1, maxBank: 0.04, glideBank: 0.14, bankGain: 0.03,  glideBankGain: 0.10, avoidRate: 2.8 },
-  { lookRate: 12.0, velRate: 4.4, maxBank: 0.22, glideBank: 0.52, bankGain: 0.10,  glideBankGain: 0.30, avoidRate: 3.6 },
+  { lookRate: 14.0, velRate: 6.4, maxTurnRate: 1.35, glideTurnRate: 0.42, turnAccel: 4.2, maxBank: 0.14, glideBank: 0.32, bankGain: 0.075, glideBankGain: 0.20, avoidRate: 3.8 },
+  { lookRate: 26.0, velRate: 13.0, maxTurnRate: 2.60, glideTurnRate: 0.78, turnAccel: 9.0, maxBank: 0.24, glideBank: 0.46, bankGain: 0.11,  glideBankGain: 0.26, avoidRate: 6.2 },
+  { lookRate: 7.2,  velRate: 2.9, maxTurnRate: 0.72, glideTurnRate: 0.24, turnAccel: 2.1, maxBank: 0.04, glideBank: 0.12, bankGain: 0.03,  glideBankGain: 0.09, avoidRate: 2.4 },
+  { lookRate: 10.5, velRate: 4.2, maxTurnRate: 1.05, glideTurnRate: 0.34, turnAccel: 3.0, maxBank: 0.22, glideBank: 0.48, bankGain: 0.10,  glideBankGain: 0.28, avoidRate: 3.2 },
+  { lookRate: 4.8,  velRate: 2.1, maxTurnRate: 0.44, glideTurnRate: 0.16, turnAccel: 1.25, maxBank: 0.06, glideBank: 0.16, bankGain: 0.04, glideBankGain: 0.12, avoidRate: 1.8 },
 ];
 
 function wrapAngleDelta(a) {
@@ -42,17 +44,33 @@ export class FlyControls {
     this.speed = 260;
     this.speedMul = 1.0;        // user speed multiplier (0.2x .. 4.0x)
     this.motionStyle = 0;       // index into CAMERA_STYLE_NAMES
-    this.smoothness = 1.0;      // 0.15 (snappy) .. 2.5 (heavy cinema damping)
+    this.smoothness = 1.0;      // 0.15 (snappy) .. 3.0 (heavy cinema translational damping)
+    this.turnSmooth = 1.0;      // 0.20 (crisp) .. 3.0 (ultra-gentle rate-limited turns, zero whip-pans!)
     this.colliderRadius = 2.2;  // compact 2.2m default fits narrow 5m building cracks!
 
     this.glide = false;
     this.glideSpeed = 165;
     this.glideTarget = null;
+    this.onCourseReorient = null; // optional hook `(pos, moveYaw) => nextGlideTarget` after manual course steer
+
+    // Minimap / Director smooth multi-waypoint autopilot route queue
+    this.routeQueue = [];
+    this._routeStopOnArrive = false;
+    this.onRouteArrive = null;
+
+    // Autopilot POI Auto-Look gimbal mode (gazes smoothly at nearby landmarks/POIs while slowly moving or hovering!)
+    this.autoLook = false;
+    this.poiList = [];
+    this._autoLookPoi = null;
+    this._autoLookTimer = 0;
+    this._autoLookPhase = 0;
 
     this.freelook = false;      // separate Look-Around mode decoupled from travel heading
     this.moveYaw = 0;
     this.movePitch = 0;
-    this._freeYawOff = 0;       // freelance look offset during path playback
+    this._targetMoveYaw = 0;
+    this._targetMovePitch = 0;
+    this._freeYawOff = 0;       // freelance look offset during path playback / autoLook
     this._freePitchOff = 0;
 
     this.collision = true;
@@ -69,6 +87,11 @@ export class FlyControls {
     this.roll = 0;
     this._targetYaw = 0;
     this._targetPitch = 0;
+    this._yawVel = 0;
+    this._pitchVel = 0;
+    this._moveYawVel = 0;
+    this._movePitchVel = 0;
+    this._manualCourseSteered = false;
 
     this._drag = null;
     this._idle = 3;
@@ -86,6 +109,8 @@ export class FlyControls {
     this._targetPitch = this.pitch;
     this.moveYaw = this.yaw;
     this.movePitch = this.pitch;
+    this._targetMoveYaw = this.yaw;
+    this._targetMovePitch = this.pitch;
 
     this._onDown = (ev) => {
       if (!this.enabled) return;
@@ -100,14 +125,17 @@ export class FlyControls {
       const dy = ev.clientY - d.y;
       d.x = ev.clientX;
       d.y = ev.clientY;
-      this._targetYaw -= dx * 0.0030;
-      this._targetPitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this._targetPitch - dy * 0.0030));
-      if (this.freelook) {
-        this._freeYawOff -= dx * 0.0030;
-        this._freePitchOff = Math.max(-1.25, Math.min(1.25, this._freePitchOff - dy * 0.0030));
+      const sens = 0.0028 / Math.max(0.65, Math.pow(this.turnSmooth || 1.0, 0.35));
+      this._targetYaw -= dx * sens;
+      this._targetPitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this._targetPitch - dy * sens));
+      if (this.freelook || (this.glide && this.autoLook)) {
+        this._freeYawOff -= dx * sens;
+        this._freePitchOff = Math.max(-1.25, Math.min(1.25, this._freePitchOff - dy * sens));
+        this._autoLookTimer = Math.max(this._autoLookTimer, 3.0);
       } else {
-        this.moveYaw = this._targetYaw;
-        this.movePitch = this._targetPitch;
+        this._targetMoveYaw = this._targetYaw;
+        this._targetMovePitch = this._targetPitch;
+        if (this.glide) this._manualCourseSteered = true;
       }
       this._idle = 0;
     };
@@ -121,7 +149,8 @@ export class FlyControls {
       if (!this.enabled) return;
       ev.preventDefault();
       if (this.glide) {
-        this.glideSpeed = Math.max(35, Math.min(640, this.glideSpeed - Math.sign(ev.deltaY) * 22));
+        // Allow glideSpeed down to 0 so Autopilot + Auto-Look can smoothly slow to a stationary scenic hover!
+        this.glideSpeed = Math.max(0, Math.min(640, this.glideSpeed - Math.sign(ev.deltaY) * 20));
       } else {
         const fwd = this._travelForward();
         this._vel.addScaledVector(fwd, -Math.sign(ev.deltaY) * 220 * this.speedMul);
@@ -174,13 +203,105 @@ export class FlyControls {
   }
 
   _travelForward() {
-    const y = this.freelook ? this.moveYaw : this.yaw;
-    const p = this.freelook ? this.movePitch : this.pitch;
+    const decoupled = this.freelook || (this.glide && this.autoLook);
+    const y = decoupled ? this.moveYaw : this.yaw;
+    const p = decoupled ? this.movePitch : this.pitch;
     return new THREE.Vector3(
       -Math.sin(y) * Math.cos(p),
       Math.sin(p),
       -Math.cos(y) * Math.cos(p)
     );
+  }
+
+  setAutoLook(on) {
+    const next = !!on;
+    if (next && !this.autoLook) {
+      this.moveYaw = this.freelook ? this.moveYaw : this.yaw;
+      this.movePitch = this.freelook ? this.movePitch : this.pitch;
+      this._targetMoveYaw = this.moveYaw;
+      this._targetMovePitch = this.movePitch;
+      this._autoLookPoi = null;
+      this._autoLookTimer = 0;
+      this._freeYawOff = 0;
+      this._freePitchOff = 0;
+    } else if (!next && this.autoLook && !this.freelook) {
+      // Smoothly converge view back to travel direction with zero snap
+      this._targetYaw = this.moveYaw;
+      this._targetPitch = this.movePitch;
+      this._freeYawOff = 0;
+      this._freePitchOff = 0;
+    }
+    this.autoLook = next;
+  }
+
+  /**
+   * Queue or set a smooth flight route to `(x, y, z)` (used by Minimap click & WebMCP).
+   * Automatically inserts an elevated cruise arc waypoint if distant towers sit between
+   * the camera and destination so the camera flies gracefully there instead of teleporting!
+   */
+  enqueueWaypoint(spot, { append = false, stopOnArrive = false } = {}) {
+    if (!spot || !Number.isFinite(spot.x) || !Number.isFinite(spot.z)) return [];
+    const p = this.camera.position;
+    if (!append) this.routeQueue.length = 0;
+    const from = append && this.routeQueue.length
+      ? this.routeQueue[this.routeQueue.length - 1]
+      : { x: p.x, y: p.y, z: p.z };
+
+    const destY = Number.isFinite(spot.y) ? spot.y : Math.max(125, p.y);
+    const dx = spot.x - from.x;
+    const dz = spot.z - from.z;
+    const dist = Math.hypot(dx, dz);
+
+    // For longer cross-city legs (> 520m), insert a smooth elevated mid-course arc waypoint
+    // above any intervening skyline ridge so the flight curves gracefully around/over blocks!
+    if (dist > 520) {
+      const mx = from.x + dx * 0.5;
+      const mz = from.z + dz * 0.5;
+      let safeMidY = Math.max(from.y, destY, 135);
+      if (this.collider) {
+        const ridge = this.collider.maxHeightNear(mx, mz, 95) * this.heightScale;
+        if (ridge + 42 > safeMidY) safeMidY = Math.min(480, ridge + 46);
+      }
+      const nx = -dz / dist;
+      const nz = dx / dist;
+      const gentleArc = Math.min(110, dist * 0.08);
+      this.routeQueue.push({
+        name: `${spot.name || 'Destination'} Approach`,
+        x: mx + nx * gentleArc,
+        y: safeMidY,
+        z: mz + nz * gentleArc,
+        lookX: spot.lookX ?? spot.x,
+        lookY: spot.lookY ?? (destY * 0.7),
+        lookZ: spot.lookZ ?? spot.z,
+        via: true,
+      });
+    }
+
+    this.routeQueue.push({
+      name: spot.name || 'Map Destination',
+      x: spot.x,
+      y: destY,
+      z: spot.z,
+      lookX: spot.lookX ?? spot.x,
+      lookY: spot.lookY ?? Math.max(28, destY * 0.58),
+      lookZ: spot.lookZ ?? spot.z,
+      via: false,
+    });
+    this._routeStopOnArrive = !!stopOnArrive;
+    this._manualCourseSteered = false;
+    if (!this.glide) {
+      if (this.glideSpeed < 85) this.glideSpeed = 165;
+      this.setGlide(true);
+    } else if (this.glideSpeed < 45) {
+      this.glideSpeed = 145;
+    }
+    this._idle = 2.5;
+    return this.routeQueue;
+  }
+
+  clearRoute() {
+    this.routeQueue.length = 0;
+    this._routeStopOnArrive = false;
   }
 
   setFreelook(on) {
@@ -308,6 +429,12 @@ export class FlyControls {
     this._targetPitch = this.pitch;
     this.moveYaw = this.yaw;
     this.movePitch = this.pitch;
+    this._targetMoveYaw = this.yaw;
+    this._targetMovePitch = this.pitch;
+    this._yawVel = 0;
+    this._pitchVel = 0;
+    this._moveYawVel = 0;
+    this._movePitchVel = 0;
     this._freeYawOff = 0;
     this._freePitchOff = 0;
     this.roll = 0;
@@ -330,11 +457,14 @@ export class FlyControls {
       this._avoidYawRate = 0;
       this._avoidPitchRate = 0;
       this._avoidLiftVel = 0;
+      this._manualCourseSteered = false;
     } else {
       this._idle = 2.5;
       if (!this.freelook) {
         this.moveYaw = this.yaw;
         this.movePitch = this.pitch;
+        this._targetMoveYaw = this.yaw;
+        this._targetMovePitch = this.pitch;
       }
       this._vel.copy(this._travelForward()).multiplyScalar(this.glideSpeed * this.speedMul);
     }
@@ -347,9 +477,15 @@ export class FlyControls {
     this.pitch = e.x;
     this._targetYaw = this.yaw;
     this._targetPitch = this.pitch;
+    this._yawVel = 0;
+    this._pitchVel = 0;
+    this._moveYawVel = 0;
+    this._movePitchVel = 0;
     if (!preserveFreelookOffset) {
       this.moveYaw = this.yaw;
       this.movePitch = this.pitch;
+      this._targetMoveYaw = this.yaw;
+      this._targetMovePitch = this.pitch;
       this._freeYawOff = 0;
       this._freePitchOff = 0;
     }
@@ -362,6 +498,42 @@ export class FlyControls {
     this._avoidLiftVel = 0;
     this.keys.clear();
     this._drag = null;
+  }
+
+  _stepDampedAngle(cur, target, velField, maxRate, accel, gain, dt) {
+    const err = wrapAngleDelta(target - cur);
+    const wantVel = Math.max(-maxRate, Math.min(maxRate, err * gain));
+    const maxDv = accel * dt;
+    const dv = Math.max(-maxDv, Math.min(maxDv, wantVel - this[velField]));
+    this[velField] += dv;
+    if (Math.abs(this[velField] * dt) > Math.abs(err) && Math.sign(this[velField]) === Math.sign(err)) {
+      this[velField] = err / Math.max(dt, 1e-3) * 0.5;
+      return cur + err * Math.min(1, dt * gain);
+    }
+    return cur + this[velField] * dt;
+  }
+
+  _pickNextAutoLookPoi(p) {
+    if (!Array.isArray(this.poiList) || !this.poiList.length) return null;
+    const candidates = [];
+    for (const poi of this.poiList) {
+      if (!poi || !Number.isFinite(poi.x) || !Number.isFinite(poi.z)) continue;
+      if (poi === this._autoLookPoi && this.poiList.length > 1) continue;
+      const dx = poi.x - p.x;
+      const dz = poi.z - p.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist < 45 || dist > 3400) continue;
+      // Prefer nearby dramatic landmarks & forward-hemisphere vistas
+      const brg = Math.atan2(-dx, -dz);
+      const fwdCos = Math.cos(wrapAngleDelta(brg - this.moveYaw));
+      const score = (1.0 / (160 + dist)) * (1.15 + 0.55 * fwdCos) * (poi.priority || 1.0);
+      candidates.push({ poi, score });
+    }
+    if (!candidates.length) return this.poiList[Math.floor(Math.random() * this.poiList.length)] || null;
+    candidates.sort((a, b) => b.score - a.score);
+    const topK = Math.min(4, candidates.length);
+    const idx = Math.floor(Math.abs(Math.sin((this._autoLookPhase + 1.7) * 19.31)) * topK) % topK;
+    return candidates[idx].poi;
   }
 
   /**
@@ -508,7 +680,7 @@ export class FlyControls {
         const turnSign = Math.abs(normTurn) > 0.06 ? Math.sign(normTurn) : (this._avoidSide >= 0 ? 1 : -1);
         this._avoidSide = turnSign;
 
-        const mag = Math.max(0.28, Math.min(1.35, Math.abs(normTurn) * 1.45));
+        const mag = Math.max(0.22, Math.min(0.85, Math.abs(normTurn) * 1.15)) / Math.pow(Math.max(0.35, this.turnSmooth || 1.0), 0.55);
         wantYawRate = turnSign * mag * urgency * latBlend;
 
         if (maxFree < 0.38) {
@@ -525,10 +697,12 @@ export class FlyControls {
     this._avoidPitchRate += (wantPitchRate - this._avoidPitchRate) * rateAlpha;
     this._avoidLiftVel += (wantLift - this._avoidLiftVel) * rateAlpha;
 
+    const decoupled = this.freelook || (this.glide && this.autoLook);
     if (Math.abs(this._avoidYawRate) > 1e-4) {
       const dYaw = this._avoidYawRate * dt;
       this.moveYaw += dYaw;
-      if (!this.freelook) {
+      this._targetMoveYaw += dYaw;
+      if (!decoupled) {
         this._targetYaw += dYaw;
         this.yaw += dYaw;
       }
@@ -543,7 +717,8 @@ export class FlyControls {
     if (Math.abs(this._avoidPitchRate) > 1e-4) {
       const dp = this._avoidPitchRate * dt;
       this.movePitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this.movePitch + dp));
-      if (!this.freelook) {
+      this._targetMovePitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this._targetMovePitch + dp));
+      if (!decoupled) {
         this._targetPitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this._targetPitch + dp));
         this.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this.pitch + dp));
       }
@@ -558,20 +733,13 @@ export class FlyControls {
     if (!this.enabled) return;
     const clampedDt = Math.min(Math.max(dt, 1e-4), 0.1);
     const preset = STYLE_PRESETS[Math.max(0, Math.min(STYLE_PRESETS.length - 1, this.motionStyle | 0))];
-    const smoothK = Math.max(0.15, Math.min(3.0, this.smoothness || 1.0));
+    const smoothK = Math.max(0.15, Math.min(3.5, this.smoothness || 1.0));
+    const turnK = Math.max(0.20, Math.min(3.5, this.turnSmooth || 1.0));
     const spdMul = Math.max(0.1, Math.min(5.0, this.speedMul || 1.0));
+    const decoupled = this.freelook || (this.glide && this.autoLook);
 
-    const prevMoveYaw = this.freelook ? this.moveYaw : this.yaw;
+    const prevMoveYaw = decoupled ? this.moveYaw : this.yaw;
     const p = this.camera.position;
-
-    // Smooth critically-damped pointer look interpolation
-    const lookAlpha = 1 - Math.exp(-clampedDt * (preset.lookRate / Math.pow(smoothK, 0.65)));
-    this.yaw += (this._targetYaw - this.yaw) * lookAlpha;
-    this.pitch += (this._targetPitch - this.pitch) * lookAlpha;
-    if (!this.freelook) {
-      this.moveYaw = this.yaw;
-      this.movePitch = this.pitch;
-    }
 
     const wDown = this._hasKey('w', 'KeyW') || this._hasKey('arrowup', 'ArrowUp');
     const sDown = this._hasKey('s', 'KeyS') || this._hasKey('arrowdown', 'ArrowDown');
@@ -582,58 +750,146 @@ export class FlyControls {
     const shiftDown = this._hasKey('shift', 'ShiftLeft') || this._hasKey('shift', 'ShiftRight');
 
     const desiredVel = new THREE.Vector3();
+    let routeArrivalSlowdown = 1.0;
 
     if (this.glide) {
-      if (!this._drag && this.keys.size === 0) this._idle += clampedDt;
+      const manualSteeringKeys = aDown || dDown || upDown || dnDown;
+      if (!this._drag && !manualSteeringKeys) this._idle += clampedDt;
       else this._idle = 0;
 
       if (wDown) this.glideSpeed = Math.min(640, this.glideSpeed + 140 * clampedDt);
-      if (sDown) this.glideSpeed = Math.max(35, this.glideSpeed - 140 * clampedDt);
+      if (sDown) this.glideSpeed = Math.max(0, this.glideSpeed - 140 * clampedDt);
+
+      // Smooth manual course steering during Autopilot (never fights or snaps back!)
+      const keySteerRate = 0.72 / Math.pow(turnK, 0.55);
       if (aDown) {
-        this.moveYaw += 0.95 * clampedDt;
-        if (!this.freelook) { this._targetYaw += 0.95 * clampedDt; this.yaw += 0.65 * clampedDt; }
+        this._targetMoveYaw += keySteerRate * clampedDt;
+        if (!decoupled) this._targetYaw += keySteerRate * clampedDt;
+        this._manualCourseSteered = true;
       }
       if (dDown) {
-        this.moveYaw -= 0.95 * clampedDt;
-        if (!this.freelook) { this._targetYaw -= 0.95 * clampedDt; this.yaw -= 0.65 * clampedDt; }
+        this._targetMoveYaw -= keySteerRate * clampedDt;
+        if (!decoupled) this._targetYaw -= keySteerRate * clampedDt;
+        this._manualCourseSteered = true;
       }
       if (upDown) {
-        this.movePitch = Math.min(1.1, this.movePitch + 0.7 * clampedDt);
-        if (!this.freelook) this._targetPitch = Math.min(1.1, this._targetPitch + 0.7 * clampedDt);
+        this._targetMovePitch = Math.min(1.05, this._targetMovePitch + 0.58 * clampedDt);
+        if (!decoupled) this._targetPitch = Math.min(1.05, this._targetPitch + 0.58 * clampedDt);
+        this._manualCourseSteered = true;
       }
       if (dnDown) {
-        this.movePitch = Math.max(-1.1, this.movePitch - 0.7 * clampedDt);
-        if (!this.freelook) this._targetPitch = Math.max(-1.1, this._targetPitch - 0.7 * clampedDt);
+        this._targetMovePitch = Math.max(-1.05, this._targetMovePitch - 0.58 * clampedDt);
+        if (!decoupled) this._targetPitch = Math.max(-1.05, this._targetPitch - 0.58 * clampedDt);
+        this._manualCourseSteered = true;
       }
 
-      if (this._idle > 1.6 && this.glideTarget) {
-        const dx = this.glideTarget.x - p.x;
-        const dy = this.glideTarget.y - p.y;
-        const dz = this.glideTarget.z - p.z;
+      // If user manually steered course while touring (no explicit minimap routeQueue),
+      // re-orient the scenic tour target ahead of the user's new chosen heading!
+      if (this._manualCourseSteered && this._idle > 1.2 && this.routeQueue.length === 0) {
+        this._manualCourseSteered = false;
+        if (typeof this.onCourseReorient === 'function') {
+          const nextNode = this.onCourseReorient(p, this.moveYaw);
+          if (nextNode) this.glideTarget = nextNode;
+        }
+      }
+
+      // Determine active autopilot destination: Minimap/Director routeQueue takes priority over tour glideTarget!
+      let activeGoal = this.routeQueue.length > 0 ? this.routeQueue[0] : (this._idle > 1.6 ? this.glideTarget : null);
+      if (this.routeQueue.length > 0) {
+        const wp = this.routeQueue[0];
+        const distWp = Math.hypot(wp.x - p.x, (wp.y - p.y) * 0.6, wp.z - p.z);
+        const acceptR = wp.via ? 155 : 92;
+        if (distWp < acceptR) {
+          const arrived = this.routeQueue.shift();
+          if (this.routeQueue.length === 0) {
+            if (typeof this.onRouteArrive === 'function') this.onRouteArrive(arrived);
+            if (this._routeStopOnArrive) {
+              // Smoothly transition into stationary hover or gentle drift looking at the destination!
+              this.glideSpeed = this.autoLook ? 18 : 0;
+              this._routeStopOnArrive = false;
+            }
+          }
+          activeGoal = this.routeQueue.length > 0 ? this.routeQueue[0] : null;
+        } else if (!wp.via && this.routeQueue.length === 1 && this._routeStopOnArrive && distWp < 320) {
+          routeArrivalSlowdown = Math.max(0.18, distWp / 320);
+        }
+      }
+
+      if (activeGoal && (!manualSteeringKeys && (!this._drag || decoupled))) {
+        const dx = activeGoal.x - p.x;
+        const dy = activeGoal.y - p.y;
+        const dz = activeGoal.z - p.z;
         const horiz = Math.hypot(dx, dz) || 1;
         const wantYaw = Math.atan2(-dx, -dz);
-        const curHeading = this.freelook ? this.moveYaw : this._targetYaw;
-        const dYaw = wrapAngleDelta(wantYaw - curHeading);
-        const avoidAtten = 1.0 - 0.75 * this._avoidActive;
-        const maxTurn = 0.50 * clampedDt * avoidAtten;
-        const stepYaw = Math.max(-maxTurn, Math.min(maxTurn, dYaw * 0.85));
-        this.moveYaw += stepYaw;
-        if (!this.freelook) {
-          this._targetYaw += stepYaw;
-          this.yaw += stepYaw;
-        }
-        const wantPitch = Math.max(-0.42, Math.min(0.42, Math.atan2(dy, horiz)));
-        const curPitch = this.freelook ? this.movePitch : this._targetPitch;
-        const stepPitch = (wantPitch - curPitch) * Math.min(1, clampedDt * 1.35 * avoidAtten);
-        this.movePitch += stepPitch;
-        if (!this.freelook) {
-          this._targetPitch += stepPitch;
-          this.pitch += stepPitch;
-        }
+        const avoidAtten = 1.0 - 0.72 * this._avoidActive;
+        const dYaw = wrapAngleDelta(wantYaw - this._targetMoveYaw);
+        const maxGlideTurn = (preset.glideTurnRate / Math.pow(turnK, 0.80)) * clampedDt * avoidAtten;
+        const stepYaw = Math.max(-maxGlideTurn, Math.min(maxGlideTurn, dYaw * 0.75));
+        this._targetMoveYaw += stepYaw;
+        if (!decoupled) this._targetYaw = this._targetMoveYaw;
+
+        const wantPitch = Math.max(-0.40, Math.min(0.40, Math.atan2(dy, horiz)));
+        const stepPitch = (wantPitch - this._targetMovePitch) * Math.min(1, clampedDt * (1.15 / Math.sqrt(turnK)) * avoidAtten);
+        this._targetMovePitch += stepPitch;
+        if (!decoupled) this._targetPitch = this._targetMovePitch;
       }
 
+      // Autopilot POI Auto-Look Gimbal: smoothly gazes around at nearby POIs while moving slowly or hovering!
+      if (this.autoLook && !this.freelook) {
+        this._autoLookPhase += clampedDt;
+        this._autoLookTimer -= clampedDt;
+        if (!this._drag) {
+          // Decay temporary drag offset gently back toward POI framing
+          this._freeYawOff *= Math.exp(-clampedDt * 0.45);
+          this._freePitchOff *= Math.exp(-clampedDt * 0.45);
+        }
+        if (this._autoLookTimer <= 0 || !this._autoLookPoi) {
+          this._autoLookPoi = this._pickNextAutoLookPoi(p);
+          this._autoLookTimer = 5.8 + (Math.abs(Math.sin(this._autoLookPhase * 3.7)) * 4.4);
+        }
+        if (this._autoLookPoi) {
+          const lx = this._autoLookPoi.x - p.x;
+          const ly = (this._autoLookPoi.lookY ?? ((this._autoLookPoi.y || 80) * 0.68)) - p.y;
+          const lz = this._autoLookPoi.z - p.z;
+          const lh = Math.hypot(lx, lz) || 1;
+          const poiYaw = Math.atan2(-lx, -lz) + Math.sin(this._autoLookPhase * 0.28) * 0.08 + this._freeYawOff;
+          const poiPitch = Math.max(-0.65, Math.min(0.55, Math.atan2(ly, lh) + Math.cos(this._autoLookPhase * 0.22) * 0.04 + this._freePitchOff));
+          this._targetYaw = poiYaw;
+          this._targetPitch = poiPitch;
+        } else {
+          // Gentle scenic horizon sweep if poiList is empty
+          this._targetYaw = this.moveYaw + Math.sin(this._autoLookPhase * 0.24) * 0.55 + this._freeYawOff;
+          this._targetPitch = -0.08 + Math.cos(this._autoLookPhase * 0.19) * 0.10 + this._freePitchOff;
+        }
+      }
+    }
+
+    // 2nd-Order Rate- & Acceleration-Limited Angular Damping (guarantees silky turns with ZERO whip-pans!)
+    const maxLookRate = (this.glide && this.autoLook ? preset.glideTurnRate * 0.95 : preset.maxTurnRate) / Math.pow(turnK, 0.82);
+    const maxMoveRate = (this.glide ? preset.glideTurnRate * 1.15 : preset.maxTurnRate) / Math.pow(turnK, 0.82);
+    const angAccel = preset.turnAccel / Math.pow(turnK, 0.75);
+    const lookGain = preset.lookRate / Math.pow(smoothK * turnK, 0.42);
+
+    this.yaw = this._stepDampedAngle(this.yaw, this._targetYaw, '_yawVel', maxLookRate, angAccel, lookGain, clampedDt);
+    this.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT,
+      this._stepDampedAngle(this.pitch, this._targetPitch, '_pitchVel', maxLookRate * 0.85, angAccel, lookGain, clampedDt)
+    ));
+
+    if (decoupled) {
+      this.moveYaw = this._stepDampedAngle(this.moveYaw, this._targetMoveYaw, '_moveYawVel', maxMoveRate, angAccel, lookGain * 0.8, clampedDt);
+      this.movePitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT,
+        this._stepDampedAngle(this.movePitch, this._targetMovePitch, '_movePitchVel', maxMoveRate * 0.8, angAccel, lookGain * 0.8, clampedDt)
+      ));
+    } else {
+      this.moveYaw = this.yaw;
+      this.movePitch = this.pitch;
+      this._targetMoveYaw = this._targetYaw;
+      this._targetMovePitch = this._targetPitch;
+    }
+
+    if (this.glide) {
       const boost = shiftDown ? 2.4 : 1;
-      desiredVel.copy(this._travelForward()).multiplyScalar(this.glideSpeed * spdMul * boost);
+      desiredVel.copy(this._travelForward()).multiplyScalar(this.glideSpeed * spdMul * boost * routeArrivalSlowdown);
     } else {
       const boost = shiftDown ? 3.6 : 1;
       const maxSpd = this.speed * spdMul * boost;
@@ -699,14 +955,18 @@ export class FlyControls {
     }
 
     // Smooth aerodynamic banking into travel turns
-    const curMoveYaw = this.freelook ? this.moveYaw : this.yaw;
+    const curMoveYaw = decoupled ? this.moveYaw : this.yaw;
     const yawRate = wrapAngleDelta(curMoveYaw - prevMoveYaw) / Math.max(clampedDt, 1e-3);
     const maxBank = this.glide ? preset.glideBank : preset.maxBank;
     const bankGain = this.glide ? preset.glideBankGain : preset.bankGain;
-    const targetRoll = this.freelook ? 0 : Math.max(-maxBank, Math.min(maxBank, yawRate * bankGain));
-    this.roll += (targetRoll - this.roll) * (1 - Math.exp(-clampedDt * (6.5 / Math.sqrt(smoothK))));
+    const targetRoll = decoupled ? 0 : Math.max(-maxBank, Math.min(maxBank, yawRate * bankGain));
+    this.roll += (targetRoll - this.roll) * (1 - Math.exp(-clampedDt * (6.5 / Math.sqrt(smoothK * turnK))));
 
     this.camera.quaternion.setFromEuler(new THREE.Euler(this.pitch, this.yaw, this.roll, 'YXZ'));
+  }
+
+  get velocity() {
+    return this._vel;
   }
 
   dispose() {

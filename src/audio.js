@@ -1,38 +1,51 @@
-// Modular Pure-Code Space-Ambient Synthesizer & Generative Radio Engine.
+// Modular Pure-Code Space-Ambient Synthesizer & Evolving Generative Radio Engine.
 // 100% software synthesis in Web Audio API — zero audio files, zero samples, zero network fetches.
-// Inspired by Vangelis (CS-80 Blade Runner Blues, Albedo 0.39, Spiral) and
-// Aphex Twin (Selected Ambient Works 85-92, SAW Volume II: Rhubarb / Lichen / Xtal, Polygon Window).
+// Features 6 original atmospheric stations and a 4-movement macro-evolution engine
+// (Mist Prelude -> Rising Skyline -> Luminous Zenith -> Nocturnal Dissolve) with
+// modal harmonic pivots, call-and-response phrasing, and live city-telemetry coupling.
 
 import { mulberry32 } from './prng.js';
 
+export const RADIO_MOVEMENTS = [
+  { index: 0, name: 'I · Mist Prelude', density: 0.42, brightness: 0.68, rhythmMul: 0.30, leadMul: 0.45, bridge: false },
+  { index: 1, name: 'II · Rising Skyline', density: 0.78, brightness: 0.96, rhythmMul: 0.82, leadMul: 0.85, bridge: false },
+  { index: 2, name: 'III · Luminous Zenith', density: 1.15, brightness: 1.28, rhythmMul: 1.18, leadMul: 1.15, bridge: true },
+  { index: 3, name: 'IV · Nocturnal Dissolve', density: 0.58, brightness: 0.80, rhythmMul: 0.45, leadMul: 0.65, bridge: true },
+];
+
+const MODAL_CYCLE_SHIFTS = [0, 5, -2, 7, -4, 3]; // Multi-cycle key center shifts (in semitones)
+
 export const RADIO_STATIONS = [
   {
-    id: 'vangelis-bladerunner',
-    name: 'Vangelis · Tyrell 2019 (CS-80 Space Blues)',
-    shortName: 'Tyrell 2019 · CS-80',
-    artistHint: 'Vangelis-inspired CS-80 brass pads, ribbon solo & shimmer hall',
+    id: 'rain-cathedral',
+    name: '99.4 FM · Rain on Neon Glass',
+    shortName: '99.4 · Rain on Glass',
+    artistHint: 'Slow detuned brass swells, rooftop rain-chimes & midnight sub-harmonics',
     bpm: 64,
     baseNote: 48, // C3
     defaultSpace: 0.94,
     defaultWarmth: 0.78,
     defaultPulse: 0.28,
-    // Lydian / Dorian / Minor-9th suspended voicings (semitones from root C)
     progressions: [
       { name: 'Cmaj9#11', bass: -12, pad: [0, 4, 7, 11, 14, 18], scale: [0, 2, 4, 6, 7, 9, 11, 14] },
       { name: 'Abmaj7#11', bass: -16, pad: [-4, 0, 3, 7, 10, 14], scale: [-4, -2, 0, 2, 3, 7, 10, 12] },
       { name: 'Fm11', bass: -19, pad: [-7, -4, 0, 3, 7, 10], scale: [-7, -5, -4, -2, 0, 3, 5, 7] },
       { name: 'Dm9', bass: -10, pad: [2, 5, 9, 12, 16], scale: [2, 4, 5, 7, 9, 11, 12, 16] },
-      { name: 'G13sus4', bass: -17, pad: [-5, 0, 2, 5, 9, 12], scale: [-5, -3, 0, 2, 4, 5, 9, 12] },
+    ],
+    bridgeProgressions: [
       { name: 'Ebmaj9#11', bass: -9, pad: [3, 7, 10, 14, 17, 21], scale: [3, 5, 7, 9, 10, 12, 14, 17] },
+      { name: 'Bmaj7#5', bass: -13, pad: [-1, 3, 7, 10, 14], scale: [-1, 1, 3, 6, 7, 10, 11, 14] },
+      { name: 'Gm11', bass: -17, pad: [-5, -2, 2, 5, 9, 12], scale: [-5, -3, -2, 0, 2, 5, 7, 9] },
+      { name: 'G13sus4', bass: -17, pad: [-5, 0, 2, 5, 9, 12], scale: [-5, -3, 0, 2, 4, 5, 9, 12] },
     ],
   },
   {
-    id: 'aphex-saw-drift',
-    name: 'Aphex Twin · Selected Ambient Works (Drift)',
-    shortName: 'SAW II · Rhubarb Drift',
-    artistHint: 'Asynchronous warm fifth pads, Xtal FM bells & tape flutter',
+    id: 'velvet-sublevel',
+    name: '101.7 FM · Velvet Sub-Level',
+    shortName: '101.7 · Velvet Sub-Level',
+    artistHint: 'Asynchronous warm fifth pads, crystalline FM bells & tape flutter',
     bpm: 76,
-    baseNote: 50, // D3 (slightly micro-detuned +14 cents for nostalgic SAW tape warmth!)
+    baseNote: 50, // D3 (+14 cents warm tape drift)
     detuneCents: 14,
     defaultSpace: 0.90,
     defaultWarmth: 0.72,
@@ -43,12 +56,18 @@ export const RADIO_STATIONS = [
       { name: 'Gmaj9#11', bass: -19, pad: [-7, 0, 4, 7, 11, 14], scale: [-7, -5, -3, 0, 2, 4, 7, 11] },
       { name: 'Asus2/F#', bass: -20, pad: [-5, 2, 4, 9, 14], scale: [-5, -3, 0, 2, 4, 7, 9, 14] },
     ],
+    bridgeProgressions: [
+      { name: 'Em9', bass: -10, pad: [2, 5, 9, 12, 16], scale: [2, 4, 5, 7, 9, 12, 14, 16] },
+      { name: 'F#m11', bass: -8, pad: [4, 7, 11, 14, 19], scale: [4, 6, 7, 9, 11, 14, 16, 19] },
+      { name: 'Cmaj9', bass: -14, pad: [-2, 2, 5, 9, 12], scale: [-2, 0, 2, 4, 5, 9, 12, 14] },
+      { name: 'A13sus4', bass: -17, pad: [-5, 0, 2, 7, 9], scale: [-5, -3, 0, 2, 4, 7, 9, 12] },
+    ],
   },
   {
-    id: 'vangelis-cosmos',
-    name: 'Vangelis · Albedo & Spiral (Cosmic Sequencer)',
-    shortName: 'Albedo 0.39 · Sequencer',
-    artistHint: 'Hypnotic 16th-note analog filter arpeggios & cosmic brass',
+    id: 'midnight-monorail',
+    name: '104.2 FM · Midnight Monorail',
+    shortName: '104.2 · Midnight Monorail',
+    artistHint: 'Hypnotic 16th-note filter arpeggios, poly-strings & horizon brass',
     bpm: 108,
     baseNote: 45, // A2
     defaultSpace: 0.86,
@@ -58,14 +77,20 @@ export const RADIO_STATIONS = [
       { name: 'Am9', bass: -12, pad: [0, 3, 7, 10, 14], scale: [0, 2, 3, 7, 10, 12, 14, 15] },
       { name: 'Fmaj7#11', bass: -16, pad: [-4, 0, 4, 7, 11], scale: [-4, -2, 0, 2, 4, 7, 11, 12] },
       { name: 'Dm11', bass: -19, pad: [-7, -4, 0, 3, 5, 10], scale: [-7, -4, -2, 0, 3, 5, 7, 10] },
-      { name: 'Esus4 -> E7', bass: -17, pad: [-5, 0, 2, 7, 11], scale: [-5, -1, 0, 2, 4, 7, 11, 12] },
+      { name: 'Esus4', bass: -17, pad: [-5, 0, 2, 7, 11], scale: [-5, -1, 0, 2, 4, 7, 11, 12] },
+    ],
+    bridgeProgressions: [
+      { name: 'Cmaj9/G', bass: -14, pad: [-9, -5, -2, 2, 7], scale: [-9, -7, -5, -2, 0, 2, 4, 7] },
+      { name: 'Abmaj9', bass: -13, pad: [-1, 3, 6, 10, 13], scale: [-1, 1, 3, 5, 6, 10, 13, 15] },
+      { name: 'Gm9', bass: -14, pad: [-2, 1, 5, 8, 12], scale: [-2, 0, 1, 5, 8, 10, 12, 15] },
+      { name: 'Bbmaj7#11', bass: -11, pad: [1, 5, 9, 12, 16], scale: [1, 3, 5, 7, 9, 12, 14, 16] },
     ],
   },
   {
-    id: 'aphex-polygon',
-    name: 'Aphex Twin · Polygon Window (IDM Acid Ambient)',
-    shortName: 'Polygon Window · IDM',
-    artistHint: 'Melodic 303 acid bubbles, Euclidean micro-beats & nostalgic pads',
+    id: 'sodium-mercury',
+    name: '106.8 FM · Sodium & Mercury',
+    shortName: '106.8 · Sodium & Mercury',
+    artistHint: 'Resonant liquid filter bubbles, Euclidean micro-beats & vapor pads',
     bpm: 118,
     baseNote: 46, // Bb2
     detuneCents: -9,
@@ -78,6 +103,60 @@ export const RADIO_STATIONS = [
       { name: 'Ebm11', bass: -19, pad: [-7, -4, 0, 3, 5], scale: [-7, -4, -2, 0, 3, 5, 8, 10] },
       { name: 'Fsus4', bass: -17, pad: [-5, 0, 2, 5, 10], scale: [-5, -2, 0, 2, 5, 7, 10, 12] },
     ],
+    bridgeProgressions: [
+      { name: 'Dbmaj9', bass: -9, pad: [3, 7, 10, 14, 17], scale: [3, 5, 7, 8, 10, 14, 15, 17] },
+      { name: 'Ab6/9', bass: -14, pad: [-2, 2, 5, 7, 12], scale: [-2, 0, 2, 5, 7, 9, 10, 12] },
+      { name: 'Cm11', bass: -10, pad: [2, 5, 9, 12, 17], scale: [2, 4, 5, 7, 9, 12, 14, 17] },
+      { name: 'F7alt', bass: -17, pad: [-5, -1, 3, 6, 10], scale: [-5, -4, -1, 1, 3, 6, 8, 10] },
+    ],
+  },
+  {
+    id: 'foghorn-starlight',
+    name: '88.9 FM · Foghorn & Starlight',
+    shortName: '88.9 · Foghorn & Starlight',
+    artistHint: 'Weightless harbor organ drones, breath flutes & tidal fifths',
+    bpm: 56,
+    baseNote: 43, // G2
+    detuneCents: -6,
+    defaultSpace: 0.98,
+    defaultWarmth: 0.66,
+    defaultPulse: 0.16,
+    progressions: [
+      { name: 'G5add9', bass: -12, pad: [0, 7, 12, 14, 19], scale: [0, 2, 4, 7, 9, 11, 14, 19] },
+      { name: 'Em11', bass: -15, pad: [-3, 2, 4, 7, 11, 14], scale: [-3, 0, 2, 4, 7, 9, 11, 14] },
+      { name: 'Cmaj9#11', bass: -19, pad: [-7, 0, 4, 6, 11], scale: [-7, -5, -3, 0, 2, 4, 6, 11] },
+      { name: 'Dsus2', bass: -17, pad: [-5, 2, 7, 9, 14], scale: [-5, -3, 0, 2, 4, 7, 9, 14] },
+    ],
+    bridgeProgressions: [
+      { name: 'Bbmaj7#11', bass: -9, pad: [3, 7, 10, 14, 16], scale: [3, 5, 7, 9, 10, 12, 14, 17] },
+      { name: 'Fmaj9', bass: -14, pad: [-2, 2, 5, 9, 12], scale: [-2, 0, 2, 4, 5, 9, 12, 14] },
+      { name: 'Am11', bass: -10, pad: [2, 5, 9, 12, 16], scale: [2, 4, 5, 7, 9, 12, 14, 16] },
+      { name: 'D9sus4', bass: -17, pad: [-5, 0, 2, 5, 9], scale: [-5, -3, 0, 2, 5, 7, 9, 12] },
+    ],
+  },
+  {
+    id: 'sky-gardens',
+    name: '93.1 FM · Hanging Sky-Gardens',
+    shortName: '93.1 · Sky-Gardens',
+    artistHint: 'Pentatonic plucked harp-bells, evolving wind-flutes & rain droplets',
+    bpm: 88,
+    baseNote: 51, // Eb3
+    detuneCents: 6,
+    defaultSpace: 0.92,
+    defaultWarmth: 0.82,
+    defaultPulse: 0.54,
+    progressions: [
+      { name: 'Ebmaj9', bass: -12, pad: [0, 4, 7, 11, 14], scale: [0, 2, 4, 7, 9, 11, 14, 16] },
+      { name: 'Cm9', bass: -15, pad: [-3, 0, 4, 7, 11], scale: [-3, 0, 2, 4, 7, 9, 12, 14] },
+      { name: 'Abadd9', bass: -19, pad: [-7, -3, 0, 4, 7], scale: [-7, -5, -3, 0, 2, 4, 7, 12] },
+      { name: 'Bb13sus', bass: -17, pad: [-5, 0, 2, 7, 10], scale: [-5, -3, 0, 2, 4, 7, 9, 12] },
+    ],
+    bridgeProgressions: [
+      { name: 'Fm9', bass: -10, pad: [2, 5, 9, 12, 16], scale: [2, 4, 5, 7, 9, 12, 14, 16] },
+      { name: 'Dbmaj7#11', bass: -14, pad: [-2, 2, 5, 8, 12], scale: [-2, 0, 2, 4, 5, 9, 12, 14] },
+      { name: 'Gm11', bass: -8, pad: [4, 7, 11, 14, 17], scale: [4, 7, 9, 11, 14, 16, 17, 19] },
+      { name: 'C7sus2', bass: -15, pad: [-3, 2, 4, 9, 12], scale: [-3, 0, 2, 4, 7, 9, 12, 14] },
+    ],
   },
 ];
 
@@ -86,7 +165,7 @@ export function midiToHz(midi, centsOffset = 0) {
 }
 
 /**
- * Pure-code algorithmic Lexicon-style stereo shimmer/velvet hall impulse generator.
+ * Pure-code algorithmic stereo shimmer/velvet hall impulse generator.
  * Deterministic given `seed`, zero external audio samples.
  */
 export function buildSpaceImpulseData(sampleRate = 44100, durationSec = 5.4, seed = 4417) {
@@ -112,13 +191,10 @@ export function buildSpaceImpulseData(sampleRate = 44100, durationSec = 5.4, see
     const t = i / sampleRate;
     const u = i / length;
     const preFade = Math.min(1, t / 0.032);
-    // Dual-stage decay: lush initial bloom + long 60dB cosmic tail
     const env = preFade * (0.58 * Math.exp(-t * 1.45) + 0.42 * Math.exp(-t * 0.62));
-    // Sparse velvet density early -> smooth dense tail, low-passed progressively over time
     const damp = 0.52 - 0.38 * u;
     const rawL = (rnd() * 2 - 1);
     const rawR = (rnd() * 2 - 1);
-    // Subtle slow chorus modulation baked into modal tail
     const mod = 1 + 0.08 * Math.sin(t * 2.3);
     lpL += (rawL - lpL) * damp;
     lpR += (rawR - lpR) * damp;
@@ -139,27 +215,31 @@ function makeWarmDriveCurve(amount = 1.4, samples = 512) {
   return curve;
 }
 
-/** Evaluate deterministic harmonic state for tests & UI inspection. */
-export function evalStationHarmony(stationOrIdx = 0, stepIndex = 0) {
+/** Evaluate deterministic harmonic state (including movement & modal evolution) for tests & UI inspection. */
+export function evalStationHarmony(stationOrIdx = 0, stepIndex = 0, { useBridge = false, modalShift = 0 } = {}) {
   const st = (stationOrIdx && typeof stationOrIdx === 'object' && Array.isArray(stationOrIdx.progressions))
     ? stationOrIdx
     : RADIO_STATIONS[((Number(stationOrIdx) % RADIO_STATIONS.length) + RADIO_STATIONS.length) % RADIO_STATIONS.length];
-  const prog = st.progressions[((stepIndex % st.progressions.length) + st.progressions.length) % st.progressions.length];
+  const bank = (useBridge && Array.isArray(st.bridgeProgressions) && st.bridgeProgressions.length)
+    ? st.bridgeProgressions
+    : st.progressions;
+  const prog = bank[((stepIndex % bank.length) + bank.length) % bank.length];
   const cents = st.detuneCents || 0;
-  const padMidi = prog.pad.map((semi) => st.baseNote + 12 + semi);
+  const rootNote = st.baseNote + modalShift;
+  const padMidi = prog.pad.map((semi) => rootNote + 12 + semi);
   return {
     station: st,
-    chordName: prog.name,
-    bassMidi: st.baseNote + prog.bass,
-    bassHz: midiToHz(st.baseNote + prog.bass, cents),
+    chordName: modalShift === 0 ? prog.name : `${prog.name} (${modalShift > 0 ? '+' : ''}${modalShift})`,
+    bassMidi: rootNote + prog.bass,
+    bassHz: midiToHz(rootNote + prog.bass, cents),
     padMidi,
     padHz: padMidi.map((m) => midiToHz(m, cents)),
-    scaleMidi: prog.scale.map((semi) => st.baseNote + 12 + semi),
+    scaleMidi: prog.scale.map((semi) => rootNote + 12 + semi),
   };
 }
 
 /**
- * Modular Pure-Code Synthesizer & Space-Ambient Radio Controller.
+ * Modular Pure-Code Synthesizer & Evolving Space-Ambient Radio Controller.
  */
 export class ModularRadioEngine {
   constructor({
@@ -184,7 +264,7 @@ export class ModularRadioEngine {
     this.space = Math.max(0, Math.min(1.5, Number(space)));     // 0 .. 1.5 reverb lushness & delay feedback
     this.warmth = Math.max(0, Math.min(1.5, Number(warmth)));   // 0 .. 1.5 analog filter cutoff / brilliance
     this.pulse = Math.max(0, Math.min(1.5, Number(pulse)));     // 0 .. 1.5 sequencer & micro-percussion density (0 = beatless ambient!)
-    this.cityReact = Math.max(0, Math.min(1.0, Number(cityReactivity))); // 0 .. 1.0 coupling to camera altitude, speed & time of day
+    this.cityReact = Math.max(0, Math.min(1.0, Number(cityReactivity)));
 
     // City telemetry state (fed live from main loop)
     this._cityAlt01 = 0.25;
@@ -204,15 +284,18 @@ export class ModularRadioEngine {
     this._windFilter = null;
     this._noiseBuffer = null;
 
-    // Generative scheduler state
+    // Long-form generative evolution & phrase state
     this._step16 = 0;
+    this._barCount = 0;
     this._chordIdx = 0;
+    this._movementIdx = 0;
+    this._cycleCount = 0;
+    this._modalShift = 0;
+    this._evolutionPhase = 0; // continuous 0..1 position across the 64-bar symphonic arc
+    this._motifDegs = [0, 2, 4, 3]; // evolving 4-note call-and-response seed
     this._nextStepTime = 0;
-    this._lastPadTime = -999;
-    this._lastLeadTime = -999;
-    this._sawVoiceNext = [0, 0, 0, 0];
+    this._driftVoiceNext = [0, 0, 0, 0];
     this._lastLeadMidi = null;
-    this._euclidPhase = 0;
     this._simPhase = 0;
     this._freqBins = new Uint8Array(64);
     this._waveBins = new Uint8Array(64);
@@ -225,6 +308,18 @@ export class ModularRadioEngine {
 
   get currentChordName() {
     return this._currentChordName;
+  }
+
+  get movementIndex() {
+    return this._movementIdx;
+  }
+
+  get movementName() {
+    return RADIO_MOVEMENTS[this._movementIdx]?.name || RADIO_MOVEMENTS[0].name;
+  }
+
+  get evolutionPhase() {
+    return this._evolutionPhase;
   }
 
   get isAvailable() {
@@ -288,7 +383,6 @@ export class ModularRadioEngine {
     delayL.delayTime.value = 0.375;
     delayR.delayTime.value = 0.505;
 
-    // Subtle analog tape wow/flutter LFO
     const wowOsc = ctx.createOscillator();
     const wowGainL = ctx.createGain();
     const wowGainR = ctx.createGain();
@@ -310,6 +404,7 @@ export class ModularRadioEngine {
     tapeHP.frequency.value = 135;
 
     const fbGain = ctx.createGain();
+    fbGain.value = 0.42;
     fbGain.gain.value = 0.42;
     this._delayFeedback = fbGain;
 
@@ -329,7 +424,7 @@ export class ModularRadioEngine {
     delayOut.connect(saturator);
     this._delaySend = delaySend;
 
-    // 4. Algorithmic Lexicon-Style Stereo Shimmer Hall Reverb Bus
+    // 4. Algorithmic Stereo Shimmer Hall Reverb Bus
     const reverbSend = ctx.createGain();
     reverbSend.gain.value = 0.65;
     const preDelay = ctx.createDelay(0.25);
@@ -356,11 +451,11 @@ export class ModularRadioEngine {
     convolver.connect(revLP);
     revLP.connect(revOut);
     revOut.connect(saturator);
-    delayOut.connect(reverbSend); // feed echoes gently into cosmic hall!
+    delayOut.connect(reverbSend);
     this._reverbSend = reverbSend;
     this._revLP = revLP;
 
-    // 5. Shared Pure-Code White/Pink Noise Buffer (for percussive transients & cosmic solar wind)
+    // 5. Shared Pure-Code Pink/Velvet Noise Buffer
     const nLen = Math.floor(ctx.sampleRate * 3.0);
     const nBuf = ctx.createBuffer(1, nLen, ctx.sampleRate);
     const nData = nBuf.getChannelData(0);
@@ -374,7 +469,7 @@ export class ModularRadioEngine {
     }
     this._noiseBuffer = nBuf;
 
-    // 6. Continuous Cosmic Wind / Rain-Mist Breath Module
+    // 6. Continuous Atmospheric Mist / Rain-Wind Breath Module
     const windSrc = ctx.createBufferSource();
     windSrc.buffer = nBuf;
     windSrc.loop = true;
@@ -401,23 +496,26 @@ export class ModularRadioEngine {
     const react = this.cityReact;
     const altBoost = react * this._cityAlt01;
     const nightWarm = react * (this._cityNight01 - 0.5) * 0.22;
+    const mov = RADIO_MOVEMENTS[this._movementIdx] || RADIO_MOVEMENTS[0];
+    // Slow incommensurate timbral LFO breathing across minutes
+    const slowTimbreLfo = 0.08 * Math.sin(this._simPhase * 0.071) + 0.05 * Math.cos(this._simPhase * 0.043);
 
     const targetVol = this.playing ? Math.max(0, Math.min(1.2, this.volume)) * 0.82 : 0.0001;
     this.masterGain.gain.setTargetAtTime(targetVol, now, 0.08);
 
-    const spaceEff = Math.max(0, Math.min(1.6, this.space + altBoost * 0.28));
+    const spaceEff = Math.max(0, Math.min(1.65, this.space + altBoost * 0.28 + (mov.index === 3 ? 0.14 : 0)));
     this._reverbSend.gain.setTargetAtTime(0.18 + spaceEff * 0.62, now, 0.12);
     this._delaySend.gain.setTargetAtTime(0.12 + spaceEff * 0.30, now, 0.12);
     this._delayFeedback.gain.setTargetAtTime(Math.min(0.68, 0.20 + spaceEff * 0.28), now, 0.12);
 
-    const warmEff = Math.max(0.08, Math.min(1.6, this.warmth + altBoost * 0.24 - nightWarm * 0.18));
+    const warmEff = Math.max(0.08, Math.min(1.65, (this.warmth * mov.brightness) + slowTimbreLfo + altBoost * 0.24 - nightWarm * 0.18));
     const cutoff = 680 * Math.pow(14.5, warmEff * 0.78);
     this._masterFilter.frequency.setTargetAtTime(Math.min(16500, cutoff), now, 0.14);
     if (this._revLP) {
       this._revLP.frequency.setTargetAtTime(Math.min(9500, 1800 + warmEff * 3600 + altBoost * 1800), now, 0.2);
     }
     if (this._windGain && this._windFilter) {
-      const windLvl = (0.008 + spaceEff * 0.014 + react * this._citySpeed01 * 0.024) * (this.playing ? 1 : 0);
+      const windLvl = (0.007 + spaceEff * 0.013 + react * this._citySpeed01 * 0.024) * (this.playing ? 1 : 0);
       this._windGain.gain.setTargetAtTime(windLvl, now, 0.25);
       this._windFilter.frequency.setTargetAtTime(280 + altBoost * 920 + Math.sin(now * 0.19) * 110, now, 0.25);
     }
@@ -425,8 +523,8 @@ export class ModularRadioEngine {
 
   /* ========================================================= SYNTH MODULES */
 
-  /** Module 1: Yamaha CS-80-inspired polyphonic detuned saw/sub brass-string pad voice. */
-  _triggerCS80Pad(freq, when, dur, vel = 0.22, { brightness = 1.0, pan = 0 } = {}) {
+  /** Module 1: Polyphonic detuned dual-saw + sub-triangle brass-string pad voice. */
+  _triggerBrassPad(freq, when, dur, vel = 0.22, { brightness = 1.0, pan = 0 } = {}) {
     const ctx = this.ctx;
     if (!ctx) return;
     const stopAt = when + dur + 2.8;
@@ -444,14 +542,12 @@ export class ModularRadioEngine {
     subOsc.frequency.setValueAtTime(freq * 0.5, when);
     osc1.detune.setValueAtTime(-7.2 + drift, when);
     osc2.detune.setValueAtTime(7.6 + drift, when);
-    // Slow analog VCO drift across long sustain
     osc1.detune.linearRampToValueAtTime(-4.1 - drift, when + dur);
     osc2.detune.linearRampToValueAtTime(9.4 + drift * 0.5, when + dur);
 
     const subGain = ctx.createGain();
     subGain.gain.value = 0.34;
 
-    // CS-80 signature HPF -> resonant LPF brass-to-velvet swell
     const hpf = ctx.createBiquadFilter();
     hpf.type = 'highpass';
     hpf.frequency.value = Math.max(55, freq * 0.45);
@@ -489,8 +585,8 @@ export class ModularRadioEngine {
     osc1.stop(stopAt + 0.05); osc2.stop(stopAt + 0.05); subOsc.stop(stopAt + 0.05);
   }
 
-  /** Module 2: Expressive CS-80 Ribbon / Portamento Solo Brass Lead with delayed aftertouch vibrato. */
-  _triggerCS80Lead(freqFrom, freqTo, when, dur, vel = 0.18) {
+  /** Module 2: Expressive portamento solo ribbon-brass lead with delayed vibrato. */
+  _triggerRibbonLead(freqFrom, freqTo, when, dur, vel = 0.18) {
     const ctx = this.ctx;
     if (!ctx) return;
     const stopAt = when + dur + 1.8;
@@ -505,7 +601,6 @@ export class ModularRadioEngine {
     osc1.frequency.exponentialRampToValueAtTime(Math.max(40, freqTo), when + glideT);
     osc2.frequency.exponentialRampToValueAtTime(Math.max(40, freqTo * 1.0028), when + glideT);
 
-    // Delayed expressive aftertouch vibrato
     const vib = ctx.createOscillator();
     const vibG = ctx.createGain();
     vib.type = 'sine';
@@ -543,8 +638,8 @@ export class ModularRadioEngine {
     osc1.stop(stopAt + 0.05); osc2.stop(stopAt + 0.05); vib.stop(stopAt + 0.05);
   }
 
-  /** Module 3: Aphex Twin SAW II (Rhubarb / Lichen) ultra-warm breathing triangle + fifth pad. */
-  _triggerSAWPad(freq, when, dur, vel = 0.20, pan = 0) {
+  /** Module 3: Warm tape-drifting triangle + pure fifth shimmer pad. */
+  _triggerVelvetPad(freq, when, dur, vel = 0.20, pan = 0) {
     const ctx = this.ctx;
     if (!ctx) return;
     const stopAt = when + dur + 3.4;
@@ -559,7 +654,7 @@ export class ModularRadioEngine {
     const tapeDrift = (this.rnd() - 0.5) * 9.0;
     oFund.frequency.setValueAtTime(freq, when);
     oWarm.frequency.setValueAtTime(freq, when);
-    oFifth.frequency.setValueAtTime(freq * 1.4983, when); // pure warm fifth shimmer
+    oFifth.frequency.setValueAtTime(freq * 1.4983, when);
     oFund.detune.setValueAtTime(tapeDrift - 4.5, when);
     oWarm.detune.setValueAtTime(tapeDrift + 5.2, when);
     oFund.detune.linearRampToValueAtTime(-tapeDrift + 3.0, stopAt);
@@ -596,7 +691,7 @@ export class ModularRadioEngine {
     oFund.stop(stopAt + 0.05); oWarm.stop(stopAt + 0.05); oFifth.stop(stopAt + 0.05);
   }
 
-  /** Module 4: 2-Operator Crystalline FM Chime / Xtal Rhodes Bell Voice. */
+  /** Module 4: 2-Operator Crystalline FM Glass Bell Voice. */
   _triggerFMBell(freq, when, dur = 2.4, vel = 0.14, { ratio = 2.0, index = 2.2, pan = 0 } = {}) {
     const ctx = this.ctx;
     if (!ctx) return;
@@ -633,8 +728,8 @@ export class ModularRadioEngine {
     carrier.stop(stopAt + 0.04); mod.stop(stopAt + 0.04);
   }
 
-  /** Module 5: Resonant Analog Sequencer / Melodic 303 Acid Pluck Voice. */
-  _triggerAcidSeq(freq, when, dur = 0.24, vel = 0.15, { accent = false, wave = 'sawtooth', pan = 0, slideFrom = null } = {}) {
+  /** Module 5: Resonant Liquid Filter Sequencer Pluck Voice. */
+  _triggerFilterSeq(freq, when, dur = 0.24, vel = 0.15, { accent = false, wave = 'sawtooth', pan = 0, slideFrom = null } = {}) {
     const ctx = this.ctx;
     if (!ctx) return;
     const stopAt = when + dur + 0.08;
@@ -674,7 +769,109 @@ export class ModularRadioEngine {
     osc.stop(stopAt + 0.03);
   }
 
-  /** Module 6: Deep Sub-Bass Pedal Drone. */
+  /** Module 6: Plucked Harp-String & Warm Wooden Body Voice. */
+  _triggerPluckedHarp(freq, when, dur = 1.9, vel = 0.13, pan = 0) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const stopAt = when + dur;
+
+    const o1 = ctx.createOscillator();
+    const o2 = ctx.createOscillator();
+    o1.type = 'triangle';
+    o2.type = 'sawtooth';
+    o1.frequency.setValueAtTime(freq, when);
+    o2.frequency.setValueAtTime(freq * 2.0, when);
+    o2.detune.setValueAtTime(3.5, when);
+
+    const o2Gain = ctx.createGain();
+    o2Gain.gain.setValueAtTime(0.28, when);
+    o2Gain.gain.exponentialRampToValueAtTime(0.02, when + Math.min(0.35, dur * 0.3));
+
+    const lpf = ctx.createBiquadFilter();
+    lpf.type = 'lowpass';
+    lpf.Q.value = 1.8;
+    lpf.frequency.setValueAtTime(Math.min(7200, freq * (5.5 + this.warmth * 3.0)), when);
+    lpf.frequency.exponentialRampToValueAtTime(Math.max(220, freq * 1.3), stopAt);
+
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0.0001, when);
+    env.gain.linearRampToValueAtTime(vel, when + 0.008);
+    env.gain.exponentialRampToValueAtTime(0.0001, stopAt);
+
+    const panner = this._makePanner(pan);
+    o1.connect(lpf);
+    o2.connect(o2Gain);
+    o2Gain.connect(lpf);
+    lpf.connect(env);
+    env.connect(panner);
+    panner.connect(this._dryBus);
+    panner.connect(this._delaySend);
+    panner.connect(this._reverbSend);
+
+    o1.start(when); o2.start(when);
+    o1.stop(stopAt + 0.04); o2.stop(stopAt + 0.04);
+  }
+
+  /** Module 7: Airy Breath-Pipe / Harmonic Flute Voice. */
+  _triggerBreathFlute(freq, when, dur = 2.8, vel = 0.12, pan = 0) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const stopAt = when + dur + 0.9;
+
+    const pipe = ctx.createOscillator();
+    const oct = ctx.createOscillator();
+    pipe.type = 'sine';
+    oct.type = 'triangle';
+    pipe.frequency.setValueAtTime(freq, when);
+    oct.frequency.setValueAtTime(freq * 2.0, when);
+
+    const octG = ctx.createGain();
+    octG.gain.value = 0.14;
+
+    const vib = ctx.createOscillator();
+    const vibG = ctx.createGain();
+    vib.type = 'sine';
+    vib.frequency.value = 4.6;
+    vibG.gain.setValueAtTime(0.0001, when);
+    vibG.gain.linearRampToValueAtTime(freq * 0.007, when + dur * 0.5);
+    vib.connect(vibG);
+    vibG.connect(pipe.frequency);
+
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0.0001, when);
+    env.gain.linearRampToValueAtTime(vel, when + Math.min(0.55, dur * 0.32));
+    env.gain.exponentialRampToValueAtTime(0.0001, stopAt);
+
+    const panner = this._makePanner(pan);
+    pipe.connect(env);
+    oct.connect(octG);
+    octG.connect(env);
+    env.connect(panner);
+    panner.connect(this._dryBus);
+    panner.connect(this._reverbSend);
+    panner.connect(this._delaySend);
+
+    if (this._noiseBuffer) {
+      const chiff = ctx.createBufferSource();
+      chiff.buffer = this._noiseBuffer;
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = Math.min(5400, freq * 2.0);
+      bp.Q.value = 4.5;
+      const cEnv = ctx.createGain();
+      cEnv.gain.setValueAtTime(vel * 0.25, when);
+      cEnv.gain.exponentialRampToValueAtTime(0.0001, when + 0.14);
+      chiff.connect(bp);
+      bp.connect(cEnv);
+      cEnv.connect(panner);
+      chiff.start(when, this.rnd() * 1.5, 0.18);
+    }
+
+    pipe.start(when); oct.start(when); vib.start(when);
+    pipe.stop(stopAt + 0.05); oct.stop(stopAt + 0.05); vib.stop(stopAt + 0.05);
+  }
+
+  /** Module 8: Deep Sub-Bass Pedal Drone. */
   _triggerSubBass(freq, when, dur = 4.5, vel = 0.24) {
     const ctx = this.ctx;
     if (!ctx) return;
@@ -708,11 +905,13 @@ export class ModularRadioEngine {
     osc.stop(stopAt + 0.04); osc2.stop(stopAt + 0.04);
   }
 
-  /** Module 7: Pure-Code IDM / Ambient Soft Percussion (808/SAW soft kick, brushed hat, resonant rim). */
+  /** Module 9: Pure-Code Soft Percussion (sub kick, brushed hat, resonant droplet rim). */
   _triggerMicroDrum(kind, when, vel = 0.18) {
     const ctx = this.ctx;
     if (!ctx || this.pulse <= 0.02) return;
-    const v = vel * Math.min(1.35, this.pulse);
+    const mov = RADIO_MOVEMENTS[this._movementIdx] || RADIO_MOVEMENTS[0];
+    const v = vel * Math.min(1.35, this.pulse * mov.rhythmMul);
+    if (v <= 0.005) return;
 
     if (kind === 'kick') {
       const osc = ctx.createOscillator();
@@ -796,127 +995,176 @@ export class ModularRadioEngine {
     return g;
   }
 
-  /* ================================================= GENERATIVE COMPOSERS */
+  /* ================================================= MACRO-EVOLUTION ENGINE */
+
+  _advanceMacroEvolution(st) {
+    const step = this._step16;
+    if (step > 0 && step % 16 === 0) {
+      this._barCount++;
+      // 64-bar symphonic cycle across 4 distinct movements (16 bars each)
+      const cycleBar = this._barCount % 64;
+      this._evolutionPhase = cycleBar / 64;
+      const nextMov = Math.floor(cycleBar / 16) % RADIO_MOVEMENTS.length;
+      if (nextMov !== this._movementIdx) {
+        this._movementIdx = nextMov;
+        // Mutate one note of the recurring 4-note melodic motif each movement so themes evolve organically!
+        const mutSlot = Math.floor(this.rnd() * this._motifDegs.length);
+        this._motifDegs[mutSlot] = Math.floor(this.rnd() * 7);
+      }
+      if (cycleBar === 0 && this._barCount > 0) {
+        this._cycleCount++;
+        this._modalShift = MODAL_CYCLE_SHIFTS[this._cycleCount % MODAL_CYCLE_SHIFTS.length];
+      }
+    }
+
+    const mov = RADIO_MOVEMENTS[this._movementIdx] || RADIO_MOVEMENTS[0];
+    const bank = (mov.bridge && st.bridgeProgressions?.length) ? st.bridgeProgressions : st.progressions;
+    const chordLenSteps = (st.bpm < 80) ? 64 : 32;
+    if (step > 0 && step % chordLenSteps === 0) {
+      this._chordIdx = (this._chordIdx + 1) % bank.length;
+    }
+    const prog = bank[this._chordIdx % bank.length];
+    const rootNote = st.baseNote + this._modalShift;
+    this._currentChordName = this._modalShift === 0
+      ? prog.name
+      : `${prog.name} (${this._modalShift > 0 ? '+' : ''}${this._modalShift})`;
+    return { mov, prog, rootNote };
+  }
+
+  /** Pick a call-and-response melody note shaped by bar phrasing (bars 0-1 call, bar 2 answer, bar 3 breathe). */
+  _pickPhraseMidi(rootNote, scale, barInPhrase, stepSlot) {
+    const n = scale.length;
+    if (barInPhrase === 3 && this.rnd() < 0.65) return null; // breathing space in bar 4!
+    const motifDeg = this._motifDegs[stepSlot % this._motifDegs.length];
+    const deg = barInPhrase === 2
+      ? (n - 1 - (motifDeg % n)) // melodic inversion in answer bar!
+      : ((motifDeg + barInPhrase) % n);
+    const oct = (this._movementIdx === 2 && this.rnd() < 0.45) ? 24 : 12;
+    return rootNote + oct + scale[deg];
+  }
 
   _scheduleStep(when) {
     const st = this.station;
     const step = this._step16;
     const barStep = step % 16;
     const phraseStep = step % 64;
+    const barInPhrase = Math.floor(phraseStep / 16);
     const stepSec = 60 / st.bpm / 4;
     const cents = st.detuneCents || 0;
 
-    // Advance chord on phrase boundaries (every 4 bars for cosmic/IDM, every 6 bars for space ambient)
-    const chordLenSteps = (st.id === 'vangelis-bladerunner' || st.id === 'aphex-saw-drift') ? 64 : 32;
-    if (step > 0 && step % chordLenSteps === 0) {
-      this._chordIdx = (this._chordIdx + 1) % st.progressions.length;
-    }
-    const prog = st.progressions[this._chordIdx % st.progressions.length];
-    this._currentChordName = prog.name;
+    const { mov, prog, rootNote } = this._advanceMacroEvolution(st);
 
-    if (st.id === 'vangelis-bladerunner') {
-      this._composeVangelisBladeRunner(when, stepSec, barStep, phraseStep, st, prog, cents);
-    } else if (st.id === 'aphex-saw-drift') {
-      this._composeAphexSAWDrift(when, stepSec, barStep, phraseStep, st, prog, cents);
-    } else if (st.id === 'vangelis-cosmos') {
-      this._composeVangelisCosmos(when, stepSec, barStep, phraseStep, st, prog, cents);
+    if (st.id === 'rain-cathedral') {
+      this._composeRainCathedral(when, stepSec, barStep, phraseStep, barInPhrase, rootNote, prog, cents, mov);
+    } else if (st.id === 'velvet-sublevel') {
+      this._composeVelvetSublevel(when, stepSec, barStep, phraseStep, barInPhrase, rootNote, prog, cents, mov);
+    } else if (st.id === 'midnight-monorail') {
+      this._composeMidnightMonorail(when, stepSec, barStep, phraseStep, barInPhrase, rootNote, prog, cents, mov);
+    } else if (st.id === 'sodium-mercury') {
+      this._composeSodiumMercury(when, stepSec, barStep, phraseStep, barInPhrase, rootNote, prog, cents, mov);
+    } else if (st.id === 'foghorn-starlight') {
+      this._composeFoghornStarlight(when, stepSec, barStep, phraseStep, barInPhrase, rootNote, prog, cents, mov);
     } else {
-      this._composeAphexPolygon(when, stepSec, barStep, phraseStep, st, prog, cents);
+      this._composeSkyGardens(when, stepSec, barStep, phraseStep, barInPhrase, rootNote, prog, cents, mov);
     }
 
     this._step16++;
   }
 
-  _composeVangelisBladeRunner(when, stepSec, barStep, phraseStep, st, prog, cents) {
-    // 1. Lush CS-80 polyphonic chord swell + deep sub pedal at start of each 4-bar chord
-    if (phraseStep === 0 || phraseStep === 32) {
+  _composeRainCathedral(when, stepSec, barStep, phraseStep, barInPhrase, rootNote, prog, cents, mov) {
+    if (phraseStep === 0 || (phraseStep === 32 && mov.density > 0.6)) {
       const dur = stepSec * 30;
-      this._triggerSubBass(midiToHz(st.baseNote + prog.bass, cents), when, dur * 0.85, 0.22);
-      const padNotes = prog.pad;
-      for (let i = 0; i < padNotes.length; i++) {
-        const semi = padNotes[i];
-        const pan = ((i / Math.max(1, padNotes.length - 1)) - 0.5) * 1.3;
-        this._triggerCS80Pad(
-          midiToHz(st.baseNote + 12 + semi, cents),
+      this._triggerSubBass(midiToHz(rootNote + prog.bass, cents), when, dur * 0.85, 0.22);
+      const voiceLimit = mov.index === 0 ? Math.min(3, prog.pad.length) : prog.pad.length;
+      for (let i = 0; i < voiceLimit; i++) {
+        const semi = prog.pad[i];
+        const pan = ((i / Math.max(1, voiceLimit - 1)) - 0.5) * 1.3;
+        this._triggerBrassPad(
+          midiToHz(rootNote + 12 + semi, cents),
           when + i * 0.09,
           dur,
-          0.085,
-          { brightness: 0.85 + (i / padNotes.length) * 0.65, pan }
+          0.082 * mov.density,
+          { brightness: (0.75 + (i / voiceLimit) * 0.65) * mov.brightness, pan }
         );
       }
     }
 
-    // 2. Singing portamento CS-80 solo brass melody floating over the rain-soaked skyline
-    if ((barStep === 2 || barStep === 9 || barStep === 13) && this.rnd() < 0.62) {
-      const sc = prog.scale;
-      const pick = sc[Math.floor(this.rnd() * sc.length)];
-      const oct = this.rnd() < 0.35 ? 24 : 12;
-      const midi = st.baseNote + oct + pick;
-      const prevMidi = this._lastLeadMidi ?? (midi - 2);
-      this._lastLeadMidi = midi;
-      const dur = stepSec * (4 + Math.floor(this.rnd() * 6));
-      this._triggerCS80Lead(midiToHz(prevMidi, cents), midiToHz(midi, cents), when, dur, 0.115);
+    if ((barStep === 2 || barStep === 9 || barStep === 13) && this.rnd() < 0.62 * mov.leadMul) {
+      const midi = this._pickPhraseMidi(rootNote, prog.scale, barInPhrase, barStep);
+      if (midi !== null) {
+        const prevMidi = this._lastLeadMidi ?? (midi - 2);
+        this._lastLeadMidi = midi;
+        const dur = stepSec * (4 + Math.floor(this.rnd() * 6));
+        this._triggerRibbonLead(midiToHz(prevMidi, cents), midiToHz(midi, cents), when, dur, 0.115);
+      }
     }
 
-    // 3. Sparse high Deckard apartment glass/chime sparkles into ping-pong hall
-    if (barStep % 4 === 0 && this.rnd() < 0.44 + this._cityAlt01 * 0.25) {
-      const sc = prog.scale;
-      const semi = sc[Math.floor(this.rnd() * sc.length)];
+    // Counter-melody plucked harp in Rising Skyline & Zenith movements
+    if (mov.index >= 1 && mov.index <= 2 && (barStep === 6 || barStep === 14) && this.rnd() < 0.52) {
+      const semi = prog.scale[(this._step16 >> 1) % prog.scale.length];
+      this._triggerPluckedHarp(midiToHz(rootNote + 24 + semi, cents), when, 2.4, 0.075, Math.sin(this._step16) * 0.6);
+    }
+
+    if (barStep % 4 === 0 && this.rnd() < (0.36 + this._cityAlt01 * 0.25) * mov.density) {
+      const semi = prog.scale[Math.floor(this.rnd() * prog.scale.length)];
       this._triggerFMBell(
-        midiToHz(st.baseNote + 24 + semi, cents),
+        midiToHz(rootNote + 24 + semi, cents),
         when,
         3.2,
-        0.075,
-        { ratio: 3.0, index: 1.6, pan: (this.rnd() - 0.5) * 1.4 }
+        0.072,
+        { ratio: 3.0, index: 1.6 * mov.brightness, pan: (this.rnd() - 0.5) * 1.4 }
       );
     }
 
-    // 4. Optional slow hypnotic Blade-Runner timpani/heartbeat pulse when Pulse > 0.2
     if (this.pulse > 0.18) {
       if (barStep === 0 || (barStep === 10 && this.rnd() < 0.55)) {
         this._triggerMicroDrum('kick', when, 0.13);
       }
-      if (barStep % 2 === 0 && this.pulse > 0.45 && this.rnd() < 0.55) {
+      if (barStep % 2 === 0 && this.pulse > 0.45 && mov.rhythmMul > 0.6 && this.rnd() < 0.55) {
         const arpSemi = prog.pad[(this._step16 >> 1) % prog.pad.length];
-        this._triggerAcidSeq(midiToHz(st.baseNote + 12 + arpSemi, cents), when, stepSec * 1.6, 0.065, {
+        this._triggerFilterSeq(midiToHz(rootNote + 12 + arpSemi, cents), when, stepSec * 1.6, 0.065, {
           wave: 'triangle', pan: Math.sin(this._step16 * 0.4) * 0.55,
         });
       }
     }
   }
 
-  _composeAphexSAWDrift(when, stepSec, barStep, phraseStep, st, prog, cents) {
-    // 1. Prime-interval asynchronous Eno/AFX warm pad voices (7.1s, 10.7s, 13.3s, 16.9s)
+  _composeVelvetSublevel(when, stepSec, barStep, phraseStep, barInPhrase, rootNote, prog, cents, mov) {
     const primeDurs = [7.1, 10.7, 13.3, 16.9];
-    for (let v = 0; v < 4; v++) {
-      if (when >= this._sawVoiceNext[v]) {
+    const activeVoices = mov.index === 0 ? 2 : 4;
+    for (let v = 0; v < activeVoices; v++) {
+      if (when >= this._driftVoiceNext[v]) {
         const dur = primeDurs[v] * (0.92 + this.rnd() * 0.18);
-        this._sawVoiceNext[v] = when + dur * 0.78;
+        this._driftVoiceNext[v] = when + dur * 0.78;
         const semi = prog.pad[(v + Math.floor(this.rnd() * 2)) % prog.pad.length];
-        const oct = v === 0 ? 0 : 12;
+        const oct = v === 0 ? 0 : (mov.index === 2 && v === 3 ? 24 : 12);
         const pan = (v - 1.5) * 0.48;
-        this._triggerSAWPad(midiToHz(st.baseNote + oct + semi, cents), when, dur, v === 0 ? 0.14 : 0.095, pan);
+        this._triggerVelvetPad(midiToHz(rootNote + oct + semi, cents), when, dur, v === 0 ? 0.14 : 0.095, pan);
       }
     }
     if (phraseStep === 0) {
-      this._triggerSubBass(midiToHz(st.baseNote + prog.bass, cents), when, stepSec * 28, 0.18);
+      this._triggerSubBass(midiToHz(rootNote + prog.bass, cents), when, stepSec * 28, 0.18);
     }
 
-    // 2. Nostalgic Xtal / Tha soft FM bell pentatonic motif
     const bellMask = (barStep === 0 || barStep === 3 || barStep === 6 || barStep === 10 || barStep === 14);
-    if (bellMask && this.rnd() < 0.58) {
-      const sc = prog.scale;
-      const semi = sc[(barStep + Math.floor(this.rnd() * 3)) % sc.length];
-      this._triggerFMBell(
-        midiToHz(st.baseNote + 24 + semi, cents),
-        when,
-        2.6,
-        0.09,
-        { ratio: 2.0, index: 1.35, pan: Math.cos(this._step16 * 0.37) * 0.65 }
-      );
+    if (bellMask && this.rnd() < 0.55 * mov.leadMul) {
+      const midi = this._pickPhraseMidi(rootNote + 12, prog.scale, barInPhrase, barStep);
+      if (midi !== null) {
+        this._triggerFMBell(
+          midiToHz(midi, cents),
+          when,
+          2.6,
+          0.088,
+          { ratio: mov.bridge ? 3.0 : 2.0, index: 1.35 * mov.brightness, pan: Math.cos(this._step16 * 0.37) * 0.65 }
+        );
+      }
     }
 
-    // 3. Soft SAW 85-92 "Xtal / Ageispolis" dubby sub-pulse when Pulse > 0.12
+    if (mov.index === 2 && barStep === 8 && this.rnd() < 0.6) {
+      const semi = prog.scale[barInPhrase % prog.scale.length];
+      this._triggerBreathFlute(midiToHz(rootNote + 24 + semi, cents), when, stepSec * 8, 0.095, 0.25);
+    }
+
     if (this.pulse > 0.12) {
       if (barStep === 0 || barStep === 10) this._triggerMicroDrum('kick', when, 0.15);
       if (barStep === 4 || barStep === 12) this._triggerMicroDrum('rim', when, 0.10);
@@ -924,78 +1172,82 @@ export class ModularRadioEngine {
     }
   }
 
-  _composeVangelisCosmos(when, stepSec, barStep, phraseStep, st, prog, cents) {
-    // 1. Majestic cosmic brass chord cadence
+  _composeMidnightMonorail(when, stepSec, barStep, phraseStep, barInPhrase, rootNote, prog, cents, mov) {
     if (phraseStep === 0 || phraseStep === 16) {
-      this._triggerSubBass(midiToHz(st.baseNote + prog.bass, cents), when, stepSec * 15, 0.21);
+      this._triggerSubBass(midiToHz(rootNote + prog.bass, cents), when, stepSec * 15, 0.21);
       if (phraseStep === 0) {
         for (let i = 0; i < prog.pad.length; i++) {
-          this._triggerCS80Pad(
-            midiToHz(st.baseNote + 12 + prog.pad[i], cents),
+          this._triggerBrassPad(
+            midiToHz(rootNote + 12 + prog.pad[i], cents),
             when + i * 0.05,
             stepSec * 28,
-            0.075,
-            { brightness: 1.25, pan: ((i / prog.pad.length) - 0.5) * 1.2 }
+            0.072 * mov.density,
+            { brightness: 1.2 * mov.brightness, pan: ((i / prog.pad.length) - 0.5) * 1.2 }
           );
         }
       }
     }
 
-    // 2. Signature Spiral / Albedo 0.39 16th-note analog filter sequencer arpeggiator!
-    const seqProb = Math.min(1, 0.25 + this.pulse * 0.9);
+    // Evolving arpeggio patterns across movements!
+    const patterns = [
+      [0, 1, 2, 1],
+      [0, 2, 1, 3, 4, 2, 3, 1],
+      [0, 3, 2, 4, 1, 5, 3, 2],
+      [4, 2, 1, 0, 2, 1, 0, 1],
+    ];
+    const pat = patterns[mov.index % patterns.length];
+    const seqProb = Math.min(1, (0.20 + this.pulse * 0.85) * mov.density);
     if (this.rnd() < seqProb) {
-      const pat = [0, 2, 1, 3, 4, 2, 3, 1];
       const noteIdx = pat[barStep % pat.length] % prog.pad.length;
-      const oct = (barStep % 8 === 4) ? 24 : 12;
-      const hz = midiToHz(st.baseNote + oct + prog.pad[noteIdx], cents);
+      const oct = (barStep % 8 === 4 || (mov.index === 2 && barStep % 4 === 2)) ? 24 : 12;
+      const hz = midiToHz(rootNote + oct + prog.pad[noteIdx], cents);
       const accent = (barStep % 4 === 0);
-      this._triggerAcidSeq(hz, when, stepSec * 0.85, 0.11, {
+      this._triggerFilterSeq(hz, when, stepSec * 0.85, 0.11, {
         accent,
-        wave: 'sawtooth',
+        wave: mov.bridge ? 'square' : 'sawtooth',
         pan: ((barStep % 2 === 0) ? -1 : 1) * 0.42,
       });
     }
 
-    // 3. Soaring cosmic brass theme on upper octave
-    if ((barStep === 0 || barStep === 6) && phraseStep >= 16 && this.rnd() < 0.55) {
-      const sc = prog.scale;
-      const midi = st.baseNote + 24 + sc[Math.floor(this.rnd() * sc.length)];
-      const prev = this._lastLeadMidi ?? midi;
-      this._lastLeadMidi = midi;
-      this._triggerCS80Lead(midiToHz(prev, cents), midiToHz(midi, cents), when, stepSec * 6, 0.11);
+    if ((barStep === 0 || barStep === 6) && phraseStep >= 16 && this.rnd() < 0.58 * mov.leadMul) {
+      const midi = this._pickPhraseMidi(rootNote + 12, prog.scale, barInPhrase, barStep);
+      if (midi !== null) {
+        const prev = this._lastLeadMidi ?? midi;
+        this._lastLeadMidi = midi;
+        this._triggerRibbonLead(midiToHz(prev, cents), midiToHz(midi, cents), when, stepSec * 6, 0.11);
+      }
     }
 
     if (this.pulse > 0.25) {
       if (barStep % 4 === 0) this._triggerMicroDrum('kick', when, 0.14);
+      if (barStep === 4 || barStep === 12) this._triggerMicroDrum('rim', when, 0.09);
       if (barStep % 2 === 1) this._triggerMicroDrum('hat', when, 0.08);
     }
   }
 
-  _composeAphexPolygon(when, stepSec, barStep, phraseStep, st, prog, cents) {
-    // 1. Nostalgic detuned BoC/AFX ambient chord bed
+  _composeSodiumMercury(when, stepSec, barStep, phraseStep, barInPhrase, rootNote, prog, cents, mov) {
     if (phraseStep === 0 || phraseStep === 32) {
-      this._triggerSubBass(midiToHz(st.baseNote + prog.bass, cents), when, stepSec * 15, 0.20);
+      this._triggerSubBass(midiToHz(rootNote + prog.bass, cents), when, stepSec * 15, 0.20);
       for (let i = 0; i < prog.pad.length; i++) {
-        this._triggerSAWPad(
-          midiToHz(st.baseNote + 12 + prog.pad[i], cents),
+        this._triggerVelvetPad(
+          midiToHz(rootNote + 12 + prog.pad[i], cents),
           when + i * 0.04,
           stepSec * 30,
-          0.082,
+          0.080 * mov.density,
           ((i % 2 === 0) ? -1 : 1) * 0.52
         );
       }
     }
 
-    // 2. Melodic Analord 303 resonant bubble counterline with slides & accents
-    const acidSteps = [0, 3, 4, 6, 7, 9, 11, 12, 14, 15];
-    if (acidSteps.includes(barStep) && this.rnd() < (0.35 + this.pulse * 0.65)) {
+    const acidSteps = mov.index === 0 ? [0, 6, 12] : [0, 3, 4, 6, 7, 9, 11, 12, 14, 15];
+    if (acidSteps.includes(barStep) && this.rnd() < (0.32 + this.pulse * 0.65) * mov.density) {
       const sc = prog.scale;
-      const semi = sc[(barStep * 3 + Math.floor(this.rnd() * 3)) % sc.length];
-      const oct = this.rnd() < 0.32 ? 24 : 12;
-      const hz = midiToHz(st.baseNote + oct + semi, cents);
+      const semi = sc[(barStep * 3 + this._motifDegs[barStep % 4]) % sc.length];
+      const oct = this.rnd() < (mov.index === 2 ? 0.45 : 0.28) ? 24 : 12;
+      const hz = midiToHz(rootNote + oct + semi, cents);
       const prevHz = this._lastLeadMidi ? midiToHz(this._lastLeadMidi, cents) : null;
-      this._lastLeadMidi = st.baseNote + oct + semi;
-      this._triggerAcidSeq(hz, when, stepSec * (this.rnd() < 0.35 ? 1.7 : 0.78), 0.115, {
+      this._lastLeadMidi = rootNote + oct + semi;
+      this._triggerFilterSeq(hz, when, stepSec * (this.rnd() < 0.35 ? 1.7 : 0.78), 0.115, {
         accent: this.rnd() < 0.38,
         wave: this.rnd() < 0.5 ? 'sawtooth' : 'square',
         slideFrom: this.rnd() < 0.42 ? prevHz : null,
@@ -1003,33 +1255,114 @@ export class ModularRadioEngine {
       });
     }
 
-    // 3. Crystalline high bell harmonics
-    if ((barStep === 2 || barStep === 11) && this.rnd() < 0.55) {
+    if ((barStep === 2 || barStep === 11) && this.rnd() < 0.55 * mov.leadMul) {
       const semi = prog.scale[Math.floor(this.rnd() * prog.scale.length)];
-      this._triggerFMBell(midiToHz(st.baseNote + 24 + semi, cents), when, 2.1, 0.085, {
-        ratio: 1.4142, index: 1.9, pan: (this.rnd() - 0.5) * 1.2,
+      this._triggerFMBell(midiToHz(rootNote + 24 + semi, cents), when, 2.1, 0.085, {
+        ratio: 1.4142, index: 1.9 * mov.brightness, pan: (this.rnd() - 0.5) * 1.2,
       });
     }
 
-    // 4. Intricate Braindance IDM micro-percussion + occasional 32nd-note hi-hat/snare ratchets!
     if (this.pulse > 0.08) {
       if (barStep === 0 || barStep === 7 || (barStep === 10 && this.rnd() < 0.65)) {
         this._triggerMicroDrum('kick', when, 0.16);
       }
       if (barStep === 4 || barStep === 12 || (barStep === 15 && this.rnd() < 0.45)) {
         this._triggerMicroDrum('snare', when, 0.12);
-        // Probabilistic AFX micro-ratchet
-        if (this.pulse > 0.65 && this.rnd() < 0.32) {
+        if (this.pulse > 0.65 && mov.index === 2 && this.rnd() < 0.35) {
           this._triggerMicroDrum('rim', when + stepSec * 0.33, 0.08);
           this._triggerMicroDrum('rim', when + stepSec * 0.66, 0.06);
         }
       }
       if (this.rnd() < 0.68) {
         this._triggerMicroDrum('hat', when, 0.085);
-        if (this.pulse > 0.75 && this.rnd() < 0.25) {
-          this._triggerMicroDrum('hat', when + stepSec * 0.5, 0.055);
-        }
       }
+    }
+  }
+
+  _composeFoghornStarlight(when, stepSec, barStep, phraseStep, barInPhrase, rootNote, prog, cents, mov) {
+    // Deep oceanic harbor drone + fifth organ pads
+    if (phraseStep === 0 || phraseStep === 32) {
+      const dur = stepSec * 32;
+      this._triggerSubBass(midiToHz(rootNote + prog.bass, cents), when, dur, 0.24);
+      for (let i = 0; i < prog.pad.length; i++) {
+        this._triggerVelvetPad(
+          midiToHz(rootNote + 12 + prog.pad[i], cents),
+          when + i * 0.14,
+          dur * 1.05,
+          0.09 * mov.density,
+          ((i / Math.max(1, prog.pad.length - 1)) - 0.5) * 1.2
+        );
+      }
+    }
+
+    // Distant foghorn brass call in low-mid register
+    if (phraseStep === 8 && this.rnd() < 0.72) {
+      const fogHz = midiToHz(rootNote + prog.pad[0], cents);
+      this._triggerBrassPad(fogHz, when, stepSec * 14, 0.11, { brightness: 0.55, pan: -0.35 });
+    }
+
+    // Breath flute horizon melody
+    if ((barStep === 0 || barStep === 10) && this.rnd() < 0.58 * mov.leadMul) {
+      const midi = this._pickPhraseMidi(rootNote + 12, prog.scale, barInPhrase, barStep);
+      if (midi !== null) {
+        this._triggerBreathFlute(midiToHz(midi, cents), when, stepSec * 9, 0.105, (this.rnd() - 0.5) * 0.7);
+      }
+    }
+
+    // Starlight high harmonic chimes
+    if (barStep % 6 === 0 && this.rnd() < 0.52 * mov.density) {
+      const semi = prog.scale[Math.floor(this.rnd() * prog.scale.length)];
+      this._triggerFMBell(midiToHz(rootNote + 24 + semi, cents), when, 3.8, 0.068, {
+        ratio: 2.0, index: 1.15, pan: (this.rnd() - 0.5) * 1.5,
+      });
+    }
+
+    if (this.pulse > 0.22 && barStep === 0) {
+      this._triggerMicroDrum('kick', when, 0.12);
+    }
+  }
+
+  _composeSkyGardens(when, stepSec, barStep, phraseStep, barInPhrase, rootNote, prog, cents, mov) {
+    if (phraseStep === 0 || phraseStep === 32) {
+      this._triggerSubBass(midiToHz(rootNote + prog.bass, cents), when, stepSec * 26, 0.19);
+      for (let i = 0; i < prog.pad.length; i++) {
+        this._triggerVelvetPad(
+          midiToHz(rootNote + 12 + prog.pad[i], cents),
+          when + i * 0.06,
+          stepSec * 28,
+          0.078 * mov.density,
+          ((i % 2 === 0) ? -1 : 1) * 0.45
+        );
+      }
+    }
+
+    // Interlocking pentatonic plucked harp-bell ostinato
+    const harpMask = (barStep % 3 === 0 || barStep === 8 || barStep === 14);
+    if (harpMask && this.rnd() < (0.48 + this.pulse * 0.35) * mov.density) {
+      const sc = prog.scale;
+      const idx = (barStep + this._motifDegs[barInPhrase % 4]) % sc.length;
+      const oct = (barStep % 6 === 0 && mov.index >= 1) ? 24 : 12;
+      this._triggerPluckedHarp(
+        midiToHz(rootNote + oct + sc[idx], cents),
+        when,
+        2.1,
+        0.105,
+        Math.sin(this._step16 * 0.52) * 0.65
+      );
+    }
+
+    // Singing flute descant in Rising Skyline & Zenith
+    if ((barStep === 4 || barStep === 12) && mov.index >= 1 && this.rnd() < 0.52 * mov.leadMul) {
+      const midi = this._pickPhraseMidi(rootNote + 12, prog.scale, barInPhrase, barStep);
+      if (midi !== null) {
+        this._triggerBreathFlute(midiToHz(midi, cents), when, stepSec * 7, 0.098, (this.rnd() - 0.5) * 0.55);
+      }
+    }
+
+    if (this.pulse > 0.14) {
+      if (barStep === 0 || barStep === 10) this._triggerMicroDrum('kick', when, 0.13);
+      if (barStep === 6 || barStep === 12) this._triggerMicroDrum('rim', when, 0.095);
+      if (barStep % 2 === 0 && this.rnd() < 0.55) this._triggerMicroDrum('hat', when, 0.075);
     }
   }
 
@@ -1038,7 +1371,6 @@ export class ModularRadioEngine {
   start() {
     this.playing = true;
     if (!this._initGraph()) {
-      // Headless / JSDOM fallback: track playback state & chord evolution cleanly without Web Audio
       return true;
     }
     if (this.ctx.state === 'suspended' && typeof this.ctx.resume === 'function') {
@@ -1046,7 +1378,7 @@ export class ModularRadioEngine {
     }
     const now = this.ctx.currentTime;
     this._nextStepTime = now + 0.04;
-    this._sawVoiceNext = [now + 0.05, now + 1.8, now + 3.4, now + 5.1];
+    this._driftVoiceNext = [now + 0.05, now + 1.8, now + 3.4, now + 5.1];
     this._syncBusLevels();
     return true;
   }
@@ -1071,6 +1403,9 @@ export class ModularRadioEngine {
     this.stationIndex = ((Math.round(index) % n) + n) % n;
     this._chordIdx = 0;
     this._step16 = 0;
+    this._barCount = 0;
+    this._movementIdx = 0;
+    this._evolutionPhase = 0;
     this._lastLeadMidi = null;
     const st = this.station;
     this._currentChordName = st.progressions[0].name;
@@ -1081,7 +1416,7 @@ export class ModularRadioEngine {
     }
     if (this.ctx) {
       const now = this.ctx.currentTime;
-      this._sawVoiceNext = [now + 0.06, now + 1.4, now + 2.9, now + 4.5];
+      this._driftVoiceNext = [now + 0.06, now + 1.4, now + 2.9, now + 4.5];
       this._nextStepTime = Math.min(this._nextStepTime, now + 0.08);
     }
     this._syncBusLevels();
@@ -1096,7 +1431,11 @@ export class ModularRadioEngine {
     this.seed = (newSeed ?? ((Math.random() * 0xffffffff) >>> 0)) >>> 0;
     this.rnd = mulberry32(this.seed ^ 0x51f2d39b);
     this._step16 = 0;
+    this._barCount = 0;
     this._chordIdx = 0;
+    this._movementIdx = 0;
+    this._cycleCount = 0;
+    this._modalShift = 0;
   }
 
   setParams({ volume, space, warmth, pulse, cityReact } = {}) {
@@ -1114,7 +1453,7 @@ export class ModularRadioEngine {
   setPulse(v) { this.setParams({ pulse: v }); }
   setCityReactivity(v) { this.setParams({ cityReact: v }); }
 
-  /** Advance lookahead scheduler + couple live city telemetry into modular filters & space bus. */
+  /** Advance lookahead scheduler + macro-evolution + live city telemetry coupling. */
   update(dt = 0.016, telemetry = null) {
     if (telemetry) {
       if (telemetry.altitude !== undefined) {
@@ -1135,17 +1474,11 @@ export class ModularRadioEngine {
     if (!this.playing) return;
 
     if (!this.ctx) {
-      // Headless / JSDOM deterministic step progression
       const stepSec = 60 / this.station.bpm / 4;
-      if (this._simPhase >= stepSec) {
-        this._simPhase = 0;
-        const st = this.station;
+      while (this._simPhase >= stepSec) {
+        this._simPhase -= stepSec;
+        this._advanceMacroEvolution(this.station);
         this._step16++;
-        const chordSteps = (st.id === 'vangelis-bladerunner' || st.id === 'aphex-saw-drift') ? 64 : 32;
-        if (this._step16 % chordSteps === 0) {
-          this._chordIdx = (this._chordIdx + 1) % st.progressions.length;
-        }
-        this._currentChordName = st.progressions[this._chordIdx % st.progressions.length].name;
       }
       return;
     }
@@ -1175,7 +1508,6 @@ export class ModularRadioEngine {
     g.fillStyle = 'rgba(6, 10, 20, 0.88)';
     g.fillRect(0, 0, w, h);
 
-    // Subtle horizontal graticule
     g.strokeStyle = 'rgba(255, 255, 255, 0.06)';
     g.lineWidth = 1;
     g.beginPath();
@@ -1205,7 +1537,6 @@ export class ModularRadioEngine {
       g.fillRect(6 + i * bw, h - 4 - bh, Math.max(2, bw - 2.2), bh);
     }
 
-    // Floating oscilloscope trace
     g.globalAlpha = this.playing ? 0.92 : 0.35;
     g.strokeStyle = '#eef4ff';
     g.lineWidth = 1.35;

@@ -40,9 +40,19 @@ instead of hanging — and `npm test` includes a headless boot smoke test
 | `E` / `Q` (or `Space`) | up / down |
 | `Shift` | speed boost |
 | mouse wheel | dolly in/out (or adjust glide speed) |
-| `G` | toggle **Glide mode** (banked forward cruise + scenic autopilot nodes) |
+| `G` | toggle **Autopilot Glide mode** (smooth route cruise; drag or `A`/`D` trims course smoothly; wheel down to `0` hovers) |
+| `O` | toggle **Autopilot POI Auto-Look** (smoothly gaze around at landmarks & vistas while slowly drifting or hovering) |
+| `L` | toggle **Freelook** (decouple camera gaze from travel heading) |
+| `M` | toggle **Generative Synth Radio** (6 original stations with 4-movement symphonic evolution, 100% pure code) |
+| `V` | toggle **Anticipatory Obstacle Avoidance** |
 | `C` | toggle **Collision detection** (solid buildings & traffic spacing vs noclip) |
 | `H` | hide / show the UI |
+| Minimap Click | queue a smooth Autopilot flight route to any site or map pin (`Shift+Click` appends multi-stop routes) |
+
+## Documentation & WebMCP Movie-Set API
+
+- **[`DOCS.md`](./DOCS.md)** — Complete system architecture & technical reference (hydrology, 5 high-frequency water shaders, wind-guided 4D volumetric clouds, twin-headlight fleet, beam/holo-projector optics, 2nd-order turn damping, and 4-movement generative synthesizer).
+- **[`WEBMCP.md`](./WEBMCP.md)** — Full AI Agent & Programmable Movie-Set Guide (`navigator.modelContext` WebMCP, `window.petacity` SDK, and `window.postMessage` RPC): raycast what the camera is looking at, run scripted dolly/orbit/chase shots, take over any skyscraper's lights + wrap 4-sided LED window-matrix messages around facades, hijack billboards, project holograms + terminating light cones in front of the camera, and puppeteer cars.
 
 The **Look** chips restyle the same city instantly. The tuning sliders scale
 window density, window glow and fog on top of any look. **Environment → Time**
@@ -122,8 +132,13 @@ src/city.js         the scaffolding: streets, lots, tower stacks, landmarks, lan
 src/shaders.js      GLSL: sky dome, ground grid, instanced towers w/ windows, landmarks, beacons
 src/looks.js        look presets (sky, fog, light, tower, ground, post) + authored hours
 src/scene.js        three.js scene layer: look/time -> uniforms, landmarks, traffic, beacons
-src/controls.js     fly camera
-src/main.js         wiring: renderer, UI, render loop
+src/controls.js     6-DOF flight physics, 2nd-order turn damper, POI Auto-Look & smooth route queue
+src/minimap.js      interactive radar/city map with dry-land street clipping & live route visualization
+src/recorder.js     C2 camera path recorder, non-destructive spline smoother & PNG/WebM exporter
+src/audio.js        pure-code Web Audio synth radio (6 original stations + 4-movement evolution)
+src/director.js     MovieSetDirector: 3D raycast perception, camera scripts & world takeovers
+src/webmcp.js       WebMCP (`navigator.modelContext`), `window.petacity` & `postMessage` bridge
+src/main.js         wiring: renderer, UI, state sync, WebMCP & render loop
 vendor/three.module.js  three.js r170 (vendored, no CDN)
 ```
 

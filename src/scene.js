@@ -2,7 +2,7 @@
 // layer runs (and is tested) in Node against real three.js.
 import * as THREE from '../vendor/three.module.js';
 import {
-  generateCity, makeCityCollider, isPointInWater, CELL, AVENUE, STREET,
+  generateCity, makeCityCollider, isPointInWater, evalRiverSignedDist, CELL, AVENUE, STREET,
   WATER_MODE_NAMES, TERRAIN_MODE_NAMES,
 } from './city.js';
 import { hash2i } from './prng.js';
@@ -20,6 +20,14 @@ import {
 } from './shaders.js';
 
 export { WATER_MODE_NAMES, TERRAIN_MODE_NAMES };
+
+export const WATER_SHADER_NAMES = [
+  'Capillary Micro-Facet Sea (Default)',
+  'Diamond Wind-Chop & Glitter',
+  'Crystalline Caustic Filigree',
+  'Storm Swell & Whitecap Spray',
+  'Obsidian Silk & Mirror Filaments',
+];
 
 export const col = (hex) => new THREE.Color(hex);
 
@@ -131,15 +139,24 @@ export function makeUniforms() {
     uBillMono: { value: 0 },
     uWaterDeep: { value: col('#0c2033') },
     uWaterShallow: { value: col('#2a6a8c') },
+    uWaterShader: { value: 0.0 },
     uWaterScale: { value: 1.0 },
     uWaterChop: { value: 1.0 },
     uWaterFoam: { value: 0.85 },
     uWaterRefl: { value: 1.15 },
     uWaterContrast: { value: 0.12 },
     uWaterWarp: { value: 0.40 },
+    uWindAngle: { value: 0.52 },
+    uWindStrength: { value: 1.0 },
     uTint: { value: 0.72 },
     uWaterAmt: { value: 1.0 },
     uShoreDist: { value: 1.0 },
+    uRiverOrigin: { value: new THREE.Vector4(0, 0, 0.7, 4800) },
+    uRiverShape: { value: new THREE.Vector4(0, 1.0, 0.0, 0.0) },
+    uLagoon: { value: new THREE.Vector4(0, 0, 0, 0) },
+    uPondCenter: { value: new THREE.Vector2(0, 0) },
+    uOverrideBldg: { value: new THREE.Vector4(0, 0, 0, 0) },
+    uOverrideColor: { value: col('#ff3366') },
     uCloudSeed: { value: 0.0 },
     uCloudEvol: { value: 0.35 },
     uCloudLac: { value: 2.08 },
@@ -314,6 +331,7 @@ export function makeWorld(U) {
       'uZen', 'uHor', 'uSkySunCol', 'uSunDir', 'uSolarDir', 'uCloudCol', 'uStars', 'uStarRot',
       'uCloud', 'uCloudType', 'uCloudStyle', 'uCloudSeed', 'uCloudEvol', 'uCloudLac', 'uCloudElev', 'uCloudRange',
       'uCloudLayerElev', 'uCloudLayerThick', 'uCloudLayerDens',
+      'uWindAngle', 'uWindStrength',
       'uHaze', 'uTime', 'uSunGlow', 'uSat', 'uMoonDir', 'uMoonSize', 'uMoonGlow', 'uMoonPhase',
       'uFlash', 'uWorldCurve', 'uPlanetR',
     ]),
@@ -330,6 +348,7 @@ export function makeWorld(U) {
       'uGStreet', 'uGBlock', 'uGLine', 'uGLineGlow', 'uCell', 'uAve', 'uSt',
       'uCitySpan', 'uSuburbSpan', 'uGroundRadius',
       'uWaterMode', 'uWaterAmt', 'uShoreDist', 'uTerrainMode', 'uTerrainScale', 'uCoastAngle', 'uTerrainSeed',
+      'uRiverOrigin', 'uRiverShape', 'uLagoon', 'uPondCenter',
       'uWorldCurve', 'uPlanetR',
       'uSunDir', 'uFogCol', 'uSunFogCol', 'uFogDensity', 'uFogHeight', 'uHazeSun', 'uSat',
       'uWetness', 'uPoolCol', 'uBillA', 'uLightK',
@@ -349,6 +368,7 @@ export function makeWorld(U) {
       'uCloudCol', 'uSkySunCol', 'uSunDir', 'uFogCol', 'uSunFogCol', 'uHazeSun',
       'uCloud', 'uCloudType', 'uCloudStyle', 'uCloudSeed', 'uCloudEvol', 'uCloudLac', 'uCloudElev', 'uCloudRange',
       'uCloudLayerElev', 'uCloudLayerThick', 'uCloudLayerDens',
+      'uWindAngle', 'uWindStrength',
       'uSunGlow', 'uTime', 'uSat',
       'uPoolCol', 'uLightK', 'uWorldCurve', 'uPlanetR',
     ]),
@@ -368,6 +388,7 @@ export function makeWorld(U) {
       'uFogCol', 'uSunFogCol', 'uFogDensity', 'uFogHeight', 'uHazeSun', 'uTime', 'uDayPhase', 'uSat',
       'uBillA', 'uBillB', 'uBillK', 'uBillMono',
       'uSignAmt', 'uMegaWrap', 'uGlyphStyle', 'uSignAnim',
+      'uOverrideBldg', 'uOverrideColor',
       'uPoolCol', 'uLightK',
       'uWorldCurve', 'uPlanetR',
     ]),
@@ -435,11 +456,13 @@ export function makeWorld(U) {
     vertexShader: WATER_VERT,
     fragmentShader: WATER_FRAG,
     uniforms: pick(U, [
-      'uWaterDeep', 'uWaterShallow',
+      'uWaterDeep', 'uWaterShallow', 'uWaterShader',
       'uWaterScale', 'uWaterChop', 'uWaterFoam', 'uWaterRefl', 'uWaterContrast', 'uWaterWarp',
+      'uWindAngle', 'uWindStrength',
       'uSunDir', 'uSkySunCol', 'uFogCol', 'uSunFogCol',
       'uCitySpan', 'uSuburbSpan', 'uGroundRadius',
       'uWaterMode', 'uWaterAmt', 'uShoreDist', 'uTerrainMode', 'uTerrainScale', 'uCoastAngle', 'uTerrainSeed',
+      'uRiverOrigin', 'uRiverShape', 'uLagoon', 'uPondCenter',
       'uPoolCol', 'uLightK', 'uShipWakes',
       'uHazeSun', 'uTime', 'uSat', 'uWorldCurve', 'uPlanetR',
     ]),
@@ -549,6 +572,30 @@ export function syncCityEnvironmentUniforms(U, city) {
   if (U.uTerrainScale) U.uTerrainScale.value = city.terrainScale ?? 1;
   if (U.uCoastAngle) U.uCoastAngle.value = city.coastAngle ?? 0.7;
   if (U.uTerrainSeed) U.uTerrainSeed.value.set(city.terrainSeedX ?? 0, city.terrainSeedZ ?? 0);
+  if (U.uWindAngle && city.seed !== undefined) {
+    // Coherent prevailing atmospheric wind azimuth derived from coastal sea-breeze + seed
+    U.uWindAngle.value = ((city.coastAngle ?? 0.7) + Math.PI * 0.78 + (hash2i(11, 47, city.seed) - 0.5) * 0.45) % (Math.PI * 2);
+  }
+  const rf = city.riverFlow;
+  if (U.uRiverOrigin && U.uRiverShape) {
+    if (rf && rf.active) {
+      U.uRiverOrigin.value.set(rf.startX || 0, rf.startZ || 0, rf.rAng || 0, rf.maxLen || 4800);
+      U.uRiverShape.value.set(rf.latBias || 0, rf.amtScale || 1, 1.0, rf.oceanMouth ? 1.0 : 0.0);
+    } else {
+      U.uRiverShape.value.set(0, 1, 0, 0);
+    }
+  }
+  if (U.uLagoon) {
+    const lg = city.lagoon;
+    const pd = city.pond;
+    U.uLagoon.value.set(
+      lg && lg.active ? lg.x : 0,
+      lg && lg.active ? lg.z : 0,
+      lg && lg.active ? lg.r : 0,
+      pd && pd.active ? pd.r : 0
+    );
+    if (U.uPondCenter) U.uPondCenter.value.set(pd && pd.active ? pd.x : 0, pd && pd.active ? pd.z : 0);
+  }
 }
 
 /** Grow a city and return { city, mesh, collider } — caller swaps the mesh in the scene. */
@@ -1458,13 +1505,22 @@ function mergeParts(parts) {
  * tight lens aperture at y=0 to a wide shaft at y=length, carrying both `uv`
  * (read by BEAM_VERT) and `aBeamT`/`aBeamW` falloff attributes.
  */
-function beamGeometry(length, width) {
-  const hw0 = Math.max(0.25, width * 0.085);
-  const hw1 = width * 0.54;
+function beamGeometry(length, width, opts = null) {
+  const o = opts || {};
+  const hw0 = Math.max(0.18, width * (o.hw0Mul ?? 0.085));
+  const hw1Z = o.hw1Z !== undefined ? o.hw1Z : width * 0.54;
+  const hw1X = o.hw1X !== undefined ? o.hw1X : width * 0.54;
+  const arch = o.archetype ?? 0;
+  const gain = o.gain ?? 1.0;
+  const falloff = o.falloff ?? 1.35;
+  const phase = o.phase ?? 0.0;
+  const tint = o.tint || [0, 0, 0];
   const pos = [];
   const uvs = [];
   const bt = [];
   const bw = [];
+  const meta = [];
+  const tints = [];
   const quad = (corners) => {
     const idx = [0, 1, 2, 0, 2, 3];
     for (const k of idx) {
@@ -1472,27 +1528,192 @@ function beamGeometry(length, width) {
       uvs.push(corners[k].w, corners[k].t);
       bt.push(corners[k].t);
       bw.push(corners[k].w);
+      meta.push(arch, gain, falloff, phase);
+      tints.push(tint[0], tint[1], tint[2]);
     }
   };
   // quad A: spans z (flared spotlight cone)
   quad([
     { p: [0, 0, -hw0], t: 0, w: 0 },
     { p: [0, 0, hw0], t: 0, w: 1 },
-    { p: [0, length, hw1], t: 1, w: 1 },
-    { p: [0, length, -hw1], t: 1, w: 0 },
+    { p: [0, length, hw1Z], t: 1, w: 1 },
+    { p: [0, length, -hw1Z], t: 1, w: 0 },
   ]);
   // quad B: spans x (flared spotlight cone)
   quad([
     { p: [-hw0, 0, 0], t: 0, w: 0 },
     { p: [hw0, 0, 0], t: 0, w: 1 },
-    { p: [hw1, length, 0], t: 1, w: 1 },
-    { p: [-hw1, length, 0], t: 1, w: 0 },
+    { p: [hw1X, length, 0], t: 1, w: 1 },
+    { p: [-hw1X, length, 0], t: 1, w: 0 },
   ]);
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
   g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
   g.setAttribute('aBeamT', new THREE.BufferAttribute(new Float32Array(bt), 1));
   g.setAttribute('aBeamW', new THREE.BufferAttribute(new Float32Array(bw), 1));
+  g.setAttribute('aBeamMeta', new THREE.BufferAttribute(new Float32Array(meta), 4));
+  g.setAttribute('aBeamTint', new THREE.BufferAttribute(new Float32Array(tints), 3));
+  return g;
+}
+
+/**
+ * Paired left/right forward headlight cones rooted at X = 0 (vehicle nose plane)
+ * and offset to exact lateral ±lampSepZ sockets (with natural slight toe-out & road pitch),
+ * eliminating the unnatural single centered hood-nose cone!
+ */
+function twinHeadlightGeometry(V) {
+  const parts = V.parts();
+  let noseX = 0;
+  let lampY = -0.05;
+  let sepZ = 0;
+  let maxHalfZ = 0.75;
+  for (const pt of parts) {
+    const px = (pt.x || 0) + (pt.w || 0) * 0.5;
+    if (px > noseX) noseX = px;
+    const hz = Math.abs(pt.z || 0) + (pt.d || 0) * 0.5;
+    if (hz > maxHalfZ) maxHalfZ = hz;
+    if (pt.role === 3 && Math.abs(pt.z || 0) > sepZ) {
+      sepZ = Math.abs(pt.z);
+      lampY = pt.y || 0;
+    }
+  }
+  if (sepZ < 0.25) sepZ = maxHalfZ * 0.68;
+
+  const len = V.beamLen || 22;
+  const coneW = (V.beamW || 5.2) * 0.56;
+  const hw0 = Math.max(0.14, coneW * 0.11);
+  const hw1 = coneW * 0.52;
+  const pos = [];
+  const uvs = [];
+  const bt = [];
+  const bw = [];
+  const meta = [];
+  const tints = [];
+  const pushQuad = (corners) => {
+    const idx = [0, 1, 2, 0, 2, 3];
+    for (const k of idx) {
+      pos.push(...corners[k].p);
+      uvs.push(corners[k].w, corners[k].t);
+      bt.push(corners[k].t);
+      bw.push(corners[k].w);
+      meta.push(0, 0.92, 1.55, 0);
+      tints.push(0, 0, 0);
+    }
+  };
+  for (const side of [-1, 1]) {
+    const z0 = side * sepZ;
+    const zEnd = z0 + side * len * 0.045; // subtle outward road shoulder spread
+    const yEnd = lampY - len * 0.032;     // subtle downward dip onto street
+    // Horizontal ribbon of this headlamp cone
+    pushQuad([
+      { p: [0, lampY, z0 - hw0], t: 0, w: 0 },
+      { p: [0, lampY, z0 + hw0], t: 0, w: 1 },
+      { p: [len, yEnd, zEnd + hw1], t: 1, w: 1 },
+      { p: [len, yEnd, zEnd - hw1], t: 1, w: 0 },
+    ]);
+    // Vertical ribbon of this headlamp cone
+    pushQuad([
+      { p: [0, lampY - hw0, z0], t: 0, w: 0 },
+      { p: [0, lampY + hw0, z0], t: 0, w: 1 },
+      { p: [len, yEnd + hw1 * 0.72, zEnd], t: 1, w: 1 },
+      { p: [len, yEnd - hw1 * 0.72, zEnd], t: 1, w: 0 },
+    ]);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
+  g.setAttribute('aBeamT', new THREE.BufferAttribute(new Float32Array(bt), 1));
+  g.setAttribute('aBeamW', new THREE.BufferAttribute(new Float32Array(bw), 1));
+  g.setAttribute('aBeamMeta', new THREE.BufferAttribute(new Float32Array(meta), 4));
+  g.setAttribute('aBeamTint', new THREE.BufferAttribute(new Float32Array(tints), 3));
+  g.userData.noseX = noseX + 0.12;
+  return g;
+}
+
+/** Paired left/right crimson taillight trail geometry so rear light trails emit from twin tail lamps. */
+function twinTrailGeometry() {
+  const left = new THREE.BoxGeometry(1, 0.42, 0.24);
+  left.translate(0, 0, -0.36);
+  const right = new THREE.BoxGeometry(1, 0.42, 0.24);
+  right.translate(0, 0, 0.36);
+  const lNI = left.toNonIndexed();
+  const rNI = right.toNonIndexed();
+  const lp = lNI.getAttribute('position').array;
+  const rp = rNI.getAttribute('position').array;
+  const ln = lNI.getAttribute('normal').array;
+  const rn = rNI.getAttribute('normal').array;
+  const lu = lNI.getAttribute('uv').array;
+  const ru = rNI.getAttribute('uv').array;
+  const pos = new Float32Array(lp.length + rp.length);
+  pos.set(lp, 0); pos.set(rp, lp.length);
+  const nrm = new Float32Array(ln.length + rn.length);
+  nrm.set(ln, 0); nrm.set(rn, ln.length);
+  const uvs = new Float32Array(lu.length + ru.length);
+  uvs.set(lu, 0); uvs.set(ru, lu.length);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  return g;
+}
+
+/**
+ * Volumetric 3D optical projector frustum (`archetype = 4` in BEAM_FRAG) originating
+ * at physical projector lens `(ex, ey, ez)` (`vT = 0`) and terminating directly onto
+ * the 4 corners of hologram `H` (`vT = 1`)!
+ */
+export function projectorFrustumGeometry(ex, ey, ez, H, phase = 0, tint = [0.32, 0.88, 1.0]) {
+  const cy = Math.cos(H.rot || 0);
+  const sy = Math.sin(H.rot || 0);
+  const hw = (H.w || 24) * 0.48;
+  const hh = (H.h || 18) * 0.48;
+  // Local X axis of hologram rotated by H.rot around Y: (cy, 0, -sy)
+  const corner = (sx, syOff) => [
+    H.x + cy * (sx * hw),
+    H.y + syOff * hh,
+    H.z - sy * (sx * hw),
+  ];
+  const tl = corner(-1, 1);
+  const tr = corner(1, 1);
+  const br = corner(1, -1);
+  const bl = corner(-1, -1);
+  const ap = 0.42;
+  const eTL = [ex - cy * ap, ey + ap * 0.6, ez + sy * ap];
+  const eTR = [ex + cy * ap, ey + ap * 0.6, ez - sy * ap];
+  const eBR = [ex + cy * ap, ey - ap * 0.6, ez - sy * ap];
+  const eBL = [ex - cy * ap, ey - ap * 0.6, ez + sy * ap];
+
+  const pos = [];
+  const uvs = [];
+  const meta = [];
+  const tints = [];
+  const pushSheet = (a0, b0, b1, a1, gainMul = 1.0) => {
+    const c = [
+      { p: a0, t: 0, w: 0 },
+      { p: b0, t: 0, w: 1 },
+      { p: b1, t: 1, w: 1 },
+      { p: a1, t: 1, w: 0 },
+    ];
+    for (const k of [0, 1, 2, 0, 2, 3]) {
+      pos.push(...c[k].p);
+      uvs.push(c[k].w, c[k].t);
+      meta.push(4.0, 0.88 * gainMul, 1.0, phase);
+      tints.push(tint[0], tint[1], tint[2]);
+    }
+  };
+  // 4 outer frustum walls + 2 internal diagonal volumetric ray sheets terminating on the hologram!
+  pushSheet(eTL, eTR, tr, tl, 0.95);
+  pushSheet(eBL, eBR, br, bl, 0.95);
+  pushSheet(eTL, eBL, bl, tl, 0.85);
+  pushSheet(eTR, eBR, br, tr, 0.85);
+  pushSheet(eTL, eBR, br, tl, 1.10);
+  pushSheet(eTR, eBL, bl, tr, 1.10);
+
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
+  g.setAttribute('aBeamMeta', new THREE.BufferAttribute(new Float32Array(meta), 4));
+  g.setAttribute('aBeamTint', new THREE.BufferAttribute(new Float32Array(tints), 3));
   return g;
 }
 
@@ -1919,6 +2140,7 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
 
   const bodies = [];
   const beams = [];
+  const beamNoseX = new Float32Array(nCls);
   const rotors = [];
   for (let cc = 0; cc < nCls; cc++) {
     const V = VEHICLE_CLASSES[cc];
@@ -1932,15 +2154,14 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
       let bgeo;
       if (cc === 4) {
         // Patrol Helicopter gimbal chin searchlight (+Y shaft rotated downward dynamically in update)
-        bgeo = beamGeometry(110, 24);
+        bgeo = beamGeometry(110, 24, { archetype: 0, gain: 1.15, falloff: 1.25 });
       } else if (cc === 5) {
         // Blimp forward gondola sweeping searchlight (+Y shaft rotated downward dynamically in update)
-        bgeo = beamGeometry(285, 50);
+        bgeo = beamGeometry(285, 50, { archetype: 0, gain: 1.25, falloff: 1.15 });
       } else {
-        // Forward headlight beam cone projecting from front nose (+X)
-        bgeo = beamGeometry(V.beamLen, V.beamW).rotateZ(-Math.PI / 2);
-        const first = V.parts().reduce((mx, pt) => Math.max(mx, (pt.x || 0) + (pt.w || 0) / 2), 0);
-        bgeo.translate(first + 0.8, 0, 0);
+        // Paired left/right forward headlight cones anchored at actual front bumper lamp sockets!
+        bgeo = twinHeadlightGeometry(V);
+        beamNoseX[cc] = bgeo.userData.noseX || 2.2;
       }
       beam = new THREE.InstancedMesh(bgeo, beamMat, Math.max(1, classCount[cc]));
       beam.frustumCulled = false;
@@ -1982,7 +2203,7 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     return tr;
   });
 
-  const trailGeo = new THREE.BoxGeometry(1, 1, 1);
+  const trailGeo = twinTrailGeometry();
   const aColor = new Float32Array(total * 3);
   trailGeo.setAttribute('aColor', new THREE.InstancedBufferAttribute(aColor, 3));
   const trails = new THREE.InstancedMesh(trailGeo, trailMat, total);
@@ -2241,9 +2462,32 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
   const curPitch = new Float32Array(total);
   const curBank = new Float32Array(total);
   const poseInit = new Uint8Array(total);
+  const beamReach = new Float32Array(total);
+  const lastWorldPos = new Float32Array(total * 3);
+  const overrides = new Map();
   let elapsed = 0;
   let curHeightScale = 1;
   let lastActiveCount = 0;
+
+  // Deterministic per-vehicle front-light variation:
+  //   ~26% Marker/DRL glow-pods only (like rear taillights — zero forward beam cone!)
+  //   ~32% Short urban low-beams
+  //   ~28% Standard twin road beams
+  //   ~14% Long xenon high-beams
+  for (let i = 0; i < total; i++) {
+    const cc = classOf[i];
+    if (cc === 2) {
+      beamReach[i] = 0.85 + h01(i, 89) * 0.35; // trains always carry twin lead lamps
+    } else if (cc === 4 || cc === 5) {
+      beamReach[i] = 1.0;
+    } else {
+      const rL = h01(i, 89);
+      if (rL < 0.26) beamReach[i] = 0.0;
+      else if (rL < 0.58) beamReach[i] = 0.36 + ((rL - 0.26) / 0.32) * 0.26;
+      else if (rL < 0.86) beamReach[i] = 0.72 + ((rL - 0.58) / 0.28) * 0.30;
+      else beamReach[i] = 1.15 + ((rL - 0.86) / 0.14) * 0.45;
+    }
+  }
 
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
@@ -2563,11 +2807,39 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     const pz = tmp.z + nz * (curL.railLoop ? 0 : latOf[i]);
     const py = curL.railLoop ? (laneY(curL, curT) + 2.2) : (laneY(curL, curT) + vOf[i]) * curHeightScale;
     const yaw = Math.atan2(-tz, tx);
+    let pitch = 0;
+    if (curL.railLoop) {
+      const dtP = 0.035;
+      const yA = laneY(curL, Math.max(0, curT - dtP));
+      const yB = laneY(curL, Math.min(1, curT + dtP));
+      pitch = Math.atan2((yB - yA) * sign, Math.max(4, tmp.len * dtP * 2));
+    }
     p.set(px, py, pz);
-    e.set(0, yaw, 0, 'YXZ');
+    e.set(0, yaw, pitch, 'YXZ');
     q.setFromEuler(e);
     const sc = scl[i];
     s.set(sc, sc, sc);
+    m.compose(p, q, s);
+  };
+
+  // Compose paired left/right forward headlight cones rooted right at the bumper nose plane
+  // so scaling forward reach never shifts the lamp socket origin on the bumper!
+  const composeTwinBeam = (craftX, craftY, craftZ, yaw, pitch, roll, craftScale, noseLocalX, reach) => {
+    if (reach <= 0.01) {
+      p.set(craftX, craftY, craftZ);
+      q.identity();
+      s.set(0, 0, 0);
+      m.compose(p, q, s);
+      return;
+    }
+    e.set(roll, yaw, pitch, 'YXZ');
+    q.setFromEuler(e);
+    p.set(noseLocalX * craftScale, 0, 0).applyQuaternion(q);
+    p.x += craftX;
+    p.y += craftY;
+    p.z += craftZ;
+    const wScale = craftScale * (0.68 + 0.32 * Math.min(1.25, reach));
+    s.set(craftScale * reach, wScale, wScale);
     m.compose(p, q, s);
   };
 
@@ -2720,8 +2992,10 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
       const throttle = dynThrottle[i];
       if (!collision) spd[i] = baseSpd[i];
 
+      const ov = overrides.get(i);
+      const ovSpeedMul = ov && ov.speedMul !== undefined ? ov.speedMul : 1.0;
       evalLane(L, Math.max(0, Math.min(1, t[i])), tmp);
-      const worldSpeed = Math.max(36, L.speed) * (0.85 + 0.55 * spd[i]) * throttle * curTrafficSpeed;
+      const worldSpeed = (ov && ov.freeze) ? 0 : Math.max(36, L.speed) * (0.85 + 0.55 * spd[i]) * throttle * curTrafficSpeed * ovSpeedMul;
       t[i] += (worldSpeed * dt * dir[i]) / Math.max(45, tmp.len);
 
       if (t[i] > 1 || t[i] < 0) {
@@ -2760,29 +3034,49 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
       const li = local[i];
 
       composeAt(i, t[i], { bob, roll, smoothDt: dt });
+      let craftX = posCur.x, craftY = posCur.y, craftZ = posCur.z;
+      let craftYaw = curYaw[i];
+      let craftPitch = curPitch[i];
+      let craftScale = scl[i];
+      if (ov) {
+        if (ov.x !== undefined) craftX = ov.x;
+        if (ov.y !== undefined) craftY = ov.y;
+        if (ov.z !== undefined) craftZ = ov.z;
+        if (ov.yaw !== undefined) { craftYaw = ov.yaw; curYaw[i] = ov.yaw; }
+        if (ov.pitch !== undefined) { craftPitch = ov.pitch; curPitch[i] = ov.pitch; }
+        if (ov.scale !== undefined) craftScale = ov.scale;
+        p.set(craftX, craftY, craftZ);
+        e.set(ov.roll ?? roll, craftYaw, craftPitch, 'YXZ');
+        q.setFromEuler(e);
+        s.set(craftScale, craftScale, craftScale);
+        m.compose(p, q, s);
+      }
+      lastWorldPos[i * 3 + 0] = craftX;
+      lastWorldPos[i * 3 + 1] = craftY;
+      lastWorldPos[i * 3 + 2] = craftZ;
       bodies[cc].setMatrixAt(li, m);
-      const craftX = posCur.x, craftY = posCur.y, craftZ = posCur.z;
-      const craftYaw = curYaw[i];
 
       if (beams[cc]) {
         if (cc === 5) {
           // Animated twin Blimp searchlights sweeping independent Lissajous arcs over skyscrapers & streets!
           const pan1 = Math.sin(elapsed * 0.54 + ph) * 0.92;
           const tilt1 = 0.58 + 0.26 * Math.cos(elapsed * 0.39 + ph * 1.6);
-          composeGimbalBeam(craftX, craftY, craftZ, craftYaw, scl[i], 20.0, -16.8, pan1, tilt1);
+          composeGimbalBeam(craftX, craftY, craftZ, craftYaw, craftScale, 20.0, -16.8, pan1, tilt1);
           beams[5].setMatrixAt(li, m);
 
           const pan2 = Math.cos(elapsed * 0.47 + ph * 2.1 + 1.3) * 0.96;
           const tilt2 = 0.54 + 0.28 * Math.sin(elapsed * 0.33 + ph * 1.3);
-          composeGimbalBeam(craftX, craftY, craftZ, craftYaw, scl[i], -3.0, -16.8, pan2, tilt2);
+          composeGimbalBeam(craftX, craftY, craftZ, craftYaw, craftScale, -3.0, -16.8, pan2, tilt2);
           blimpAftBeams.setMatrixAt(li, m);
         } else if (cc === 4) {
           // Patrol Helicopter sweeping chin searchlight
           const panH = Math.sin(elapsed * 0.88 + ph) * 0.78;
           const tiltH = 0.62 + 0.22 * Math.cos(elapsed * 0.61 + ph * 1.4);
-          composeGimbalBeam(craftX, craftY, craftZ, craftYaw, scl[i], 4.2, -1.8, panH, tiltH);
+          composeGimbalBeam(craftX, craftY, craftZ, craftYaw, craftScale, 4.2, -1.8, panH, tiltH);
           beams[4].setMatrixAt(li, m);
         } else {
+          const effReach = ov && ov.beamReach !== undefined ? ov.beamReach : beamReach[i];
+          composeTwinBeam(craftX, craftY, craftZ, craftYaw, craftPitch, curBank[i] + roll, craftScale, beamNoseX[cc], effReach);
           beams[cc].setMatrixAt(li, m);
         }
       }
@@ -2844,6 +3138,100 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
 
   update(0, 1);
 
+  const CLASS_NAMES = ['spinner', 'speeder', 'skytrain', 'cruiser', 'helicopter', 'blimp'];
+  function getVehicleState(idx) {
+    const id = Math.floor(Number(idx));
+    if (!Number.isFinite(id) || id < 0 || id >= total) return null;
+    const cc = classOf[id];
+    const effReach = overrides.has(id) && overrides.get(id).beamReach !== undefined
+      ? overrides.get(id).beamReach
+      : beamReach[id];
+    const px = Number(lastWorldPos[id * 3 + 0].toFixed(2));
+    const py = Number(lastWorldPos[id * 3 + 1].toFixed(2));
+    const pz = Number(lastWorldPos[id * 3 + 2].toFixed(2));
+    return {
+      id,
+      class: cc,
+      classIndex: cc,
+      className: CLASS_NAMES[cc] || 'spinner',
+      x: px,
+      y: py,
+      z: pz,
+      position: [px, py, pz],
+      yaw: Number(curYaw[id].toFixed(4)),
+      pitch: Number(curPitch[id].toFixed(4)),
+      scale: Number(scl[id].toFixed(2)),
+      laneIndex: laneIdx[id],
+      t: Number(t[id].toFixed(4)),
+      headlightReach: Number(effReach.toFixed(2)),
+      headlightProfile: effReach <= 0.01 ? 'marker-only' : (effReach < 0.65 ? 'low-beam' : (effReach < 1.08 ? 'standard-twin' : 'high-beam')),
+      overridden: overrides.has(id),
+    };
+  }
+  function listVehicles({ limit = 24, classFilter = null, near = null } = {}) {
+    const lim = Math.max(1, Math.min(800, Number(limit) || 24));
+    const maxAct = Math.min(total, Math.max(1, lastActiveCount));
+    const nx = near ? (Array.isArray(near) ? near[0] : (near.x || 0)) : 0;
+    const ny = near ? (Array.isArray(near) ? near[1] : (near.y || 0)) : 0;
+    const nz = near ? (Array.isArray(near) ? near[2] : (near.z || 0)) : 0;
+    const items = [];
+    for (let i = 0; i < maxAct; i++) {
+      const cc = classOf[i];
+      if (classFilter !== null && classFilter !== undefined && CLASS_NAMES[cc] !== classFilter && cc !== Number(classFilter)) continue;
+      const vx = lastWorldPos[i * 3 + 0], vy = lastWorldPos[i * 3 + 1], vz = lastWorldPos[i * 3 + 2];
+      const dist = near ? Math.hypot(vx - nx, vy - ny, vz - nz) : 0;
+      items.push({ i, dist });
+    }
+    if (near) items.sort((a, b) => a.dist - b.dist);
+    return items.slice(0, lim).map((it) => {
+      const st = getVehicleState(it.i);
+      if (near) st.distance = Number(it.dist.toFixed(1));
+      return st;
+    });
+  }
+  function setVehicleOverride(idx, spec = {}) {
+    const id = Math.floor(Number(idx));
+    if (!Number.isFinite(id) || id < 0 || id >= total) return null;
+    const prev = overrides.get(id) || {};
+    const next = { ...prev };
+    if (spec.x !== undefined) next.x = Number(spec.x);
+    if (spec.y !== undefined) next.y = Number(spec.y);
+    if (spec.z !== undefined) next.z = Number(spec.z);
+    if (spec.yaw !== undefined) next.yaw = Number(spec.yaw);
+    if (spec.pitch !== undefined) next.pitch = Number(spec.pitch);
+    if (spec.roll !== undefined) next.roll = Number(spec.roll);
+    if (spec.scale !== undefined) next.scale = Math.max(0.2, Number(spec.scale));
+    if (spec.speedMul !== undefined) next.speedMul = Math.max(0, Number(spec.speedMul));
+    if (spec.freeze !== undefined) next.freeze = !!spec.freeze;
+    if (spec.headlights !== undefined) {
+      if (typeof spec.headlights === 'number') next.beamReach = Math.max(0, spec.headlights);
+      else if (spec.headlights === 'off' || spec.headlights === 'marker') next.beamReach = 0.0;
+      else if (spec.headlights === 'low') next.beamReach = 0.45;
+      else if (spec.headlights === 'high') next.beamReach = 1.65;
+      else next.beamReach = 0.92;
+    }
+    if (spec.color) {
+      const cc = classOf[id];
+      const li = local[id];
+      c.set(spec.color);
+      bodies[cc].setColorAt(li, c);
+      if (bodies[cc].instanceColor) bodies[cc].instanceColor.needsUpdate = true;
+      aColor[id * 3 + 0] = c.r;
+      aColor[id * 3 + 1] = c.g;
+      aColor[id * 3 + 2] = c.b;
+      trailGeo.getAttribute('aColor').needsUpdate = true;
+    }
+    overrides.set(id, next);
+    return getVehicleState(id);
+  }
+  function clearVehicleOverride(idx) {
+    if (idx === undefined || idx === null) {
+      overrides.clear();
+      return true;
+    }
+    return overrides.delete(Math.floor(Number(idx)));
+  }
+
   return {
     group,
     mesh: bodies[0],
@@ -2857,10 +3245,16 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     trails,
     swarm: swarmMesh,
     swarmGeo,
+    heroCount: total,
+    beamReach,
     capacity: total + swarmCap,
     get activeCount() { return lastActiveCount; },
     update,
     setPalette,
+    getVehicleState,
+    listVehicles,
+    setVehicleOverride,
+    clearVehicleOverride,
     setTransitAmt(amt) { curTransitAmt = Math.max(0, Number(amt) || 0); },
     get trafficSpeed() { return curTrafficSpeed; },
     setTrafficSpeed(spdVal) {
@@ -2881,39 +3275,77 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
 export function makeSearchlights(city, beamMat, count = 34) {
   const group = new THREE.Group();
   const spots = [];
-  for (const lm of city.landmarks) {
-    spots.push({
-      x: lm.x, y: lm.h * 0.88, z: lm.z, r: lm.colorSeed,
-      len: 920 + lm.colorSeed * 820, w: 125 + lm.colorSeed * 135,
-      tilt: 0.10 + lm.colorSeed * 0.30, fast: 1.15,
-    });
+  // Landmark architectural shafts: mix Sky-Piercer coherent lasers (1), Carbon-Arcs (0) & Wide Flood Washes (2)
+  for (let li = 0; li < city.landmarks.length; li++) {
+    const lm = city.landmarks[li];
+    const kindSel = li % 3;
+    if (kindSel === 0) {
+      // Sky-Piercer Coherent Laser reaching upper cloud decks!
+      spots.push({
+        x: lm.x, y: lm.h * 0.96, z: lm.z, r: lm.colorSeed,
+        archetype: 1, len: 1320 + lm.colorSeed * 680, w: 22 + lm.colorSeed * 14,
+        hw0Mul: 0.035, gain: 1.45, falloff: 0.72,
+        tint: lm.colorSeed > 0.5 ? [0.40, 0.96, 1.0] : [0.55, 1.0, 0.82],
+        tilt: 0.06 + lm.colorSeed * 0.16, fast: 0.65,
+      });
+    } else if (kindSel === 1) {
+      // Monumental Wide Flood Sky-Wash
+      spots.push({
+        x: lm.x, y: lm.h * 0.82, z: lm.z, r: lm.colorSeed,
+        archetype: 2, len: 460 + lm.colorSeed * 280, w: 195 + lm.colorSeed * 110,
+        hw0Mul: 0.14, gain: 0.82, falloff: 1.55,
+        tint: [0, 0, 0],
+        tilt: 0.14 + lm.colorSeed * 0.22, fast: 0.85,
+      });
+    } else {
+      // High-intensity Carbon-Arc Beacon
+      spots.push({
+        x: lm.x, y: lm.h * 0.90, z: lm.z, r: lm.colorSeed,
+        archetype: 0, len: 880 + lm.colorSeed * 560, w: 98 + lm.colorSeed * 72,
+        gain: 1.18, falloff: 1.25,
+        tint: [1.0, 0.93, 0.76],
+        tilt: 0.12 + lm.colorSeed * 0.28, fast: 1.2,
+      });
+    }
   }
-  // Venue volumetric shafts: movie-premiere twin scissor-beams, arena rim beams & stadium floodbeams
+  // Venue volumetric shafts: movie-premiere twin scissor carbon-arcs, arena fan curtains & stadium floodbeams
   for (const pl of city.places || []) {
     if (pl.kind === 'theatre') {
       for (const sx of [-1, 1]) {
         spots.push({
           x: pl.x + sx * pl.r * 0.38, y: 14, z: pl.z + pl.r * 0.48,
-          r: (pl.seed + (sx > 0 ? 0.31 : 0.71)) % 1, len: 820, w: 86, tilt: 0.28, fast: 2.2,
+          r: (pl.seed + (sx > 0 ? 0.31 : 0.71)) % 1,
+          archetype: 0, len: 860, w: 74, gain: 1.32, falloff: 1.18,
+          tint: [1.0, 0.95, 0.80], tilt: 0.28, fast: 2.2,
         });
       }
     } else if (pl.kind === 'arena' || pl.kind === 'stadium') {
       for (let k = 0; k < 3; k++) {
         const a = (k / 3) * Math.PI * 2 + pl.rot;
+        const isFan = k === 0;
         spots.push({
           x: pl.x + Math.cos(a) * pl.r * 0.82, y: 38, z: pl.z + Math.sin(a) * pl.r * 0.62,
-          r: (pl.seed + k * 0.29) % 1, len: 760, w: 98, tilt: 0.20, fast: 1.4,
+          r: (pl.seed + k * 0.29) % 1,
+          archetype: isFan ? 3 : 2,
+          len: isFan ? 740 : 540,
+          w: isFan ? 220 : 145,
+          hw1Z: isFan ? 185 : undefined,
+          hw1X: isFan ? 14 : undefined,
+          gain: isFan ? 1.15 : 0.88,
+          falloff: 1.28,
+          tint: isFan ? [0.48, 0.88, 1.0] : [0, 0, 0],
+          tilt: 0.20, fast: 1.4,
         });
       }
     }
   }
-  // Sample strictly across core & arterial towers (`city.towers`), NOT low-rise suburbs at the tail of `city`!
+  // Sample strictly across core & arterial towers (`city.towers`), varying cone family, height & intensity!
   const towerLim = Math.max(1, city.towers || city.count);
   const tall = [];
-  const scanStep = Math.max(1, Math.floor(towerLim / 180));
+  const scanStep = Math.max(1, Math.floor(towerLim / 320));
   for (let i = 0; i < towerLim; i += scanStep) {
     const top = city.y[i] + city.h[i] / 2;
-    if (top > 85) {
+    if (top > 56) {
       tall.push({ x: city.x[i], y: top, z: city.z[i], r: city.s[i], top });
     }
   }
@@ -2923,11 +3355,54 @@ export function makeSearchlights(city, beamMat, count = 34) {
   const pickStep = Math.max(1, Math.floor(tall.length / needTowers));
   for (let k = 0; k < tall.length && spots.length < maxPool; k += pickStep) {
     const sp = tall[k];
-    spots.push({
-      x: sp.x, y: sp.y, z: sp.z, r: sp.r,
-      len: 720 + sp.r * 760, w: 96 + sp.r * 115,
-      tilt: 0.12 + sp.r * 0.34, fast: 1.0 + sp.r * 0.6,
-    });
+    const fam = (sp.r * 13.7 + k * 0.23) % 1;
+    if (fam < 0.22) {
+      // Narrow high-altitude coherent laser spire beam
+      spots.push({
+        x: sp.x, y: sp.y, z: sp.z, r: sp.r,
+        archetype: 1, len: 1050 + sp.r * 780, w: 18 + sp.r * 16,
+        hw0Mul: 0.035, gain: 1.35, falloff: 0.78,
+        tint: sp.r > 0.5 ? [0.52, 0.92, 1.0] : [0, 0, 0],
+        tilt: 0.05 + sp.r * 0.14, fast: 0.6 + sp.r * 0.4,
+      });
+    } else if (fam < 0.48) {
+      // Compact low-altitude crown spot skimming nearby facades
+      spots.push({
+        x: sp.x, y: sp.y, z: sp.z, r: sp.r,
+        archetype: 0, len: 260 + sp.r * 240, w: 46 + sp.r * 38,
+        gain: 0.68 + sp.r * 0.35, falloff: 1.55,
+        tint: [0, 0, 0],
+        tilt: 0.24 + sp.r * 0.36, fast: 1.3 + sp.r * 0.8,
+      });
+    } else if (fam < 0.72) {
+      // Wide atmospheric rooftop flood wash
+      spots.push({
+        x: sp.x, y: sp.y, z: sp.z, r: sp.r,
+        archetype: 2, len: 420 + sp.r * 340, w: 165 + sp.r * 125,
+        hw0Mul: 0.13, gain: 0.75 + sp.r * 0.30, falloff: 1.48,
+        tint: [0, 0, 0],
+        tilt: 0.10 + sp.r * 0.22, fast: 0.75 + sp.r * 0.45,
+      });
+    } else if (fam < 0.86) {
+      // Sweeping aerial fan curtain
+      spots.push({
+        x: sp.x, y: sp.y, z: sp.z, r: sp.r,
+        archetype: 3, len: 680 + sp.r * 420, w: 190,
+        hw1Z: 155 + sp.r * 65, hw1X: 12,
+        gain: 0.95 + sp.r * 0.35, falloff: 1.18,
+        tint: [0, 0, 0],
+        tilt: 0.16 + sp.r * 0.24, fast: 0.95 + sp.r * 0.5,
+      });
+    } else {
+      // Classic cinema carbon-arc searchlight
+      spots.push({
+        x: sp.x, y: sp.y, z: sp.z, r: sp.r,
+        archetype: 0, len: 740 + sp.r * 680, w: 84 + sp.r * 76,
+        gain: 0.92 + sp.r * 0.48, falloff: 1.28,
+        tint: [1.0, 0.94, 0.78],
+        tilt: 0.14 + sp.r * 0.30, fast: 1.1 + sp.r * 0.7,
+      });
+    }
   }
   const pivots = [];
   const baseCount = Math.max(2, count);
@@ -2945,7 +3420,16 @@ export function makeSearchlights(city, beamMat, count = 34) {
     const baseYaw = sp.r * Math.PI * 2;
     pivot.rotation.y = baseYaw;
     const len = sp.len || (750 + sp.r * 750);
-    const geo = beamGeometry(len, sp.w || (110 + sp.r * 130));
+    const geo = beamGeometry(len, sp.w || (110 + sp.r * 130), {
+      archetype: sp.archetype ?? 0,
+      gain: sp.gain ?? 1.0,
+      falloff: sp.falloff ?? 1.35,
+      phase: sp.r,
+      tint: sp.tint || [0, 0, 0],
+      hw0Mul: sp.hw0Mul,
+      hw1Z: sp.hw1Z,
+      hw1X: sp.hw1X,
+    });
     const mesh = new THREE.Mesh(geo, beamMat);
     const tilt = sp.tilt ?? (0.10 + sp.r * 0.32);
     mesh.rotation.z = tilt;
@@ -2958,6 +3442,8 @@ export function makeSearchlights(city, beamMat, count = 34) {
     pivots.push({
       pivot,
       mesh,
+      archetype: sp.archetype ?? 0,
+      len,
       baseYaw,
       tilt,
       yawHarm: dirSign * Math.max(1, Math.round((2 + sp.r * 4) * fm)),
@@ -3142,10 +3628,18 @@ export function buildWater(city, waterMat) {
     }
 
     if (w.kind === 'river' && w.pts.length >= 4 && w.pts.length % 2 === 0) {
-      // Winding river ribbon: quad-strip between leftBank[0..half-1] and rightBank[half-1..0]
+      // Winding river ribbon: ramps smoothly from y = -0.22m at its ocean estuary mouth
+      // (matching the ocean plane flush with zero step!) up to gentle inland channel level.
       const halfN = w.pts.length / 2;
       const pos = [];
-      const wy = 1.15;
+      const oceanMouth = !!(w.riverSpec && w.riverSpec.oceanMouth);
+      const yAtIdx = (idx) => {
+        if (!oceanMouth) return 0.45;
+        const frac = idx / Math.max(1, halfN - 1);
+        const ramp = Math.min(1, Math.max(0, (frac - 0.05) / 0.14));
+        const s = ramp * ramp * (3 - 2 * ramp);
+        return -0.22 + s * 0.57; // -0.22m at sea -> +0.35m inland
+      };
       for (let i = 0; i < halfN - 1; i++) {
         const [lx0, lz0] = w.pts[i];
         const [lx1, lz1] = w.pts[i + 1];
@@ -3153,11 +3647,13 @@ export function buildWater(city, waterMat) {
         const [rx1, rz1] = w.pts[w.pts.length - 2 - i];
         const mx0 = (lx0 + rx0) * 0.5, mz0 = (lz0 + rz0) * 0.5;
         const mx1 = (lx1 + rx1) * 0.5, mz1 = (lz1 + rz1) * 0.5;
+        const wy0 = yAtIdx(i);
+        const wy1 = yAtIdx(i + 1);
         pos.push(
-          lx0, wy, lz0, mx0, wy, mz0, lx1, wy, lz1,
-          mx0, wy, mz0, mx1, wy, mz1, lx1, wy, lz1,
-          mx0, wy, mz0, rx0, wy, rz0, mx1, wy, mz1,
-          rx0, wy, rz0, rx1, wy, rz1, mx1, wy, mz1
+          lx0, wy0, lz0, mx0, wy0, mz0, lx1, wy1, lz1,
+          mx0, wy0, mz0, mx1, wy1, mz1, lx1, wy1, lz1,
+          mx0, wy0, mz0, rx0, wy0, rz0, mx1, wy1, mz1,
+          rx0, wy0, rz0, rx1, wy1, rz1, mx1, wy1, mz1
         );
       }
       const geo = new THREE.BufferGeometry();
@@ -3208,20 +3704,75 @@ export function buildBoulevards(city, U) {
   const roadMat = makeLandmarkMaterial(U, '#161824');
   const lineMat = makeCurvedBasicMaterial(U, '#ffd28a');
   group.userData.lineMat = lineMat;
+  const mergeBoxes = (geos) => {
+    let vTotal = 0;
+    const nonIdx = geos.map((g) => {
+      const ni = g.index ? g.toNonIndexed() : g;
+      vTotal += ni.getAttribute('position').count;
+      return ni;
+    });
+    const pos = new Float32Array(vTotal * 3);
+    const nrm = new Float32Array(vTotal * 3);
+    let off = 0;
+    for (const ni of nonIdx) {
+      const pArr = ni.getAttribute('position').array;
+      const nArr = ni.getAttribute('normal').array;
+      pos.set(pArr, off);
+      nrm.set(nArr, off);
+      off += pArr.length;
+    }
+    const out = new THREE.BufferGeometry();
+    out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    out.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+    return out;
+  };
   for (const b of city.boulevards || []) {
     const dx = b.x2 - b.x1;
     const dz = b.z2 - b.z1;
     const len = Math.hypot(dx, dz) || 1;
     const ang = Math.atan2(dx, dz);
-    const segs = Math.max(24, Math.min(72, Math.ceil(len / 90)));
-    const road = new THREE.Mesh(new THREE.BoxGeometry(36, 0.5, len, 1, 1, segs), roadMat);
-    road.position.set((b.x1 + b.x2) * 0.5, 0.35, (b.z1 + b.z2) * 0.5);
-    road.rotation.y = ang;
+    // Split diagonal boulevards across rivers, harbors & ocean coastlines into dry spans,
+    // then merge into 1 road mesh + 1 stripe mesh per boulevard!
+    const samples = Math.max(24, Math.ceil(len / 22));
+    let spanStart = -1;
+    const spans = [];
+    for (let s = 0; s <= samples; s++) {
+      const f = s / samples;
+      const px = b.x1 + dx * f;
+      const pz = b.z1 + dz * f;
+      const wet = isPointInWater(city, px, pz, 14) || evalRiverSignedDist(px, pz, city.riverFlow) < 12;
+      if (!wet) {
+        if (spanStart < 0) spanStart = s;
+      } else if (spanStart >= 0) {
+        if (((spanStart - s + 1) * -1 / samples) * len >= 38) spans.push([spanStart / samples, (s - 1) / samples]);
+        spanStart = -1;
+      }
+    }
+    if (spanStart >= 0 && ((samples - spanStart) / samples) * len >= 38) {
+      spans.push([spanStart / samples, 1.0]);
+    }
+    const useSpans = spans.length ? spans : [[0.0, 0.08]];
+    const roadGeos = [];
+    const stripeGeos = [];
+    for (const [f0, f1] of useSpans) {
+      const spanLen = Math.max(12, (f1 - f0) * len);
+      const fm = (f0 + f1) * 0.5;
+      const mx = b.x1 + dx * fm;
+      const mz = b.z1 + dz * fm;
+      const segs = Math.max(4, Math.min(48, Math.ceil(spanLen / 85)));
+      const rg = new THREE.BoxGeometry(36, 0.5, spanLen, 1, 1, segs);
+      rg.rotateY(ang);
+      rg.translate(mx, 0.35, mz);
+      roadGeos.push(rg);
+      const sg = new THREE.BoxGeometry(1.6, 0.65, spanLen, 1, 1, segs);
+      sg.rotateY(ang);
+      sg.translate(mx, 0.42, mz);
+      stripeGeos.push(sg);
+    }
+    const road = new THREE.Mesh(mergeBoxes(roadGeos), roadMat);
     road.frustumCulled = false;
     group.add(road);
-    const stripe = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.65, len, 1, 1, segs), lineMat);
-    stripe.position.set((b.x1 + b.x2) * 0.5, 0.42, (b.z1 + b.z2) * 0.5);
-    stripe.rotation.y = ang;
+    const stripe = new THREE.Mesh(mergeBoxes(stripeGeos), lineMat);
     stripe.frustumCulled = false;
     group.add(stripe);
   }
@@ -3288,6 +3839,11 @@ export function buildSigns(city, billMat) {
  */
 export function buildHolos(city, holoMat, beamMat) {
   const group = new THREE.Group();
+  const uRef = holoMat && holoMat.uniforms ? holoMat.uniforms : null;
+  const podMat = makeCurvedBasicMaterial(uRef, '#232b3a');
+  const lensMat = makeCurvedBasicMaterial(uRef, '#7bf2ff');
+  const podBoxes = [];
+  const lensBoxes = [];
   const panels = [];
   const drums = [];
   for (const H of city.holos) {
@@ -3298,13 +3854,29 @@ export function buildHolos(city, holoMat, beamMat) {
     } else {
       panels.push(H);
     }
-    // Volumetric projector beam rising into the hologram + atmospheric spill below
-    const beamH = Math.max(H.h * 2.2, H.y - (H.baseY || 40) + H.h * 0.5);
-    const cone = new THREE.Mesh(beamGeometry(beamH, H.w * 0.85), beamMat);
-    cone.position.set(H.x, H.y + H.h * 0.4, H.z);
-    cone.rotation.z = Math.PI;
-    cone.frustumCulled = false;
-    group.add(cone);
+    // Physical Holo-Projector Emitter Rig + Volumetric Optical Frustum terminating directly on H!
+    const rot = H.rot || 0;
+    const nrmX = Math.sin(rot);
+    const nrmZ = Math.cos(rot);
+    const standOff = (H.kind === 'cylinder' || H.kind === 'portal') ? 0.0 : Math.min(19.0, Math.max(7.5, (H.w || 24) * 0.36));
+    const ey = Math.max(2.2, Math.min(H.y - (H.h || 18) * 0.62, H.baseY !== undefined ? H.baseY + 1.2 : H.y - (H.h || 18) * 0.95));
+    const ex = H.x + nrmX * standOff;
+    const ez = H.z + nrmZ * standOff;
+
+    const tint = (H.seed || 0) > 0.58 ? [0.98, 0.38, 0.78] : [0.34, 0.90, 1.0];
+    const frustum = new THREE.Mesh(projectorFrustumGeometry(ex, ey, ez, H, H.seed || 0, tint), beamMat);
+    frustum.frustumCulled = false;
+    group.add(frustum);
+    if (H.kind === 'portal') {
+      const frustumB = new THREE.Mesh(
+        projectorFrustumGeometry(ex, ey, ez, { ...H, rot: rot + Math.PI * 0.5 }, ((H.seed || 0) + 0.41) % 1, [0.98, 0.42, 0.80]),
+        beamMat
+      );
+      frustumB.frustumCulled = false;
+      group.add(frustumB);
+    }
+    podBoxes.push({ x: ex, y: ey - 0.55, z: ez, rot });
+    lensBoxes.push({ x: ex, y: ey + 0.08, z: ez, rot });
   }
 
   const yAxis = new THREE.Vector3(0, 1, 0);
@@ -3312,6 +3884,31 @@ export function buildHolos(city, holoMat, beamMat) {
   const q = new THREE.Quaternion();
   const p = new THREE.Vector3();
   const s = new THREE.Vector3();
+
+  if (podBoxes.length) {
+    const podGeo = new THREE.BoxGeometry(2.8, 1.3, 2.8);
+    const podMesh = new THREE.InstancedMesh(podGeo, podMat, podBoxes.length);
+    podMesh.frustumCulled = false;
+    const lensGeo = new THREE.CylinderGeometry(0.68, 0.88, 0.42, 12);
+    const lensMesh = new THREE.InstancedMesh(lensGeo, lensMat, lensBoxes.length);
+    lensMesh.frustumCulled = false;
+    for (let i = 0; i < podBoxes.length; i++) {
+      const pb = podBoxes[i];
+      p.set(pb.x, pb.y, pb.z);
+      q.setFromAxisAngle(yAxis, pb.rot);
+      s.set(1, 1, 1);
+      m.compose(p, q, s);
+      podMesh.setMatrixAt(i, m);
+      const lb = lensBoxes[i];
+      p.set(lb.x, lb.y, lb.z);
+      m.compose(p, q, s);
+      lensMesh.setMatrixAt(i, m);
+    }
+    podMesh.instanceMatrix.needsUpdate = true;
+    lensMesh.instanceMatrix.needsUpdate = true;
+    group.add(podMesh);
+    group.add(lensMesh);
+  }
 
   if (panels.length) {
     const pGeo = new THREE.BoxGeometry(1, 1, 1);
@@ -4163,12 +4760,15 @@ export function applyLook(U, look, tune = { win: 1, glow: 1, fog: 1 }) {
   if (Array.isArray(tune.cloudLayerElev) && U.uCloudLayerElev) U.uCloudLayerElev.value.set(tune.cloudLayerElev[0], tune.cloudLayerElev[1], tune.cloudLayerElev[2]);
   if (Array.isArray(tune.cloudLayerThick) && U.uCloudLayerThick) U.uCloudLayerThick.value.set(tune.cloudLayerThick[0], tune.cloudLayerThick[1], tune.cloudLayerThick[2]);
   if (Array.isArray(tune.cloudLayerDens) && U.uCloudLayerDens) U.uCloudLayerDens.value.set(tune.cloudLayerDens[0], tune.cloudLayerDens[1], tune.cloudLayerDens[2]);
+  if (tune.waterShader !== undefined && U.uWaterShader) U.uWaterShader.value = tune.waterShader;
   if (tune.waterScale !== undefined && U.uWaterScale) U.uWaterScale.value = tune.waterScale;
   if (tune.waterChop !== undefined && U.uWaterChop) U.uWaterChop.value = tune.waterChop;
   if (tune.waterFoam !== undefined && U.uWaterFoam) U.uWaterFoam.value = tune.waterFoam;
   if (tune.waterRefl !== undefined && U.uWaterRefl) U.uWaterRefl.value = tune.waterRefl;
   if (tune.waterContrast !== undefined && U.uWaterContrast) U.uWaterContrast.value = tune.waterContrast;
   if (tune.waterWarp !== undefined && U.uWaterWarp) U.uWaterWarp.value = tune.waterWarp;
+  if (tune.windAngle !== undefined && U.uWindAngle) U.uWindAngle.value = (tune.windAngle * Math.PI) / 180;
+  if (tune.windStrength !== undefined && U.uWindStrength) U.uWindStrength.value = tune.windStrength;
   if (tune.signAmt !== undefined && U.uSignAmt) U.uSignAmt.value = tune.signAmt;
   if (tune.megaWrap !== undefined && U.uMegaWrap) U.uMegaWrap.value = tune.megaWrap;
   if (tune.glyphStyle !== undefined && U.uGlyphStyle) U.uGlyphStyle.value = tune.glyphStyle;
@@ -4422,12 +5022,15 @@ export function applyTime(U, look, hours = 12, tune = { lights: 1, glow: 1 }) {
   if (Array.isArray(tune.cloudLayerElev) && U.uCloudLayerElev) U.uCloudLayerElev.value.set(tune.cloudLayerElev[0], tune.cloudLayerElev[1], tune.cloudLayerElev[2]);
   if (Array.isArray(tune.cloudLayerThick) && U.uCloudLayerThick) U.uCloudLayerThick.value.set(tune.cloudLayerThick[0], tune.cloudLayerThick[1], tune.cloudLayerThick[2]);
   if (Array.isArray(tune.cloudLayerDens) && U.uCloudLayerDens) U.uCloudLayerDens.value.set(tune.cloudLayerDens[0], tune.cloudLayerDens[1], tune.cloudLayerDens[2]);
+  if (tune.waterShader !== undefined && U.uWaterShader) U.uWaterShader.value = tune.waterShader;
   if (tune.waterScale !== undefined && U.uWaterScale) U.uWaterScale.value = tune.waterScale;
   if (tune.waterChop !== undefined && U.uWaterChop) U.uWaterChop.value = tune.waterChop;
   if (tune.waterFoam !== undefined && U.uWaterFoam) U.uWaterFoam.value = tune.waterFoam;
   if (tune.waterRefl !== undefined && U.uWaterRefl) U.uWaterRefl.value = tune.waterRefl;
   if (tune.waterContrast !== undefined && U.uWaterContrast) U.uWaterContrast.value = tune.waterContrast;
   if (tune.waterWarp !== undefined && U.uWaterWarp) U.uWaterWarp.value = tune.waterWarp;
+  if (tune.windAngle !== undefined && U.uWindAngle) U.uWindAngle.value = (tune.windAngle * Math.PI) / 180;
+  if (tune.windStrength !== undefined && U.uWindStrength) U.uWindStrength.value = tune.windStrength;
   if (tune.tint !== undefined && U.uTint) U.uTint.value = tune.tint;
   if (tune.signAmt !== undefined && U.uSignAmt) U.uSignAmt.value = tune.signAmt;
   if (tune.megaWrap !== undefined && U.uMegaWrap) U.uMegaWrap.value = tune.megaWrap;
@@ -4502,20 +5105,29 @@ export function buildTransitInfrastructure(city, U, lampMat = null) {
         const z0 = u0 * u0 * sg.z1 + 2 * u0 * t0 * sg.cz + t0 * t0 * sg.z2;
         const x1 = u1 * u1 * sg.x1 + 2 * u1 * t1 * sg.cx + t1 * t1 * sg.x2;
         const z1 = u1 * u1 * sg.z1 + 2 * u1 * t1 * sg.cz + t1 * t1 * sg.z2;
-        const segLen = Math.hypot(x1 - x0, z1 - z0) || 1;
+        const syA = sg.y1 !== undefined ? sg.y1 : yG;
+        const syB = sg.y2 !== undefined ? sg.y2 : yG;
+        const y0 = syA + (syB - syA) * (t0 * t0 * (3 - 2 * t0));
+        const y1 = syA + (syB - syA) * (t1 * t1 * (3 - 2 * t1));
+        const horizLen = Math.hypot(x1 - x0, z1 - z0) || 1;
+        const segLen = Math.hypot(horizLen, y1 - y0) || 1;
         const mx = (x0 + x1) * 0.5;
+        const my = (y0 + y1) * 0.5;
         const mz = (z0 + z1) * 0.5;
         const rot = Math.atan2(x1 - x0, z1 - z0);
-        beamBoxes.push({ x: mx, y: yG - 0.7, z: mz, w: 5.6, h: 1.35, d: segLen + 0.6, rot });
+        const slopePitch = -Math.atan2(y1 - y0, horizLen);
+        beamBoxes.push({ x: mx, y: my - 0.7, z: mz, w: 5.6, h: 1.35, d: segLen + 0.6, rot, pitch: slopePitch });
 
         const strip = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.36, segLen + 0.4), glowMat);
-        strip.position.set(mx, yG - 0.15, mz);
+        strip.position.set(mx, my - 0.15, mz);
+        strip.rotation.order = 'YXZ';
         strip.rotation.y = rot;
+        strip.rotation.x = slopePitch;
         strip.frustumCulled = false;
         group.add(strip);
 
-        if (sg.straight && yG < 90 && k > 0) {
-          pierBoxes.push({ x: x0, y: yG * 0.5, z: z0, w: 2.3, h: yG - 0.8, d: 2.3, rot });
+        if (sg.straight && y0 < 95 && k > 0) {
+          pierBoxes.push({ x: x0, y: y0 * 0.5, z: z0, w: 2.3, h: y0 - 0.8, d: 2.3, rot, pitch: 0 });
         }
       }
     }
@@ -4528,13 +5140,14 @@ export function buildTransitInfrastructure(city, U, lampMat = null) {
     mesh.frustumCulled = false;
     const m = new THREE.Matrix4();
     const q = new THREE.Quaternion();
+    const eu = new THREE.Euler(0, 0, 0, 'YXZ');
     const p = new THREE.Vector3();
     const s = new THREE.Vector3();
-    const yAx = new THREE.Vector3(0, 1, 0);
     for (let i = 0; i < list.length; i++) {
       const b = list[i];
       p.set(b.x, b.y, b.z);
-      q.setFromAxisAngle(yAx, b.rot || 0);
+      eu.set(b.pitch || 0, b.rot || 0, 0, 'YXZ');
+      q.setFromEuler(eu);
       s.set(b.w, b.h, b.d);
       m.compose(p, q, s);
       mesh.setMatrixAt(i, m);

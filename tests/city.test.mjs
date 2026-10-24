@@ -5,6 +5,7 @@ import {
   generateCity, makeCityCollider, streetWidth, AVENUE, STREET, KIND,
   LM_KINDS, PLACE_KINDS, DISTRICT_KINDS, CELL,
   WATER_MODE_NAMES, TERRAIN_MODE_NAMES, evalTerrainHeight, evalCoastSignedDist,
+  evalExactCoastShoreU, evalRiverSignedDist,
   evalRoadWeb, roadWebToWorld, isPointInWater,
 } from '../src/city.js';
 import { mulberry32, hash2i, makeNoise2D, fbm2D } from '../src/prng.js';
@@ -737,6 +738,50 @@ test('Phase-14 city: dry-coastline transit retraction, airway blimps & adjustabl
     assert.equal(isPointInWater(c, c.lamps[i].x, c.lamps[i].z, 4), false, 'secondary side-street lamp stays out of water');
   }
 });
+
+test('Phase-15 city: shoreDist-exact ocean river mouths, river-aware streets, and undulating curved scenic transit trajectories', () => {
+  // 1) Across extreme shoreDist values (close shore 0.45 and far shore 2.35), coastal rivers always reach & enter the ocean (cDist < 0 at river mouth)!
+  for (const shoreDist of [0.45, 1.0, 2.35]) {
+    const c = generateCity({ seed: 4417, radius: 5, waterMode: 1, waterAmount: 1.0, shoreDist, transitAmt: 1.0 });
+    assert.equal(c.riverFlow.active, true, `river active for shoreDist=${shoreDist}`);
+    assert.equal(c.riverFlow.oceanMouth, true, `oceanMouth active for shoreDist=${shoreDist}`);
+    const river = c.water.find((w) => w.kind === 'river');
+    assert.ok(river && river.pts.length >= 20, 'coastal river polyline generated');
+    const [mx0, mz0] = river.pts[0];
+    const coreSpan = c.radius * CELL;
+    const cDistAtMouth = evalCoastSignedDist(
+      mx0, mz0, coreSpan, c.coastAngle, c.waterMode,
+      c.terrainSeedX, c.terrainSeedZ, c.shoreDist, c.waterAmount
+    );
+    assert.ok(cDistAtMouth < -20, `river mouth reaches deep into ocean for shoreDist=${shoreDist} (cDist=${cDistAtMouth.toFixed(1)})`);
+
+    // Analytical O(1) evalRiverSignedDist agrees with river channel (< 0 inside river, > 0 far away)
+    const [midX, midZ] = river.pts[Math.floor(river.pts.length * 0.45)];
+    assert.ok(evalRiverSignedDist(midX, midZ, c.riverFlow) < 0, 'evalRiverSignedDist < 0 at river centerline');
+    assert.ok(evalRiverSignedDist(midX + 600, midZ - 600, c.riverFlow) > 50, 'evalRiverSignedDist > 0 away from river');
+
+    // Street-level non-bridge lanes never dip through the river channel
+    const streetSegs = c.lanes.filter((l) => l.kind === 'street' && !l.bridge);
+    assert.ok(streetSegs.length > 40, 'dry street segments exist');
+    for (const seg of streetSegs) {
+      const mx = (seg.x1 + seg.x2) * 0.5;
+      const mz = (seg.z1 + seg.z2) * 0.5;
+      assert.ok(evalRiverSignedDist(mx, mz, c.riverFlow) > -4, 'non-bridge street lane respects riverbank');
+    }
+  }
+
+  // 2) Public transport trajectories have curved Bézier segments + smooth undulating elevation profiles (not flat axis-aligned boxes!)
+  const ct = generateCity({ seed: 4417, radius: 5, transitAmt: 1.0 });
+  assert.equal(ct.transit.lines.length, 3);
+  for (const ln of ct.transit.lines) {
+    const curvedSegs = ln.segments.filter((s) => !s.straight);
+    assert.ok(curvedSegs.length >= 6, `transit line "${ln.name}" has >=6 smooth Bézier curves (got ${curvedSegs.length})`);
+    const ys = ln.segments.map((s) => s.y1);
+    const ySpread = Math.max(...ys) - Math.min(...ys);
+    assert.ok(ySpread > 2.5, `transit line "${ln.name}" undulates in elevation (spread=${ySpread.toFixed(2)}m)`);
+  }
+});
+
 
 
 

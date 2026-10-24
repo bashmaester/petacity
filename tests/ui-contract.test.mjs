@@ -212,6 +212,31 @@ test('Phase-14 water shader controls, selectable cloud elevation layers, light n
   assert.equal(/fetch\(|Audio\(|decodeAudioData/i.test(audioSrc), false, 'audio.js never fetches or decodes external audio samples');
 });
 
+test('Phase-15 UI contract: high-frequency water shaders, turn damping, POI auto-look, wind cloud orientation, original radio titles & WebMCP hooks', () => {
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  const main = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
+  const audioSrc = readFileSync(new URL('../src/audio.js', import.meta.url), 'utf8');
+
+  for (const id of [
+    'sel-watershader',
+    'sl-turnsmooth', 'turnsmooth-label',
+    'b-autolook',
+    'sl-windang', 'windang-label',
+    'sl-windstr', 'windstr-label',
+  ]) {
+    assert.ok(html.includes(`id="${id}"`), `#${id} present in index.html`);
+  }
+
+  // Zero real artist / album / synth brand names in index.html or audio.js
+  for (const [label, txt] of [['index.html', html], ['src/audio.js', audioSrc]]) {
+    assert.equal(/vangelis|aphex twin|tyrell 2019|selected ambient works|polygon window|cs-80|albedo 0\.39/i.test(txt), false, `${label} is free of real artist/album/synth references`);
+  }
+
+  assert.ok(main.includes('registerPetacityWebMCP'), 'main.js registers WebMCP movie-set tools');
+  assert.ok(main.includes('MovieSetDirector'), 'main.js wires MovieSetDirector');
+});
+
+
 
 
 

@@ -213,13 +213,15 @@ export function normalizeExactState(raw = {}) {
     weatherMode: Math.max(0, Math.min(6, Math.round(Number(raw.weatherMode) || 0))),
     dustLevel: roundN(raw.dustLevel ?? 0.6, 2),
     glide: !!(raw.glide ?? raw.glideOn),
+    autoLook: !!(raw.autoLook ?? false),
     freelook: !!(raw.freelook ?? false),
     collide: raw.collide !== undefined ? !!raw.collide : (raw.collideOn !== undefined ? !!raw.collideOn : true),
     avoidance: raw.avoidance !== undefined ? !!raw.avoidance : true,
     camSpeed: roundN(raw.camSpeed ?? 1.0, 2),
     camRadius: roundN(raw.camRadius ?? 2.2, 2),
     camSmooth: roundN(raw.camSmooth ?? 0.72, 2),
-    camStyle: Math.max(0, Math.min(3, Math.round(Number(raw.camStyle ?? 0)))),
+    turnSmooth: roundN(raw.turnSmooth ?? 1.25, 2),
+    camStyle: Math.max(0, Math.min(4, Math.round(Number(raw.camStyle ?? 0)))),
     pathSmooth: roundN(raw.pathSmooth ?? 0.65, 2),
   };
   if (raw.custom && typeof raw.custom === 'object') {
@@ -238,9 +240,10 @@ export function normalizeExactState(raw = {}) {
     tint: 0.75,
     win: 1, glow: 1, fog: 1, lights: 1, traffic: 1,
     searchLight: 1, searchCount: 1, trafficLight: 1, sigDensity: 1, vehLight: 1, lampDensity: 1,
-    waterScale: 1, waterChop: 1, waterFoam: 0.85, waterRefl: 1.15, waterContrast: 0.12, waterWarp: 0.4,
+    waterShader: 0, waterScale: 1, waterChop: 1, waterFoam: 0.85, waterRefl: 1.15, waterContrast: 0.12, waterWarp: 0.4,
     clouds: 1, cloudType: 0, cloudStyle: 0, cloudSeed: 17, cloudEvol: 1, cloudLac: 2.07,
     cloudElev: 1, cloudRange: 1, cloudLayersMode: 1,
+    windAngle: 30, windStrength: 1,
     glyphStyle: 0, signAnim: 1,
     haze: 1, sun: 1, vib: 1,
     moon: 1, moonsz: 1, moonph: 0.85,
@@ -262,7 +265,7 @@ export function normalizeExactState(raw = {}) {
   }
   if (raw.radio && typeof raw.radio === 'object') {
     out.radio = {
-      station: Math.max(0, Math.min(3, Math.round(Number(raw.radio.station) || 0))),
+      station: Math.max(0, Math.min(5, Math.round(Number(raw.radio.station) || 0))),
       volume: roundN(Number(raw.radio.volume ?? 0.68), 2),
       space: roundN(Number(raw.radio.space ?? 0.90), 2),
       warmth: roundN(Number(raw.radio.warmth ?? 0.80), 2),
