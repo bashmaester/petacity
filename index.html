@@ -108,6 +108,7 @@ body.ui-off .panel {
 body.ui-off .panel-body,
 body.ui-off .brand,
 body.ui-off #b-glide,
+body.ui-off #b-freelook,
 body.ui-off #b-avoid,
 body.ui-off #b-collide,
 body.ui-off #b-fold-all,
@@ -320,6 +321,49 @@ button.icon-btn.rec-on, button.action.rec-on {
   color: var(--text); font-size: 11.5px;
 }
 
+#minimap-wrap {
+  margin: 2px 0 7px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: rgba(6, 10, 18, 0.92);
+}
+#minimap {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 276 / 176;
+  cursor: crosshair;
+}
+.minimap-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px 7px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 10px;
+  color: var(--mute);
+}
+#minimap-label {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.minimap-bar .mini-btn {
+  height: 20px;
+  min-width: 30px;
+  padding: 0 5px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
+  font-size: 10px;
+  cursor: pointer;
+}
+
 .stats {
   display: flex; gap: 6px; margin-top: 8px;
 }
@@ -407,6 +451,7 @@ button.icon-btn.rec-on, button.action.rec-on {
     <div class="brand" title="One seed grows the whole city — swap the look or bend the world into a globe">Peta<b>city</b></div>
     <div class="head-actions">
       <button id="b-glide" class="icon-btn" type="button" aria-pressed="false" aria-label="Glide mode" title="Start Glide mode — drag to steer, wheel for speed (G)">&#x2708;&#xFE0E;</button>
+      <button id="b-freelook" class="icon-btn" type="button" aria-pressed="false" aria-label="Free look-around mode" title="Free look-around mode — decouple head gaze from flight travel direction (L)">&#x25CE;</button>
       <button id="b-avoid" class="icon-btn on" type="button" aria-pressed="true" aria-label="Anticipatory obstacle avoidance" title="Anticipatory shallow-angle obstacle &amp; terrain avoidance: on (V)">&#x2934;</button>
       <button id="b-collide" class="icon-btn on" type="button" aria-pressed="true" aria-label="Toggle collision detection" title="Collision: on — toggle noclip (C)">&#x2B21;</button>
       <button id="b-fold-all" class="icon-btn" type="button" aria-label="Collapse or expand all subpanels" title="Collapse / expand all control subpanels">&#x229F;</button>
@@ -496,6 +541,46 @@ button.icon-btn.rec-on, button.action.rec-on {
       </div>
     </details>
 
+    <!-- 2B. Camera, Small Collider, Freelook & Interactive Minimap -->
+    <details class="subpanel" open>
+      <summary>Camera, Collider &amp; Minimap</summary>
+      <div class="subpanel-body">
+        <div id="minimap-wrap">
+          <canvas id="minimap" width="276" height="176" aria-label="Interactive city minimap showing sites and recorded camera path"></canvas>
+          <div class="minimap-bar">
+            <span id="minimap-label">Click a site to fly · Path &amp; keys live</span>
+            <button id="b-minimap-zoom" type="button" class="mini-btn" aria-label="Cycle minimap zoom" title="Cycle minimap zoom (1× / 2× / 3.5×)">1×</button>
+          </div>
+        </div>
+        <div class="slider-grid">
+          <div class="slider-row wide" title="Camera flight physics &amp; motion style">
+            <span>&#x2708;&#xFE0E;</span>
+            <select id="sel-camstyle" aria-label="Camera motion style">
+              <option value="0" selected>Motion · Cinematic Glide</option>
+              <option value="1">Motion · Agile Drone</option>
+              <option value="2">Motion · Canyon Skimmer</option>
+              <option value="3">Motion · Heavy Airship</option>
+            </select>
+          </div>
+          <div class="slider-row wide" title="Camera flight &amp; cruise speed multiplier">
+            <span>&#x00BB;</span>
+            <input id="sl-camspeed" type="range" min="0.2" max="3.5" step="0.05" value="1" aria-label="Camera speed">
+            <em id="camspeed-label">1.0×</em>
+          </div>
+          <div class="slider-row wide" title="Camera collider radius (default 2.2m slips through narrow building cracks with zero wall clipping)">
+            <span>&#x25EF;</span>
+            <input id="sl-camrad" type="range" min="0.5" max="12" step="0.1" value="2.2" aria-label="Camera collider size">
+            <em id="camrad-label">2.2m</em>
+          </div>
+          <div class="slider-row wide" title="Camera inertia &amp; collision avoidance smoothness">
+            <span>&#x223F;</span>
+            <input id="sl-camsmooth" type="range" min="0" max="1" step="0.02" value="0.72" aria-label="Camera motion smoothness">
+            <em id="camsmooth-label">72%</em>
+          </div>
+        </div>
+      </div>
+    </details>
+
     <!-- 3. Water, Rivers & Shoreline -->
     <details class="subpanel" open>
       <summary>Water, Rivers &amp; Shoreline</summary>
@@ -566,6 +651,16 @@ button.icon-btn.rec-on, button.action.rec-on {
             <span>&#x29BF;</span>
             <input id="sl-cloud-evol" type="range" min="0" max="2.5" step="0.02" value="0.35" aria-label="Cloud 4D shape evolution speed">
           </div>
+          <div class="slider-row wide" title="Cloud Cover Base Elevation (0.35× low mist deck … 2.4× high tropospheric deck)">
+            <span>&#x21A5;</span>
+            <input id="sl-cloudelev" type="range" min="0.35" max="2.4" step="0.02" value="1" aria-label="Cloud cover elevation">
+            <em id="cloudelev-label">1.0×</em>
+          </div>
+          <div class="slider-row wide" title="Cloud Vertical Range &amp; Multi-Altitude Thickness (0.3× thin layer … 3.0× towering multi-tier sky)">
+            <span>&#x2195;</span>
+            <input id="sl-cloudrange" type="range" min="0.3" max="3.0" step="0.05" value="1" aria-label="Cloud vertical range">
+            <em id="cloudrange-label">1.0×</em>
+          </div>
           <div class="slider-row wide" title="Cloud Fractal Lacunarity (1.4 = soft billowy domes · 3.2 = crisp turbulent wisps)">
             <span>&#x2733;</span>
             <input id="sl-cloud-lac" type="range" min="1.4" max="3.2" step="0.02" value="2.08" aria-label="Cloud noise lacunarity">
@@ -584,6 +679,11 @@ button.icon-btn.rec-on, button.action.rec-on {
             <span>&#x21C4;</span>
             <input id="sl-traffic" type="range" min="0" max="1" step="0.005" value="0.25" aria-label="Multi-strata traffic density">
             <em id="traffic-label">320</em>
+          </div>
+          <div class="slider-row wide" title="Overall Traffic Speed (0 = paused grid … 3.0× hyper-express; signals &amp; platoons stay active)">
+            <span>&#x21DD;</span>
+            <input id="sl-traffspeed" type="range" min="0" max="3" step="0.05" value="1" aria-label="Overall traffic speed">
+            <em id="traffspeed-label">1.0×</em>
           </div>
           <div class="slider-row wide" title="Cross-City Public Transit Network &amp; Stations (0 = off … 2.5 = high-frequency express)">
             <span>&#x2317;</span>
@@ -632,8 +732,37 @@ button.icon-btn.rec-on, button.action.rec-on {
             <input id="sl-sign-anim" type="range" min="0" max="2.5" step="0.05" value="1" aria-label="Signage animation speed">
             <em id="sign-anim-label">1.0×</em>
           </div>
+        </div>
+      </div>
+    </details>
+
+    <!-- 6B. Dedicated Lights, Searchlights & Signals Section -->
+    <details class="subpanel" open>
+      <summary>Lights, Searchlights &amp; Signals</summary>
+      <div class="subpanel-body">
+        <div class="slider-grid">
+          <div class="slider-row wide" title="Volumetric Searchlight Shafts Intensity (0 = off … 2.5 = premiere skybeams)">
+            <span>&#x29BF;</span>
+            <input id="sl-searchlights" type="range" min="0" max="2.5" step="0.05" value="1" aria-label="Searchlights intensity">
+            <em id="searchlights-label">100%</em>
+          </div>
+          <div class="slider-row wide" title="Intersection Traffic Signal Lights Intensity (0 = off … 2.5 = vivid red/amber/green)">
+            <span>&#x2666;</span>
+            <input id="sl-trafflights" type="range" min="0" max="2.5" step="0.05" value="1" aria-label="Traffic lights intensity">
+            <em id="trafflights-label">100%</em>
+          </div>
+          <div class="slider-row wide" title="Vehicle Headlights, Taillights, Light-Trails &amp; Object Beacons (0 = off … 2.5 = bright)">
+            <span>&#x2727;</span>
+            <input id="sl-vehlights" type="range" min="0" max="2.5" step="0.05" value="1" aria-label="Object and vehicle lights intensity">
+            <em id="vehlights-label">100%</em>
+          </div>
           <div class="slider-row" title="Window density"><span>&#x229E;</span><input id="sl-win" type="range" min="0" max="2" step="0.02" value="1" aria-label="Window density"></div>
-          <div class="slider-row" title="Window &amp; sign glow"><span>&#x273A;</span><input id="sl-glow" type="range" min="0" max="2.5" step="0.02" value="1" aria-label="Window glow"></div>
+          <div class="slider-row" title="Window &amp; facade glow"><span>&#x273A;</span><input id="sl-glow" type="range" min="0" max="2.5" step="0.02" value="1" aria-label="Window glow"></div>
+          <div class="slider-row wide" title="Overall street lamps &amp; district light pools">
+            <span>&#x2726;</span>
+            <input id="sl-lights" type="range" min="0" max="2" step="0.02" value="1" aria-label="Atmospheric lights">
+            <em id="lights-label">100%</em>
+          </div>
         </div>
       </div>
     </details>
@@ -702,11 +831,16 @@ button.icon-btn.rec-on, button.action.rec-on {
       <summary>Time, Moon, Atmosphere &amp; Weather</summary>
       <div class="subpanel-body">
         <div class="slider-grid">
-          <div class="slider-row wide" title="Time of day (0–24h) — Sun, Moon &amp; Stars follow spherical sky orbits (press T to run live cycle)">
+          <div class="slider-row wide" title="Time of day (0–24h) — every scene look supports a full 24h day &amp; night cycle (press T to run)">
             <span>&#x2600;&#xFE0E;</span>
             <input id="sl-time" type="range" min="0" max="24" step="0.05" value="18.2" aria-label="Time of day">
             <em id="time-label">18:12</em>
             <button id="b-time-play" type="button" class="mini-btn" aria-pressed="false" aria-label="Play or pause 24-hour time cycle" title="Play / pause continuous 24h celestial &amp; lunar cycle (T)">&#x25B6;</button>
+          </div>
+          <div class="slider-row wide" title="Day/Night Cycle Speed (independent of traffic, cloud &amp; water speeds)">
+            <span>&#x29D6;</span>
+            <input id="sl-dayspeed" type="range" min="0.05" max="5" step="0.05" value="1" aria-label="Day and night cycle speed">
+            <em id="dayspeed-label">1.0×</em>
           </div>
           <div class="slider-row wide" title="Weather mode"><span>&#x2602;&#xFE0E;</span><input id="sl-weather" type="range" min="0" max="6" step="1" value="0" aria-label="Weather mode"><em id="weather-label">&#x2600;&#xFE0E; Clear</em></div>
           <div class="slider-row wide" title="Full synodic lunar phase cycle (New → Waxing → Full → Waning → New)">
@@ -717,11 +851,10 @@ button.icon-btn.rec-on, button.action.rec-on {
           <div class="slider-row" title="Moon glow intensity"><span>&#x263E;</span><input id="sl-moon" type="range" min="0" max="2" step="0.02" value="1" aria-label="Moon glow"></div>
           <div class="slider-row" title="Moon size"><span>&#x25EF;</span><input id="sl-moonsz" type="range" min="0.3" max="2.5" step="0.02" value="1" aria-label="Moon size"></div>
           <div class="slider-row" title="Atmospheric fog"><span>&#x224B;</span><input id="sl-fog" type="range" min="0" max="2.5" step="0.02" value="1" aria-label="Fog"></div>
-          <div class="slider-row" title="Street, beacon &amp; searchlight intensity"><span>&#x2726;</span><input id="sl-lights" type="range" min="0" max="2" step="0.02" value="1" aria-label="Atmospheric lights"></div>
           <div class="slider-row" title="Horizon haze"><span>&#x2261;</span><input id="sl-haze" type="range" min="0" max="2" step="0.02" value="1" aria-label="Horizon haze"></div>
           <div class="slider-row" title="Sun glow"><span>&#x263C;</span><input id="sl-sun" type="range" min="0" max="2" step="0.02" value="1" aria-label="Sun glow"></div>
           <div class="slider-row" title="Colour vibrance"><span>&#x25C8;</span><input id="sl-vib" type="range" min="0.4" max="1.6" step="0.02" value="1" aria-label="Colour vibrance"></div>
-          <div class="slider-row" title="Ambient dust motes"><span>&#x2726;</span><input id="sl-dust" type="range" min="0" max="1.8" step="0.02" value="0.6" aria-label="Ambient dust motes"></div>
+          <div class="slider-row wide" title="Ambient dust motes"><span>&#x2726;</span><input id="sl-dust" type="range" min="0" max="1.8" step="0.02" value="0.6" aria-label="Ambient dust motes"></div>
         </div>
       </div>
     </details>
@@ -778,6 +911,12 @@ button.icon-btn.rec-on, button.action.rec-on {
             <input id="sl-scrub" type="range" min="0" max="1" step="0.001" value="0" aria-label="Camera path timeline scrubber" disabled>
             <em id="path-label">0 kf</em>
           </div>
+          <div class="slider-row wide" title="Post-recording cinematic camera path smoothing (turns rough recorded flights &amp; keys into a butter-smooth crane/drone shot)">
+            <span>&#x223F;</span>
+            <input id="sl-pathsmooth" type="range" min="0" max="1" step="0.02" value="0.65" aria-label="Post-recording camera path smoothing">
+            <em id="pathsmooth-label">Smooth 65%</em>
+            <button id="b-pathsmooth" type="button" class="mini-btn" aria-label="Smooth recorded camera path" title="Apply post-recording cinematic smoothing to camera path &amp; keys" disabled>&#x2713;</button>
+          </div>
         </div>
       </div>
     </details>
@@ -803,6 +942,7 @@ button.icon-btn.rec-on, button.action.rec-on {
   <span title="Boost"><kbd>&#x21E7;</kbd>&#x00BB;</span>
   <span title="Dolly / speed"><kbd>&#x27F3;</kbd>&#x00B1;</span>
   <span title="Glide mode"><kbd>G</kbd>&#x2708;&#xFE0E;</span>
+  <span title="Free look-around"><kbd>L</kbd>&#x25CE;</span>
   <span title="Anticipatory steer"><kbd>V</kbd>&#x2934;</span>
   <span title="Collision"><kbd>C</kbd>&#x2B21;</span>
   <span title="Record path"><kbd>R</kbd>&#x25CF;</span>

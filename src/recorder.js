@@ -65,7 +65,9 @@ function extractPosQuat(camOrPose) {
  */
 export class CameraPathRecorder {
   constructor() {
-    this.frames = []; // [{ t, x, y, z, qx, qy, qz, qw }]
+    this.frames = [];     // [{ t, x, y, z, qx, qy, qz, qw, manual? }]
+    this._rawFrames = []; // un-smoothed backup for non-destructive cinematic smoothing
+    this.smoothStrength = 0;
     this.recording = false;
     this.playing = false;
     this.loop = true;
@@ -96,6 +98,8 @@ export class CameraPathRecorder {
 
   clear() {
     this.frames = [];
+    this._rawFrames = [];
+    this.smoothStrength = 0;
     this.recording = false;
     this.playing = false;
     this.playTime = 0;
@@ -105,18 +109,20 @@ export class CameraPathRecorder {
 
   startRecording(camOrPose = null) {
     this.frames = [];
+    this._rawFrames = [];
+    this.smoothStrength = 0;
     this.playing = false;
     this.recording = true;
     this._recElapsed = 0;
     this._lastSampleT = -1;
-    if (camOrPose) this._pushPose(0, camOrPose);
+    if (camOrPose) this._pushPose(0, camOrPose, false);
   }
 
   recordSample(dt, camOrPose, sampleInterval = 0.085) {
     if (!this.recording) return false;
     this._recElapsed += Math.max(0, dt);
     if (this.frames.length === 0 || this._recElapsed - this._lastSampleT >= sampleInterval) {
-      this._pushPose(this._recElapsed, camOrPose);
+      this._pushPose(this._recElapsed, camOrPose, false);
       return true;
     }
     return false;
@@ -129,10 +135,14 @@ export class CameraPathRecorder {
         this.frames.pop();
       }
       const lastT = this.frames.length > 0 ? this.frames[this.frames.length - 1].t : -0.05;
-      this._pushPose(Math.max(this._recElapsed, lastT + 0.04), camOrPose);
+      this._pushPose(Math.max(this._recElapsed, lastT + 0.04), camOrPose, false);
     }
     this.recording = false;
     this._smoothRecordedFrames();
+    this._rawFrames = this.frames.map((f) => ({ ...f }));
+    if (this.smoothStrength > 0.01) {
+      this.smoothPath(this.smoothStrength, { fromRaw: true });
+    }
     this.playTime = 0;
     return this.count;
   }
@@ -141,7 +151,8 @@ export class CameraPathRecorder {
   addKeyframe(camOrPose, stepSec = 2.6) {
     if (!camOrPose) return 0;
     const t = this.frames.length === 0 ? 0 : this.frames[this.frames.length - 1].t + Math.max(0.4, stepSec);
-    this._pushPose(t, camOrPose);
+    this._pushPose(t, camOrPose, true);
+    this._rawFrames = this.frames.map((f) => ({ ...f }));
     return this.frames.length;
   }
 
@@ -157,11 +168,10 @@ export class CameraPathRecorder {
     this.playing = false;
   }
 
-  _pushPose(t, camOrPose) {
+  _pushPose(t, camOrPose, manual = false) {
     const pq = extractPosQuat(camOrPose);
     if (!pq) return;
     let { qx, qy, qz, qw } = pq;
-    // Keep neighbouring quaternions in the same hemisphere so slerp always takes shortest arc
     if (this.frames.length > 0) {
       const prev = this.frames[this.frames.length - 1];
       if (prev.qx * qx + prev.qy * qy + prev.qz * qz + prev.qw * qw < 0) {
@@ -177,6 +187,7 @@ export class CameraPathRecorder {
       qy: roundN(qy, 5),
       qz: roundN(qz, 5),
       qw: roundN(qw, 5),
+      manual: !!manual,
     });
     this._lastSampleT = t;
   }
@@ -203,7 +214,158 @@ export class CameraPathRecorder {
     }
   }
 
-  /** Evaluate smooth Catmull-Rom + quaternion slerp pose at `timeSec`. */
+  /**
+   * Post-recording Cinematic Path Smoothing:
+   * - Upsamples sparse manual keyframes if needed, applies multi-pass Gaussian
+   *   filtering to 3D positions & hemisphere-aligned quaternions, and regularizes
+   *   knot timing by 3D arc-length so camera velocity & pan rate glide like a
+   *   cinema crane / Steadicam rail.
+   */
+  smoothPath(strength = 0.65, opts = {}) {
+    const s = Math.max(0, Math.min(1, Number(strength) || 0));
+    this.smoothStrength = s;
+    const base = (opts.fromRaw && this._rawFrames.length >= 2)
+      ? this._rawFrames
+      : (this._rawFrames.length >= 2 ? this._rawFrames : this.frames);
+    if (base.length < 2) return this.frames.length;
+    if (!this._rawFrames.length) {
+      this._rawFrames = base.map((f) => ({ ...f }));
+    }
+    if (s <= 0.005) {
+      this.frames = this._rawFrames.map((f) => ({ ...f }));
+      return this.frames.length;
+    }
+
+    const pinManual = opts.pinManual !== false;
+    let work = base.map((f) => ({ ...f }));
+    if (work.length >= 3 && work.length < 12) {
+      const saved = this.frames;
+      this.frames = work;
+      const dur = this.duration;
+      const nSub = Math.min(64, Math.max(24, (work.length - 1) * 6));
+      const manualFrames = pinManual ? work.filter((f, idx) => idx > 0 && idx < work.length - 1 && f.manual) : [];
+      const resampled = [];
+      for (let i = 0; i <= nSub; i++) {
+        const tSample = (i / nSub) * dur;
+        const ev = this.evaluate(tSample);
+        resampled.push({
+          t: roundN(tSample, 3),
+          x: ev.x, y: ev.y, z: ev.z,
+          qx: ev.qx, qy: ev.qy, qz: ev.qz, qw: ev.qw,
+          manual: i === 0 || i === nSub,
+        });
+      }
+      for (const mf of manualFrames) {
+        let bestIdx = 1;
+        let bestDt = Infinity;
+        for (let i = 1; i < resampled.length - 1; i++) {
+          const d = Math.abs(resampled[i].t - mf.t);
+          if (d < bestDt) { bestDt = d; bestIdx = i; }
+        }
+        resampled[bestIdx] = { ...mf, manual: true };
+      }
+      this.frames = saved;
+      work = resampled;
+    }
+
+    const n = work.length;
+    const posPasses = Math.max(1, Math.round(1 + s * 14));
+    const rotPasses = Math.max(1, Math.round(2 + s * 18));
+    const wrapIdx = (idx) => (this.loop ? ((idx % n) + n) % n : Math.max(0, Math.min(n - 1, idx)));
+
+    for (let pass = 0; pass < posPasses; pass++) {
+      const next = work.map((f) => ({ ...f }));
+      const startI = this.loop ? 0 : 1;
+      const endI = this.loop ? n : n - 1;
+      for (let i = startI; i < endI; i++) {
+        if (pinManual && work[i].manual) continue;
+        const a = work[wrapIdx(i - 2)];
+        const b = work[wrapIdx(i - 1)];
+        const c = work[i];
+        const d = work[wrapIdx(i + 1)];
+        const e = work[wrapIdx(i + 2)];
+        next[i].x = (a.x + 4 * b.x + 6 * c.x + 4 * d.x + e.x) / 16;
+        next[i].y = (a.y + 4 * b.y + 6 * c.y + 4 * d.y + e.y) / 16;
+        next[i].z = (a.z + 4 * b.z + 6 * c.z + 4 * d.z + e.z) / 16;
+      }
+      work = next;
+    }
+
+    for (let pass = 0; pass < rotPasses; pass++) {
+      const next = work.map((f) => ({ ...f }));
+      const startI = this.loop ? 0 : 1;
+      const endI = this.loop ? n : n - 1;
+      for (let i = startI; i < endI; i++) {
+        if (pinManual && work[i].manual) continue;
+        const ref = work[i];
+        let sx = 0, sy = 0, sz = 0, sw = 0;
+        const taps = [[-2, 1], [-1, 4], [0, 6], [1, 4], [2, 1]];
+        for (const [off, w] of taps) {
+          const q = work[wrapIdx(i + off)];
+          const sgn = (ref.qx * q.qx + ref.qy * q.qy + ref.qz * q.qz + ref.qw * q.qw) < 0 ? -1 : 1;
+          sx += q.qx * sgn * w;
+          sy += q.qy * sgn * w;
+          sz += q.qz * sgn * w;
+          sw += q.qw * sgn * w;
+        }
+        const len = Math.hypot(sx, sy, sz, sw) || 1;
+        next[i].qx = sx / len;
+        next[i].qy = sy / len;
+        next[i].qz = sz / len;
+        next[i].qw = sw / len;
+      }
+      for (let i = 1; i < n; i++) {
+        const p = next[i - 1];
+        const cur = next[i];
+        if (p.qx * cur.qx + p.qy * cur.qy + p.qz * cur.qz + p.qw * cur.qw < 0) {
+          cur.qx = -cur.qx; cur.qy = -cur.qy; cur.qz = -cur.qz; cur.qw = -cur.qw;
+        }
+      }
+      work = next;
+    }
+
+    const totalDur = Math.max(0.2, work[n - 1].t - work[0].t);
+    const cumArc = new Float64Array(n);
+    for (let i = 1; i < n; i++) {
+      const seg = Math.hypot(
+        work[i].x - work[i - 1].x,
+        work[i].y - work[i - 1].y,
+        work[i].z - work[i - 1].z
+      );
+      const qDot = Math.min(1, Math.abs(
+        work[i].qx * work[i - 1].qx + work[i].qy * work[i - 1].qy +
+        work[i].qz * work[i - 1].qz + work[i].qw * work[i - 1].qw
+      ));
+      const angWeight = Math.acos(qDot) * 28;
+      cumArc[i] = cumArc[i - 1] + Math.max(0.05, seg + angWeight);
+    }
+    const maxArc = cumArc[n - 1] || 1;
+    const arcBlend = Math.min(0.92, s * 0.88);
+    for (let i = 0; i < n; i++) {
+      let uArc = cumArc[i] / maxArc;
+      if (!this.loop && s > 0.25) {
+        const eased = uArc * uArc * (3 - 2 * uArc);
+        uArc = uArc * (1 - 0.28 * s) + eased * (0.28 * s);
+      }
+      const tArc = totalDur * uArc;
+      work[i].t = roundN(work[i].t * (1 - arcBlend) + tArc * arcBlend, 3);
+      work[i].x = roundN(work[i].x, 2);
+      work[i].y = roundN(work[i].y, 2);
+      work[i].z = roundN(work[i].z, 2);
+      work[i].qx = roundN(work[i].qx, 5);
+      work[i].qy = roundN(work[i].qy, 5);
+      work[i].qz = roundN(work[i].qz, 5);
+      work[i].qw = roundN(work[i].qw, 5);
+    }
+    for (let i = 1; i < n; i++) {
+      if (work[i].t <= work[i - 1].t) work[i].t = roundN(work[i - 1].t + 0.008, 3);
+    }
+
+    this.frames = work;
+    return this.frames.length;
+  }
+
+  /** Evaluate C1-continuous Catmull-Rom 3D position + C1 cubic quaternion spline at `timeSec`. */
   evaluate(timeSec) {
     const n = this.frames.length;
     if (n === 0) return null;
@@ -240,13 +402,20 @@ export class CameraPathRecorder {
     const y = catmullRom(f0.y, f1.y, f2.y, f3.y, u);
     const z = catmullRom(f0.z, f1.z, f2.z, f3.z, u);
 
-    this._qA.set(f1.qx, f1.qy, f1.qz, f1.qw);
-    this._qB.set(f2.qx, f2.qy, f2.qz, f2.qw);
-    if (this._qA.dot(this._qB) < 0) {
-      this._qB.set(-f2.qx, -f2.qy, -f2.qz, -f2.qw);
-    }
-    const su = u * u * (3 - 2 * u);
-    this._qOut.slerpQuaternions(this._qA, this._qB, su).normalize();
+    const alignQ = (ref, q) => {
+      const s = (ref.qx * q.qx + ref.qy * q.qy + ref.qz * q.qz + ref.qw * q.qw) < 0 ? -1 : 1;
+      return { qx: q.qx * s, qy: q.qy * s, qz: q.qz * s, qw: q.qw * s };
+    };
+    const q0 = alignQ(f1, f0);
+    const q1 = f1;
+    const q2 = alignQ(f1, f2);
+    const q3 = alignQ(q2, f3);
+
+    const qx = catmullRom(q0.qx, q1.qx, q2.qx, q3.qx, u);
+    const qy = catmullRom(q0.qy, q1.qy, q2.qy, q3.qy, u);
+    const qz = catmullRom(q0.qz, q1.qz, q2.qz, q3.qz, u);
+    const qw = catmullRom(q0.qw, q1.qw, q2.qw, q3.qw, u);
+    this._qOut.set(qx, qy, qz, qw).normalize();
     _tmpEuler.setFromQuaternion(this._qOut, 'YXZ');
     return {
       x, y, z,
@@ -263,9 +432,22 @@ export class CameraPathRecorder {
     const ev = this.evaluate(this.playTime);
     if (!ev) return null;
     camera.position.set(ev.x, ev.y, ev.z);
-    camera.quaternion.set(ev.qx, ev.qy, ev.qz, ev.qw);
-    if (controls && typeof controls.syncFromCamera === 'function') {
-      controls.syncFromCamera();
+    if (controls && controls.freelook) {
+      const yaw = ev.yaw + (controls._freeYawOff || 0);
+      const pitch = Math.max(-1.45, Math.min(1.45, ev.pitch + (controls._freePitchOff || 0)));
+      controls.moveYaw = ev.yaw;
+      controls.movePitch = ev.pitch;
+      controls.yaw = yaw;
+      controls.pitch = pitch;
+      controls._targetYaw = yaw;
+      controls._targetPitch = pitch;
+      _tmpEuler.set(pitch, yaw, 0, 'YXZ');
+      camera.quaternion.setFromEuler(_tmpEuler);
+    } else {
+      camera.quaternion.set(ev.qx, ev.qy, ev.qz, ev.qw);
+      if (controls && typeof controls.syncFromCamera === 'function') {
+        controls.syncFromCamera();
+      }
     }
     return ev;
   }
@@ -339,6 +521,7 @@ export class CameraPathRecorder {
       }
     }
     this.frames.sort((a, b) => a.t - b.t);
+    this._rawFrames = this.frames.map((f) => ({ ...f }));
     return this.frames.length >= 2;
   }
 }

@@ -162,5 +162,23 @@ test('Phase-12 collapsible subpanels, water/cloud/signage/glyph subpanels & feat
   assert.match(html, /<select[^>]*id="sel-glyph"/, 'Synthetic glyph script selector is a <select> dropdown');
 });
 
+test('Phase-13 camera collider/freelook, interactive minimap, path smoothing, dedicated lights section, cloud range & speed controls exist', () => {
+  for (const id of [
+    'b-freelook', 'minimap-wrap', 'minimap', 'minimap-label', 'b-minimap-zoom',
+    'sel-camstyle', 'sl-camspeed', 'camspeed-label', 'sl-camrad', 'camrad-label', 'sl-camsmooth', 'camsmooth-label',
+    'sl-pathsmooth', 'pathsmooth-label', 'b-pathsmooth',
+    'sl-searchlights', 'searchlights-label', 'sl-trafflights', 'trafflights-label', 'sl-vehlights', 'vehlights-label', 'lights-label',
+    'sl-cloudelev', 'cloudelev-label', 'sl-cloudrange', 'cloudrange-label',
+    'sl-traffspeed', 'traffspeed-label', 'sl-dayspeed', 'dayspeed-label',
+  ]) {
+    assert.ok(html.includes(`id="${id}"`), `#${id} present in index.html`);
+  }
+  assert.match(html, /<summary>Lights, Searchlights &amp; Signals<\/summary>/, 'Dedicated Lights subpanel exists');
+  assert.match(html, /<canvas[^>]*id="minimap"/, 'Interactive minimap canvas exists');
+  assert.match(html, /id="sl-camrad"[^>]*min="0\.5"[^>]*value="2\.2"/, 'Camera collider defaults small (2.2m) and adjusts down to 0.5m');
+  assert.ok(main.includes("e.key === 'l'"), 'L key shortcut wired for separate free look-around mode');
+});
+
+
 
 

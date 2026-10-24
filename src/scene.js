@@ -2,7 +2,7 @@
 // layer runs (and is tested) in Node against real three.js.
 import * as THREE from '../vendor/three.module.js';
 import {
-  generateCity, makeCityCollider, CELL, AVENUE, STREET,
+  generateCity, makeCityCollider, isPointInWater, CELL, AVENUE, STREET,
   WATER_MODE_NAMES, TERRAIN_MODE_NAMES,
 } from './city.js';
 import { hash2i } from './prng.js';
@@ -137,10 +137,15 @@ export function makeUniforms() {
     uCloudSeed: { value: 0.0 },
     uCloudEvol: { value: 0.35 },
     uCloudLac: { value: 2.08 },
+    uCloudElev: { value: 260.0 },
+    uCloudRange: { value: 780.0 },
     uSignAmt: { value: 1.0 },
     uMegaWrap: { value: 1.0 },
     uGlyphStyle: { value: 0.0 },
     uSignAnim: { value: 1.0 },
+    uVehLight: { value: 1.0 },
+    uTrafficSpeed: { value: 1.0 },
+    uShipWakes: { value: Array.from({ length: 8 }, () => new THREE.Vector4(0, 0, 0, 0)) },
   };
 }
 
@@ -282,7 +287,7 @@ export function makeWorld(U) {
     fragmentShader: SKY_FRAG,
     uniforms: pick(U, [
       'uZen', 'uHor', 'uSkySunCol', 'uSunDir', 'uSolarDir', 'uCloudCol', 'uStars', 'uStarRot',
-      'uCloud', 'uCloudType', 'uCloudStyle', 'uCloudSeed', 'uCloudEvol', 'uCloudLac',
+      'uCloud', 'uCloudType', 'uCloudStyle', 'uCloudSeed', 'uCloudEvol', 'uCloudLac', 'uCloudElev', 'uCloudRange',
       'uHaze', 'uTime', 'uSunGlow', 'uSat', 'uMoonDir', 'uMoonSize', 'uMoonGlow', 'uMoonPhase',
       'uFlash', 'uWorldCurve', 'uPlanetR',
     ]),
@@ -316,7 +321,7 @@ export function makeWorld(U) {
     fragmentShader: CLOUD_FRAG,
     uniforms: pick(U, [
       'uCloudCol', 'uSkySunCol', 'uSunDir', 'uFogCol', 'uSunFogCol', 'uHazeSun',
-      'uCloud', 'uCloudType', 'uCloudStyle', 'uCloudSeed', 'uCloudEvol', 'uCloudLac',
+      'uCloud', 'uCloudType', 'uCloudStyle', 'uCloudSeed', 'uCloudEvol', 'uCloudLac', 'uCloudElev', 'uCloudRange',
       'uSunGlow', 'uTime', 'uSat',
       'uPoolCol', 'uLightK', 'uWorldCurve', 'uPlanetR',
     ]),
@@ -344,7 +349,7 @@ export function makeWorld(U) {
   const beaconMat = new THREE.ShaderMaterial({
     vertexShader: BEACON_VERT,
     fragmentShader: BEACON_FRAG,
-    uniforms: pick(U, ['uTime', 'uLightK', 'uBeaconCol', 'uSteady', 'uWorldCurve', 'uPlanetR']),
+    uniforms: pick(U, ['uTime', 'uLightK', 'uVehLight', 'uBeaconCol', 'uSteady', 'uWorldCurve', 'uPlanetR']),
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
@@ -357,6 +362,7 @@ export function makeWorld(U) {
     uniforms: {
       uTime: U.uTime,
       uLightK: U.uLightK,
+      uVehLight: U.uVehLight,
       uBeaconCol: U.uLampCol,
       uSteady: { value: 1 },
       uWorldCurve: U.uWorldCurve,
@@ -370,7 +376,7 @@ export function makeWorld(U) {
   const trailMat = new THREE.ShaderMaterial({
     vertexShader: TRAIL_VERT,
     fragmentShader: TRAIL_FRAG,
-    uniforms: pick(U, ['uLightK', 'uWorldCurve', 'uPlanetR']),
+    uniforms: pick(U, ['uLightK', 'uVehLight', 'uWorldCurve', 'uPlanetR']),
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
@@ -392,7 +398,7 @@ export function makeWorld(U) {
   const poolMat = new THREE.ShaderMaterial({
     vertexShader: POOL_VERT,
     fragmentShader: POOL_FRAG,
-    uniforms: pick(U, ['uPoolCol', 'uPoolK', 'uLightK', 'uWorldCurve', 'uPlanetR']),
+    uniforms: pick(U, ['uPoolCol', 'uPoolK', 'uLightK', 'uVehLight', 'uWorldCurve', 'uPlanetR']),
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
@@ -405,7 +411,7 @@ export function makeWorld(U) {
       'uWaterDeep', 'uWaterShallow', 'uSunDir', 'uSkySunCol', 'uFogCol', 'uSunFogCol',
       'uCitySpan', 'uSuburbSpan', 'uGroundRadius',
       'uWaterMode', 'uWaterAmt', 'uShoreDist', 'uTerrainMode', 'uTerrainScale', 'uCoastAngle', 'uTerrainSeed',
-      'uPoolCol', 'uLightK',
+      'uPoolCol', 'uLightK', 'uShipWakes',
       'uHazeSun', 'uTime', 'uSat', 'uWorldCurve', 'uPlanetR',
     ]),
     transparent: true,
@@ -440,7 +446,7 @@ export function makeWorld(U) {
   const swarmMat = new THREE.ShaderMaterial({
     vertexShader: SWARM_VERT,
     fragmentShader: SWARM_FRAG,
-    uniforms: pick(U, ['uTime', 'uHeightScale', 'uLightK', 'uBillMono', 'uTint', 'uWorldCurve', 'uPlanetR']),
+    uniforms: pick(U, ['uTime', 'uTrafficSpeed', 'uHeightScale', 'uLightK', 'uVehLight', 'uBillMono', 'uTint', 'uWorldCurve', 'uPlanetR']),
   });
 
   return {
@@ -1738,6 +1744,23 @@ function spinnerParts() {
 }
 
 /**
+ * Shared 24-second green-wave intersection traffic signal evaluator (`120 / 24 === 5`
+ * integer cycles per `PC_LOOP = 120s`, so signals loop with zero jump).
+ * Returns `0` = Green, `1` = Amber, `2` = Red for travel along `axis` (`'x'` or `'z'`).
+ */
+export function evalTrafficSignalState(timeSec, phase = 0, axis = 'z') {
+  const cyc = (((timeSec / 24.0) + phase) % 1 + 1) % 1;
+  if (axis === 'z') {
+    if (cyc < 0.42) return 0; // Green
+    if (cyc < 0.50) return 1; // Amber
+    return 2; // Red
+  }
+  if (cyc >= 0.50 && cyc < 0.92) return 0; // Green
+  if (cyc >= 0.92) return 1; // Amber
+  return 2; // Red
+}
+
+/**
  * The traffic fleet: 8 distinct classes (pods, skimmers, haulers, drones,
  * helicopters, blimps, shuttles and spinners) riding curved 3D glide lanes,
  * switching lanes at endpoints, varying speed/scale/banking, never clipping
@@ -1789,11 +1812,14 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
 
   const curveU = trailMat && trailMat.uniforms ? trailMat.uniforms : null;
   const uTintRef = (opts.U && opts.U.uTint) || (curveU && curveU.uTint) || { value: 0.72 };
+  const uVehLightRef = (opts.U && opts.U.uVehLight) || (curveU && curveU.uVehLight) || { value: 1.0 };
   const bodyMat = new THREE.ShaderMaterial({
     vertexShader: VEHICLE_VERT,
     fragmentShader: VEHICLE_FRAG,
     uniforms: {
+      uSunDir: (opts.U && opts.U.uSunDir) || { value: new THREE.Vector3(0.5, 0.7, -0.4) },
       uLightK: (curveU && curveU.uLightK) || { value: 1 },
+      uVehLight: uVehLightRef,
       uBillMono: { value: 0 },
       uTint: uTintRef,
       uWorldCurve: (curveU && curveU.uWorldCurve) || { value: 0 },
@@ -1955,8 +1981,7 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     }
     if (!aveLines.length) aveLines.push(0);
 
-    const isSwarmPathClear = (x1, z1, ix, iz, x2, z2, y1, y2, turnMode) => {
-      if (!colCheck) return true;
+    const isSwarmPathClear = (x1, z1, ix, iz, x2, z2, y1, y2, turnMode, checkWater = true) => {
       for (let sIdx = 0; sIdx <= 6; sIdx++) {
         const u = sIdx / 6;
         let px, pz, py;
@@ -1977,12 +2002,22 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
           pz = z1 + (z2 - z1) * u;
           py = y1 + (y2 - y1) * (u * u * (3 - 2 * u));
         }
-        if (colCheck.hitsPoint(px, pz, py, 6.5)) return false;
+        if (checkWater && isPointInWater(city, px, pz, 8)) return false;
+        if (colCheck && py < 320 && colCheck.hitsPoint(px, pz, py, 6.5)) return false;
       }
       return true;
     };
 
     const ringLanes = lanes.filter((L) => L.ringId !== undefined);
+    const dryGridPairs = [];
+    for (const gx of allLines) {
+      for (const gz of allLines) {
+        if (!isPointInWater(city, gx * CELL, gz * CELL, CELL * 0.95)) {
+          dryGridPairs.push([gx, gz]);
+        }
+      }
+    }
+    if (!dryGridPairs.length) dryGridPairs.push([0, 0]);
 
     for (let i = 0; i < swarmCap; i++) {
       // Interleave strata across indices so any prefix [0..swarmActive] spans ALL 6 horizontal layers!
@@ -2018,10 +2053,18 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
 
       const linePool = stratum <= 1 ? aveLines : allLines;
       let built = false;
-      for (let attempt = 0; attempt < 5 && !built; attempt++) {
+      for (let attempt = 0; attempt < 20 && !built; attempt++) {
+        const forceDry = attempt >= 10;
         const usePool = attempt >= 2 ? aveLines : linePool;
-        const g1 = usePool[Math.floor(h01(i + attempt * 19, 109) * usePool.length) % usePool.length];
-        const g2 = usePool[Math.floor(h01(i + attempt * 23, 113) * usePool.length) % usePool.length];
+        let g1, g2;
+        if (forceDry) {
+          const pair = dryGridPairs[(i * 7 + attempt * 13) % dryGridPairs.length];
+          g1 = pair[0];
+          g2 = pair[1];
+        } else {
+          g1 = usePool[Math.floor(h01(i + attempt * 19, 109) * usePool.length) % usePool.length];
+          g2 = usePool[Math.floor(h01(i + attempt * 23, 113) * usePool.length) % usePool.length];
+        }
         const startNS = h01(i + attempt * 7, 127) < 0.5;
         const sgn1 = h01(i + attempt * 11, 131) < 0.5 ? 1 : -1;
         const sgn2 = h01(i + attempt * 13, 137) < 0.5 ? 1 : -1;
@@ -2030,8 +2073,8 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
 
         if (wantCornerTurn) {
           // 90-degree street corner turn at intersection (g1, g2) with perpendicular deck grade separation!
-          const leg1 = (2 + Math.floor(h01(i, 143) * 4)) * CELL;
-          const leg2 = (2 + Math.floor(h01(i, 145) * 4)) * CELL;
+          const leg1 = (forceDry ? 1 : (2 + Math.floor(h01(i, 143) * 4))) * CELL;
+          const leg2 = (forceDry ? 1 : (2 + Math.floor(h01(i, 145) * 4))) * CELL;
           const off1 = (g1 % 4 === 0 ? 8.2 : 5.2) + laneJitter;
           const off2 = (g2 % 4 === 0 ? 8.2 : 5.2) + laneJitter;
           let x1, z1, ix, iz, x2, z2, y1, y2;
@@ -2061,9 +2104,11 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
             y2 = deck.yNS + yJitter;
           }
           const turnR = (g1 % 4 === 0 && g2 % 4 === 0) ? 54.0 : 42.0;
-          if (stratum <= 3 && attempt < 4 && !isSwarmPathClear(x1, z1, ix, iz, x2, z2, y1, y2, turnR)) continue;
+          if (attempt < 19 && !isSwarmPathClear(x1, z1, ix, iz, x2, z2, y1, y2, turnR, true)) continue;
+          const isDryFinal = !isPointInWater(city, (x1 + x2) * 0.5, (z1 + z2) * 0.5, 4);
           const totalLen = Math.max(220, leg1 + leg2);
-          const worldSpd = 56 + stratum * 24 + h01(i, 149) * 68;
+          const driverBias = 0.62 + Math.pow(h01(i, 161), 1.35) * 0.85;
+          const worldSpd = (56 + stratum * 24 + h01(i, 149) * 68) * driverBias;
           curveA[i * 4 + 0] = x1;
           curveA[i * 4 + 1] = z1;
           curveA[i * 4 + 2] = y1;
@@ -2074,13 +2119,13 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
           curveB[i * 4 + 3] = h01(i, 157);
           curveC[i * 4 + 0] = x2;
           curveC[i * 4 + 1] = z2;
-          curveC[i * 4 + 2] = craftScale;
+          curveC[i * 4 + 2] = isDryFinal ? craftScale : 0.0;
           curveC[i * 4 + 3] = turnR;
           built = true;
         } else {
           // Straight horizontal street run (either flat horizontal y2 == y1, or smooth elevation switch!)
-          const runSpan = (4 + Math.floor(h01(i, 143) * 5)) * CELL;
-          const centerAlong = (g2 * 0.5) * CELL;
+          const runSpan = (forceDry ? 1 : (4 + Math.floor(h01(i, 143) * 5))) * CELL;
+          const centerAlong = (forceDry ? g2 : (g2 * 0.5)) * CELL;
           const off = (g1 % 4 === 0 ? 8.2 : 5.2) + laneJitter;
           let x1, z1, x2, z2, y1, y2;
           y1 = (startNS ? deck.yNS : deck.yEW) + yJitter;
@@ -2103,8 +2148,10 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
             x2 = centerAlong + sgn1 * runSpan * 0.5;
           }
           const mx = (x1 + x2) * 0.5, mz = (z1 + z2) * 0.5;
-          if (stratum <= 3 && attempt < 4 && !isSwarmPathClear(x1, z1, mx, mz, x2, z2, y1, y2, -1.0)) continue;
-          const worldSpd = 62 + stratum * 26 + h01(i, 149) * 74;
+          if (attempt < 19 && !isSwarmPathClear(x1, z1, mx, mz, x2, z2, y1, y2, -1.0, true)) continue;
+          const isDryFinal = !isPointInWater(city, mx, mz, 4);
+          const driverBias = 0.62 + Math.pow(h01(i, 161), 1.35) * 0.85;
+          const worldSpd = (62 + stratum * 26 + h01(i, 149) * 74) * driverBias;
           curveA[i * 4 + 0] = x1;
           curveA[i * 4 + 1] = z1;
           curveA[i * 4 + 2] = y1;
@@ -2115,7 +2162,7 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
           curveB[i * 4 + 3] = h01(i, 157);
           curveC[i * 4 + 0] = x2;
           curveC[i * 4 + 1] = z2;
-          curveC[i * 4 + 2] = craftScale;
+          curveC[i * 4 + 2] = isDryFinal ? craftScale : 0.0;
           curveC[i * 4 + 3] = -1.0; // linear horizontal street mode
           built = true;
         }
@@ -2526,10 +2573,28 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     }
   }
 
+  // Sophisticated non-uniform traffic state: per-driver profile, damped throttle & signal map
+  let curTrafficSpeed = opts.trafficSpeed !== undefined ? Math.max(0, Number(opts.trafficSpeed) || 0) : 1.0;
+  const driverProfile = new Float32Array(total);
+  const dynThrottle = new Float32Array(total).fill(1.0);
+  for (let i = 0; i < total; i++) {
+    // Cruiser (~0.68x), commuter (~1.0x), express (~1.38x)
+    const r = h01(i, 37);
+    driverProfile[i] = r < 0.25 ? (0.64 + r * 0.8) : (r < 0.78 ? (0.86 + (r - 0.25) * 0.52) : (1.16 + (r - 0.78) * 1.15));
+  }
+  const signalPhaseByNode = new Map();
+  if (city.streetInfra && Array.isArray(city.streetInfra.signals)) {
+    for (const sig of city.streetInfra.signals) {
+      signalPhaseByNode.set(`${sig.ix},${sig.iz}`, sig.phase);
+    }
+  }
+  const transitStations = (city.transit && Array.isArray(city.transit.stations)) ? city.transit.stations : [];
+
   function update(dt, density = 1, heightScale = 1) {
     elapsed += dt;
     curHeightScale = heightScale;
     const dClamped = Math.max(0, density);
+    if (opts.U && opts.U.uTrafficSpeed) opts.U.uTrafficSpeed.value = curTrafficSpeed;
 
     let n = 0;
     let swarmActive = 0;
@@ -2552,6 +2617,7 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
 
     const active = new Array(nCls).fill(0);
     if (collision && dt > 0) applyCollision(n);
+    const dampK = dt > 0 ? (1 - Math.exp(-dt * 4.5)) : 1;
     for (let i = 0; i < n; i++) {
       const cc = classOf[i];
       if (cc === 2 && curTransitAmt <= 0.01) continue;
@@ -2559,21 +2625,58 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
       const V = VEHICLE_CLASSES[cc];
       const L = lanes[laneIdx[i]];
       const ph = phase[i];
-      let throttle = cc === 2 ? 1.0 : (1 + 0.10 * Math.sin(elapsed * 0.42 + ph * 1.7));
-      // Natural corner braking before & through 90-degree intersection turns
+      let targetThrottle = cc === 2
+        ? 1.0
+        : driverProfile[i] * (1 + 0.14 * Math.sin(elapsed * 0.42 + ph * 1.7) + 0.07 * Math.cos(elapsed * 0.91 + ph * 2.9));
+
+      // 1) Intersection traffic-light queuing on Deck-0 street segments!
+      if (L.deck === 0 && L.kind === 'street' && L.nix !== undefined && L.niz !== undefined && t[i] > 0.58 && t[i] < 0.96) {
+        const sigPhase = signalPhaseByNode.get(`${L.nix},${L.niz}`)
+          ?? ((((L.nix * 0.17 + L.niz * 0.13) % 1) + 1) % 1);
+        const sigState = evalTrafficSignalState(elapsed, sigPhase, L.axis || 'z');
+        if (sigState === 2) {
+          // Red light: smooth deceleration down to stop bar at t ≈ 0.92
+          const stopBar = smoothstep(0.93, 0.62, t[i]);
+          targetThrottle *= stopBar * 0.18;
+        } else if (sigState === 1 && t[i] < 0.80) {
+          // Amber light & not yet committed to intersection: gentle brake
+          targetThrottle *= 0.35;
+        }
+      }
+
+      // 2) Public-transit elevated station dwell deceleration & departure surge!
+      if (cc === 2 && L.railLoop && transitStations.length > 0) {
+        evalLane(L, Math.max(0, Math.min(1, t[i])), tmp);
+        for (let stIdx = 0; stIdx < transitStations.length; stIdx++) {
+          const st = transitStations[stIdx];
+          if (st.lineId !== undefined && L.transitLine !== undefined && st.lineId !== L.transitLine) continue;
+          const dSt = Math.hypot(tmp.x - st.x, tmp.z - st.z);
+          if (dSt < 55) {
+            const dwellCycle = Math.sin(elapsed * 0.35 + stIdx * 1.9 + ph);
+            if (dwellCycle > 0.42) {
+              targetThrottle *= Math.max(0.06, dSt / 55);
+            }
+            break;
+          }
+        }
+      }
+
+      // 3) Natural corner braking before & through 90-degree intersection turns
       if (L.kind === 'turn') {
-        throttle *= 0.68;
+        targetThrottle *= 0.66;
       } else if (L.directed && t[i] > 0.76 && nextLane[i] >= 0 && lanes[nextLane[i]] && lanes[nextLane[i]].kind === 'turn') {
-        throttle *= 1.0 - 0.30 * smoothstep(0.76, 1.0, t[i]);
+        targetThrottle *= 1.0 - 0.32 * smoothstep(0.76, 1.0, t[i]);
       }
       if (V.hover) {
         const hv = Math.sin(elapsed * 0.31 + ph * 3.1);
-        if (hv > 0.84) throttle *= 0.35;
+        if (hv > 0.84) targetThrottle *= 0.32;
       }
+      dynThrottle[i] += (targetThrottle - dynThrottle[i]) * dampK;
+      const throttle = dynThrottle[i];
       if (!collision) spd[i] = baseSpd[i];
 
       evalLane(L, Math.max(0, Math.min(1, t[i])), tmp);
-      const worldSpeed = Math.max(36, L.speed) * (0.85 + 0.55 * spd[i]) * throttle;
+      const worldSpeed = Math.max(36, L.speed) * (0.85 + 0.55 * spd[i]) * throttle * curTrafficSpeed;
       t[i] += (worldSpeed * dt * dir[i]) / Math.max(45, tmp.len);
 
       if (t[i] > 1 || t[i] < 0) {
@@ -2714,6 +2817,11 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     update,
     setPalette,
     setTransitAmt(amt) { curTransitAmt = Math.max(0, Number(amt) || 0); },
+    get trafficSpeed() { return curTrafficSpeed; },
+    setTrafficSpeed(spdVal) {
+      curTrafficSpeed = Math.max(0, Number(spdVal) ?? 1.0);
+      if (opts.U && opts.U.uTrafficSpeed) opts.U.uTrafficSpeed.value = curTrafficSpeed;
+    },
     get collision() { return collision; },
     setCollision(on) { collision = !!on; },
   };
@@ -2777,13 +2885,16 @@ export function makeSearchlights(city, beamMat, count = 34) {
   }
   const pivots = [];
   const use = spots.slice(0, Math.max(2, count));
-  const baseK = beamMat.uniforms && beamMat.uniforms.uBeamK ? beamMat.uniforms.uBeamK.value : 0.22;
+  let baseK = beamMat.uniforms && beamMat.uniforms.uBeamK ? beamMat.uniforms.uBeamK.value : 0.22;
+  let searchAmt = 1.0;
   let elapsed = 0;
+  const LOOP_OMEGA = (Math.PI * 2) / 120.0; // integer harmonics of PC_LOOP = 120s
   for (let k = 0; k < use.length; k++) {
     const sp = use[k];
     const pivot = new THREE.Group();
     pivot.position.set(sp.x, sp.y, sp.z);
-    pivot.rotation.y = sp.r * Math.PI * 2;
+    const baseYaw = sp.r * Math.PI * 2;
+    pivot.rotation.y = baseYaw;
     const len = sp.len || (750 + sp.r * 750);
     const geo = beamGeometry(len, sp.w || (110 + sp.r * 130));
     const mesh = new THREE.Mesh(geo, beamMat);
@@ -2797,26 +2908,39 @@ export function makeSearchlights(city, beamMat, count = 34) {
     pivots.push({
       pivot,
       mesh,
+      baseYaw,
       tilt,
-      speed: dirSign * (0.14 + sp.r * 0.26) * fm,
-      wob: (0.22 + sp.r * 0.34) * fm,
-      nod: (0.17 + sp.r * 0.25) * fm,
+      yawHarm: dirSign * Math.max(1, Math.round((2 + sp.r * 4) * fm)),
+      wobHarm: Math.max(2, Math.round((4 + sp.r * 6) * fm)),
+      nodHarm: Math.max(2, Math.round((3 + sp.r * 5) * fm)),
       phase: sp.r * Math.PI * 2 + k * 0.7,
     });
   }
-  function update(dt) {
-    elapsed += dt;
-    for (const pv of pivots) {
-      pv.pivot.rotation.y += pv.speed * dt;
-      pv.mesh.rotation.z = pv.tilt + Math.sin(elapsed * pv.wob + pv.phase) * 0.28;
-      pv.mesh.rotation.x = Math.cos(elapsed * pv.nod + pv.phase * 1.3) * 0.18;
-    }
-    // gentle shared intensity pulse — the beams "breathe"
+  function syncBaseFromLook(lookBeamK) {
+    if (Number.isFinite(lookBeamK)) baseK = lookBeamK;
+  }
+  function setAmount(amt) {
+    searchAmt = Math.max(0, Number(amt) ?? 1.0);
+    group.visible = searchAmt > 0.005;
     if (beamMat.uniforms && beamMat.uniforms.uBeamK) {
-      beamMat.uniforms.uBeamK.value = baseK * (0.84 + 0.16 * Math.sin(elapsed * 0.55));
+      beamMat.uniforms.uBeamK.value = baseK * searchAmt * (0.84 + 0.16 * Math.sin(elapsed * LOOP_OMEGA * 11));
     }
   }
-  return { group, pivots, update };
+  function update(dt) {
+    elapsed = (elapsed + dt) % 120.0;
+    const tau = elapsed * LOOP_OMEGA;
+    for (const pv of pivots) {
+      pv.pivot.rotation.y = pv.baseYaw + tau * pv.yawHarm;
+      pv.mesh.rotation.z = pv.tilt + Math.sin(tau * pv.wobHarm + pv.phase) * 0.28;
+      pv.mesh.rotation.x = Math.cos(tau * pv.nodHarm + pv.phase * 1.3) * 0.18;
+    }
+    group.visible = searchAmt > 0.005;
+    // gentle shared intensity pulse — seamlessly periodic over PC_LOOP = 120s
+    if (beamMat.uniforms && beamMat.uniforms.uBeamK) {
+      beamMat.uniforms.uBeamK.value = baseK * searchAmt * (0.84 + 0.16 * Math.sin(tau * 11));
+    }
+  }
+  return { group, pivots, update, setAmount, syncBaseFromLook, get amount() { return searchAmt; } };
 }
 
 /** Soft warm light pools lying on the ground under the street lamps. */
@@ -3401,6 +3525,7 @@ export function buildTrees(city, U = null) {
 
   const uTimeRef = (U && U.uTime) || { value: 0 };
   const uLightRef = (U && U.uLightK) || { value: 1 };
+  const uVehLightTreeRef = (U && U.uVehLight) || { value: 1 };
   const uCurveRef = (U && U.uWorldCurve) || { value: 0 };
   const uPlanetRef = (U && U.uPlanetR) || { value: 2100 };
 
@@ -3410,6 +3535,7 @@ export function buildTrees(city, U = null) {
     uniforms: {
       uTime: uTimeRef,
       uLightK: uLightRef,
+      uVehLight: uVehLightTreeRef,
       uBeaconCol: { value: col('#ffd68a') },
       uSteady: { value: 0.72 },
       uWorldCurve: uCurveRef,
@@ -3425,6 +3551,7 @@ export function buildTrees(city, U = null) {
     uniforms: {
       uTime: uTimeRef,
       uLightK: uLightRef,
+      uVehLight: uVehLightTreeRef,
       uBeaconCol: { value: col('#68e8ff') },
       uSteady: { value: 0.25 },
       uWorldCurve: uCurveRef,
@@ -3460,6 +3587,7 @@ export function buildTrees(city, U = null) {
       uTreeCyber: { value: 0 },
       uTime: uTimeRef,
       uLightK: uLightRef,
+      uVehLight: uVehLightTreeRef,
       uWorldCurve: uCurveRef,
       uPlanetR: uPlanetRef,
     },
@@ -3477,6 +3605,7 @@ export function buildTrees(city, U = null) {
       uTreeCyber: { value: 1 },
       uTime: uTimeRef,
       uLightK: uLightRef,
+      uVehLight: uVehLightTreeRef,
       uWorldCurve: uCurveRef,
       uPlanetR: uPlanetRef,
     },
@@ -3955,10 +4084,13 @@ export function applyLook(U, look, tune = { win: 1, glow: 1, fog: 1 }) {
   if (tune.cloudSeed !== undefined && U.uCloudSeed) U.uCloudSeed.value = tune.cloudSeed;
   if (tune.cloudEvol !== undefined && U.uCloudEvol) U.uCloudEvol.value = tune.cloudEvol;
   if (tune.cloudLac !== undefined && U.uCloudLac) U.uCloudLac.value = tune.cloudLac;
+  if (tune.cloudElev !== undefined && U.uCloudElev) U.uCloudElev.value = tune.cloudElev;
+  if (tune.cloudRange !== undefined && U.uCloudRange) U.uCloudRange.value = tune.cloudRange;
   if (tune.signAmt !== undefined && U.uSignAmt) U.uSignAmt.value = tune.signAmt;
   if (tune.megaWrap !== undefined && U.uMegaWrap) U.uMegaWrap.value = tune.megaWrap;
   if (tune.glyphStyle !== undefined && U.uGlyphStyle) U.uGlyphStyle.value = tune.glyphStyle;
   if (tune.signAnim !== undefined && U.uSignAnim) U.uSignAnim.value = tune.signAnim;
+  if (tune.vehLight !== undefined && U.uVehLight) U.uVehLight.value = tune.vehLight;
   if (tune.clouds !== undefined) {
     const clTune = Math.max(0, tune.clouds);
     const baseCloud = (look.sky.cloud === 0 && clTune > 1.02) ? 0.34 : look.sky.cloud;
@@ -4049,8 +4181,10 @@ export function applyTime(U, look, hours = 12, tune = { lights: 1, glow: 1 }) {
   const nightKey = new THREE.Vector3(Math.cos(nightAz) * nightXZ, nightY, Math.sin(nightAz) * nightXZ).normalize();
   U.uSunDir.value.copy(nightKey).lerp(solarVec, dayWeight).normalize();
 
-  // tint DELTA relative to the authored hour — lighting moves with the clock
-  // but never crushes the palette
+  // tint DELTA relative to the authored hour — lighting moves across a full
+  // universal 24-hour day & night cycle for ALL 9 looks while keeping 100%
+  // identity at `look.defTime` and strict grayscale for `metropolis` (`isMono`).
+  const isMono = !!(look.signals && look.signals.billMono > 0.5);
   const tintAt = (k) => {
     const c = new THREE.Color(1, 1, 1);
     c.lerp(new THREE.Color(0.42, 0.48, 0.72), k.night * 0.8);
@@ -4065,11 +4199,17 @@ export function applyTime(U, look, hours = 12, tune = { lights: 1, glow: 1 }) {
     const b = i === 0 ? tR.r : i === 1 ? tR.g : tR.b;
     return Math.max(0.5, Math.min(1.85, a / Math.max(b, 0.2)));
   };
+  const rMono = 0.299 * ratio(0) + 0.587 * ratio(1) + 0.114 * ratio(2);
   const mixRatio = (target, hex) => {
     target.value.set(hex);
-    target.value.r *= ratio(0);
-    target.value.g *= ratio(1);
-    target.value.b *= ratio(2);
+    if (isMono) {
+      const m = 0.299 * target.value.r + 0.587 * target.value.g + 0.114 * target.value.b;
+      target.value.setRGB(m * rMono, m * rMono, m * rMono);
+    } else {
+      target.value.r *= ratio(0);
+      target.value.g *= ratio(1);
+      target.value.b *= ratio(2);
+    }
   };
 
   mixRatio(U.uZen, look.sky.zen);
@@ -4082,22 +4222,109 @@ export function applyTime(U, look, hours = 12, tune = { lights: 1, glow: 1 }) {
   mixRatio(U.uAmb, look.light.amb);
   mixRatio(U.uAmbG, look.light.ambG);
 
-  // relative light levels — identity at defTime
-  const sunR = (k) => Math.max(0.12, 0.20 + 0.85 * k.elev + k.warm * 0.5 - k.deep * 0.08);
-  U.uSunK.value = (look.light.sunK * sunR(cur)) / sunR(ref);
-  const glowR = (k) => 1 + k.night * 1.15 + k.deep * 0.4;
-  U.uWinGlow.value = ((look.tower.winGlow * (tune.glow ?? 1)) * glowR(cur)) / glowR(ref);
+  // Universal full Day/Night envelope:
+  // - `dDay > 0`: lifts night-authored looks (Blade Runner, Tron, Outrun, Metropolis) into sunlit daytime!
+  // - `dNight > 0`: deepens day-authored looks (Anime, Abstract, Clay, Realistic) into glowing night!
+  // - Both equal 0.000000 at `h === look.defTime` (exact authored look identity!).
+  const dDay = clamp01(Math.max(0, cur.elev - ref.elev) * (1 - cur.night) * 0.92);
+  const dNight = clamp01(Math.max(0, cur.night - ref.night) * 0.88);
+  const accentCol = isMono ? new THREE.Color(0.65, 0.65, 0.65) : col(look.accent || '#5cd6ff');
 
-  // stars: identity at defTime, stronger through the night, deepest pre-dawn
+  // Reset surface & water base colors from look before applying circadian lift/drop
+  U.uGStreet.value.set(look.ground.street);
+  U.uGBlock.value.set(look.ground.block);
+  U.uWaterDeep.value.set((look.water && look.water.deep) || '#030812');
+  U.uWaterShallow.value.set((look.water && look.water.shallow) || '#0f273c');
+
+  if (dDay > 0) {
+    const dayZen = isMono
+      ? new THREE.Color(0.46, 0.46, 0.46)
+      : new THREE.Color(0.18, 0.43, 0.78).lerp(accentCol, 0.16);
+    const dayHor = isMono
+      ? new THREE.Color(0.76, 0.76, 0.76)
+      : new THREE.Color(0.76, 0.82, 0.90).lerp(col(look.sky.hor), 0.22).lerp(new THREE.Color(0.96, 0.76, 0.56), cur.warm * 0.45);
+    const dayCloud = isMono
+      ? new THREE.Color(0.86, 0.86, 0.86)
+      : new THREE.Color(0.90, 0.91, 0.93).lerp(new THREE.Color(0.98, 0.82, 0.66), cur.warm * 0.4);
+    const daySun = isMono
+      ? new THREE.Color(0.96, 0.96, 0.96)
+      : new THREE.Color(1.0, 0.95, 0.86);
+    const dayAmb = isMono
+      ? new THREE.Color(0.54, 0.54, 0.54)
+      : new THREE.Color(0.46, 0.54, 0.68).lerp(accentCol, 0.10);
+    const dayAmbG = isMono
+      ? new THREE.Color(0.32, 0.32, 0.32)
+      : new THREE.Color(0.32, 0.30, 0.28);
+    const dayStreet = isMono ? new THREE.Color(0.24, 0.24, 0.24) : new THREE.Color(0.22, 0.24, 0.28);
+    const dayBlock = isMono ? new THREE.Color(0.36, 0.36, 0.36) : new THREE.Color(0.34, 0.36, 0.40);
+    const dayWDeep = isMono ? new THREE.Color(0.16, 0.16, 0.16) : new THREE.Color(0.06, 0.22, 0.40);
+    const dayWShal = isMono ? new THREE.Color(0.34, 0.34, 0.34) : new THREE.Color(0.14, 0.46, 0.62);
+
+    U.uZen.value.lerp(dayZen, dDay);
+    U.uHor.value.lerp(dayHor, dDay);
+    U.uSkySunCol.value.lerp(daySun, dDay * 0.65);
+    U.uSunFogCol.value.lerp(dayHor, dDay * 0.85);
+    U.uCloudCol.value.lerp(dayCloud, dDay * 0.88);
+    U.uFogCol.value.lerp(dayHor, dDay * 0.80);
+    U.uSunCol.value.lerp(daySun, dDay * 0.72);
+    U.uAmb.value.lerp(dayAmb, dDay * 0.85);
+    U.uAmbG.value.lerp(dayAmbG, dDay * 0.80);
+    U.uGStreet.value.lerp(dayStreet, dDay * 0.72);
+    U.uGBlock.value.lerp(dayBlock, dDay * 0.72);
+    U.uWaterDeep.value.lerp(dayWDeep, dDay * 0.75);
+    U.uWaterShallow.value.lerp(dayWShal, dDay * 0.75);
+  }
+
+  if (dNight > 0) {
+    const nZen = isMono ? new THREE.Color(0.025, 0.025, 0.025) : new THREE.Color(0.018, 0.032, 0.085);
+    const nHor = isMono ? new THREE.Color(0.075, 0.075, 0.075) : new THREE.Color(0.055, 0.085, 0.175).lerp(accentCol, 0.12);
+    const nCloud = isMono ? new THREE.Color(0.09, 0.09, 0.09) : new THREE.Color(0.07, 0.10, 0.18);
+    const nAmb = isMono ? new THREE.Color(0.11, 0.11, 0.11) : new THREE.Color(0.09, 0.12, 0.22);
+    const nAmbG = isMono ? new THREE.Color(0.05, 0.05, 0.05) : new THREE.Color(0.04, 0.05, 0.09);
+    const nStreet = isMono ? new THREE.Color(0.04, 0.04, 0.04) : new THREE.Color(0.035, 0.042, 0.062);
+    const nBlock = isMono ? new THREE.Color(0.06, 0.06, 0.06) : new THREE.Color(0.052, 0.060, 0.085);
+    const nWDeep = isMono ? new THREE.Color(0.02, 0.02, 0.02) : new THREE.Color(0.012, 0.030, 0.065);
+    const nWShal = isMono ? new THREE.Color(0.06, 0.06, 0.06) : new THREE.Color(0.035, 0.095, 0.155);
+
+    U.uZen.value.lerp(nZen, dNight);
+    U.uHor.value.lerp(nHor, dNight);
+    U.uSunFogCol.value.lerp(nHor, dNight * 0.85);
+    U.uCloudCol.value.lerp(nCloud, dNight * 0.85);
+    U.uFogCol.value.lerp(nHor, dNight * 0.85);
+    U.uAmb.value.lerp(nAmb, dNight * 0.82);
+    U.uAmbG.value.lerp(nAmbG, dNight * 0.82);
+    U.uGStreet.value.lerp(nStreet, dNight * 0.78);
+    U.uGBlock.value.lerp(nBlock, dNight * 0.78);
+    U.uWaterDeep.value.lerp(nWDeep, dNight * 0.78);
+    U.uWaterShallow.value.lerp(nWShal, dNight * 0.78);
+  }
+
+  // relative light levels — identity at defTime, lifted in sunlit day & calmed at deep night
+  const sunR = (k) => Math.max(0.12, 0.20 + 0.85 * k.elev + k.warm * 0.5 - k.deep * 0.08);
+  const rawSunK = (look.light.sunK * sunR(cur)) / sunR(ref);
+  U.uSunK.value = dDay > 0
+    ? rawSunK + (Math.max(rawSunK, 1.16) - rawSunK) * dDay
+    : rawSunK * (1 - 0.55 * dNight);
+
+  const glowR = (k) => 1 + k.night * 1.15 + k.deep * 0.4;
+  const baseWinGlow = look.tower.winGlow;
+  const nightFloorWinGlow = dNight > 0 ? Math.max(baseWinGlow, 0.82 * dNight) : baseWinGlow;
+  U.uWinGlow.value = ((nightFloorWinGlow * (tune.glow ?? 1)) * glowR(cur)) / glowR(ref);
+  U.uWinDensity.value = clamp01(
+    look.tower.winDensity + dNight * Math.max(0, 0.58 - look.tower.winDensity) - dDay * 0.14 * look.tower.winDensity
+  );
+
+  // stars: identity at defTime, stronger through the night, deepest pre-dawn, faded in bright day
   const starFloor = 0.4 * (1 - clamp01(look.sky.haze));
   const starBoost = cur.night * 0.75 + cur.deep * 0.25;
   const starRef = ref.night * 0.75 + ref.deep * 0.25;
   let stars = look.sky.stars;
   stars += (Math.max(look.sky.stars, starFloor + 0.22 * (1 - clamp01(look.sky.haze))) - stars) * clamp01(starBoost - starRef);
-  stars *= 1 - 0.8 * clamp01(starRef - starBoost);
+  stars *= 1 - 0.85 * clamp01(starRef - starBoost);
+  stars *= 1 - 0.92 * dDay;
   U.uStars.value = stars;
 
-  // parametric atmosphere & cloud cover / cloud type / 4D cloud evolution knobs
+  // parametric atmosphere & cloud cover / cloud type / elevation & vertical range / 4D cloud evolution knobs
   const clTune = Math.max(0, tune.clouds ?? 1);
   const baseCloud = (look.sky.cloud === 0 && clTune > 1.02) ? 0.34 : look.sky.cloud;
   U.uCloud.value = clTune <= 0.001 ? 0 : baseCloud * clTune;
@@ -4106,14 +4333,17 @@ export function applyTime(U, look, hours = 12, tune = { lights: 1, glow: 1 }) {
   if (tune.cloudSeed !== undefined && U.uCloudSeed) U.uCloudSeed.value = tune.cloudSeed;
   if (tune.cloudEvol !== undefined && U.uCloudEvol) U.uCloudEvol.value = tune.cloudEvol;
   if (tune.cloudLac !== undefined && U.uCloudLac) U.uCloudLac.value = tune.cloudLac;
+  if (tune.cloudElev !== undefined && U.uCloudElev) U.uCloudElev.value = tune.cloudElev;
+  if (tune.cloudRange !== undefined && U.uCloudRange) U.uCloudRange.value = tune.cloudRange;
   if (tune.tint !== undefined && U.uTint) U.uTint.value = tune.tint;
   if (tune.signAmt !== undefined && U.uSignAmt) U.uSignAmt.value = tune.signAmt;
   if (tune.megaWrap !== undefined && U.uMegaWrap) U.uMegaWrap.value = tune.megaWrap;
   if (tune.glyphStyle !== undefined && U.uGlyphStyle) U.uGlyphStyle.value = tune.glyphStyle;
   if (tune.signAnim !== undefined && U.uSignAnim) U.uSignAnim.value = tune.signAnim;
+  if (tune.vehLight !== undefined && U.uVehLight) U.uVehLight.value = tune.vehLight;
   U.uHaze.value = look.sky.haze * (tune.haze ?? 1);
-  U.uSunGlow.value = 0.65 * (tune.sun ?? 1) * Math.max(0.08, 0.6 + cur.warm * 0.8 + cur.night * 0.1 - cur.deep * 0.15);
-  U.uSat.value = (tune.sat ?? 1) * (1 + cur.warm * 0.12);
+  U.uSunGlow.value = 0.65 * (tune.sun ?? 1) * Math.max(0.08, 0.6 + cur.warm * 0.8 + cur.night * 0.1 - cur.deep * 0.15 + dDay * 0.25);
+  U.uSat.value = isMono ? 0 : (tune.sat ?? 1) * (1 + cur.warm * 0.12);
   U.uLightK.value = (tune.lights ?? 1) * (0.45 + cur.night * 0.7 + cur.warm * 0.35 + cur.deep * 0.2);
   const sig = look.signals || {};
   U.uBeaconCol.value.set(sig.beacon || (look.tower.winC === '#000000' ? look.accent : look.tower.winC));
@@ -4466,6 +4696,10 @@ export function buildHarbor(city, U, beaconMat = null, lampMat = null) {
   }
 
   const quayMat = makeLandmarkMaterial(U, '#3e4654', 0);
+  const promenadeMat = makeLandmarkMaterial(U, '#826a50', 0);
+  const sandDryMat = makeLandmarkMaterial(U, '#d8c094', 0);
+  const sandWetMat = makeLandmarkMaterial(U, '#9c8662', 0);
+  const umbrellaMats = ['#e05844', '#3896d4', '#e8b638', '#3ba87a'].map((hex) => makeLandmarkMaterial(U, hex, 0));
   const craneMat = makeLandmarkMaterial(U, '#d95c38', 1);
   const hullDarkMat = makeLandmarkMaterial(U, '#1e2b3c', 1);
   const hullRedMat = makeLandmarkMaterial(U, '#8e2d28', 0);
@@ -4476,11 +4710,47 @@ export function buildHarbor(city, U, beaconMat = null, lampMat = null) {
     (hex) => makeLandmarkMaterial(U, hex, 0)
   );
 
-  // 1. Waterfront Seawall Quay Apron + Finger Piers
+  // 1. Waterfront Seawall Quay Apron + Timber Boardwalk Promenade + Golden Harbor Beach
   const quay = new THREE.Mesh(new THREE.BoxGeometry(H.quayLen, H.y + 4, 42), quayMat);
   quay.position.set(H.x - H.outX * 18, (H.y - 2) * 0.5, H.z - H.outZ * 18);
   quay.rotation.y = H.rot;
   group.add(quay);
+
+  if (H.promenade) {
+    const P = H.promenade;
+    const prom = new THREE.Mesh(new THREE.BoxGeometry(P.len, 0.9, P.wid), promenadeMat);
+    prom.position.set(P.x, P.y - 0.15, P.z);
+    prom.rotation.y = P.rot;
+    group.add(prom);
+  }
+
+  if (H.beach) {
+    const B = H.beach;
+    // Sloping dry golden sand berm + darker wet swash apron dipping gracefully under the water surface!
+    const drySand = new THREE.Mesh(new THREE.BoxGeometry(B.len, 1.8, B.wid * 0.62), sandDryMat);
+    drySand.position.set(B.x - H.outX * (B.wid * 0.16), 0.75, B.z - H.outZ * (B.wid * 0.16));
+    drySand.rotation.y = B.rot;
+    drySand.rotation.x = 0.032;
+    group.add(drySand);
+
+    const wetSand = new THREE.Mesh(new THREE.BoxGeometry(B.len * 1.04, 1.1, B.wid * 0.58), sandWetMat);
+    wetSand.position.set(B.x + H.outX * (B.wid * 0.24), -0.18, B.z + H.outZ * (B.wid * 0.24));
+    wetSand.rotation.y = B.rot;
+    wetSand.rotation.x = 0.025;
+    group.add(wetSand);
+
+    // Beach cabanas / sun umbrellas along the dry sand crescent
+    const umbCount = 10;
+    for (let u = 0; u < umbCount; u++) {
+      const f = (u / (umbCount - 1) - 0.5) * B.len * 0.76;
+      const jit = ((u * 37) % 11 - 5) * 1.6;
+      const ux = B.x + H.tanX * f - H.outX * (B.wid * 0.12 - jit);
+      const uz = B.z + H.tanZ * f - H.outZ * (B.wid * 0.12 - jit);
+      const canopy = new THREE.Mesh(new THREE.ConeGeometry(3.2, 1.4, 7), umbrellaMats[u % umbrellaMats.length]);
+      canopy.position.set(ux, 3.3, uz);
+      group.add(canopy);
+    }
+  }
 
   const lampPos = [];
   const lampPh = [];
@@ -4690,6 +4960,31 @@ export function buildHarbor(city, U, beaconMat = null, lampMat = null) {
   group.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
 
   let elapsed = 0;
+  function syncShipWakes() {
+    if (!U || !U.uShipWakes || !Array.isArray(U.uShipWakes.value)) return;
+    const wakes = U.uShipWakes.value;
+    let wIdx = 0;
+    // Prioritize underway offshore ships first, then docked ships & marina boats
+    for (let pass = 0; pass < 2 && wIdx < wakes.length; pass++) {
+      for (let i = 0; i < activeShips.length && wIdx < wakes.length; i++) {
+        const { spec, mesh } = activeShips[i];
+        if ((pass === 0 && spec.docked) || (pass === 1 && !spec.docked)) continue;
+        const yaw = mesh.rotation.y;
+        const fx = Math.sin(yaw);
+        const fz = Math.cos(yaw);
+        const spdWake = spec.docked ? 4.5 : Math.max(16, Math.abs(spec.speed));
+        wakes[wIdx].set(mesh.position.x, mesh.position.z, fx * spdWake, fz * spdWake);
+        wIdx++;
+      }
+    }
+    for (let i = 0; i < boatMeshes.length && wIdx < wakes.length; i++, wIdx++) {
+      const bm = boatMeshes[i].mesh;
+      wakes[wIdx].set(bm.position.x, bm.position.z, Math.sin(bm.rotation.y) * 3.0, Math.cos(bm.rotation.y) * 3.0);
+    }
+    for (; wIdx < wakes.length; wIdx++) {
+      wakes[wIdx].set(0, 0, 0, 0);
+    }
+  }
   function update(dt) {
     elapsed += dt;
     for (let i = 0; i < boatMeshes.length; i++) {
@@ -4720,11 +5015,16 @@ export function buildHarbor(city, U, beaconMat = null, lampMat = null) {
         mesh.rotation.z = Math.sin(elapsed * 0.6 + spec.phase * 5) * 0.022;
       }
     }
+    syncShipWakes();
   }
+  syncShipWakes();
 
   function setLook(look) {
     const pal = computeSpecialPalette(look, U, 0.48);
     quayMat.uniforms.uCol.value.copy(pal.pad).lerp(col('#454f5e'), 0.45);
+    promenadeMat.uniforms.uCol.value.copy(pal.secondary).lerp(col('#886f54'), 0.55);
+    sandDryMat.uniforms.uCol.value.copy(pal.gallery).lerp(col('#dcc496'), 0.68);
+    sandWetMat.uniforms.uCol.value.copy(pal.pad).lerp(col('#9a8460'), 0.62);
     deckGlowMat.color.set((look && look.signals && look.signals.lamp) || '#ffe1a6');
     glassPoolMat.color.set((look && look.accent) || '#4ad8ff');
   }
@@ -5005,4 +5305,307 @@ export function buildSpaceport(city, U, beaconMat = null, lampMat = null, beamMa
 
   return { group, update, setLook };
 }
+
+/**
+ * Phase-13 Street-Level Infrastructure, Traffic Signals, Utility Power Lines & Public Spaces:
+ *   1. Cantilevered 4-corner intersection traffic-light masts with live synchronized Red/Amber/Green lenses
+ *   2. Sidewalk utility poles with cross-arms & transformers
+ *   3. Sagging 3-wire catenary power lines & cross-street overhead cables
+ *   4. Sidewalk transit shelters, backlit info kiosks, plaza benches & digital totems
+ */
+export function buildStreetInfrastructure(city, U) {
+  const group = new THREE.Group();
+  const infra = city.streetInfra;
+  if (!infra) {
+    return {
+      group,
+      signalCount: 0,
+      cableCount: 0,
+      update() {},
+      setSignalGlow() {},
+      setLook() {},
+    };
+  }
+
+  const mastMat = makeLandmarkMaterial(U, '#353e4d', 1);
+  const woodMetalMat = makeLandmarkMaterial(U, '#4d4842', 0);
+  const shelterGlassMat = makeLandmarkMaterial(U, '#6aa6c8', 2);
+  const benchMat = makeLandmarkMaterial(U, '#6d5843', 0);
+  const wireMat = makeCurvedBasicMaterial(U, '#27303d');
+  wireMat.transparent = true;
+  wireMat.opacity = 0.85;
+  const kioskGlowMat = makeCurvedBasicMaterial(U, '#6be4ff');
+
+  // Emissive traffic-signal lens material (supports per-instance Red / Amber / Green / Dim color + intensity knob!)
+  const signalLensMat = makeCurvedBasicMaterial(U, '#ffffff');
+  signalLensMat.vertexColors = false;
+
+  const dummy = new THREE.Object3D();
+  const unitBox = new THREE.BoxGeometry(1, 1, 1);
+
+  // 1. Cantilevered Intersection Traffic-Light Masts + 3-Lens Signal Heads
+  const signals = infra.signals || [];
+  const mastParts = [];
+  const lensHeads = []; // { x, y, z, rotY, phase, axis }
+  for (let i = 0; i < signals.length; i++) {
+    const sg = signals[i];
+    const poleH = sg.h || 7.2;
+    const armLen = sg.armLen || 7.5;
+    const rotA = sg.rot || 0;
+    const armDx = Math.cos(rotA);
+    const armDz = Math.sin(rotA);
+    const sigAxis = sg.axis === 'ns' ? 'z' : (sg.axis === 'ew' ? 'x' : (sg.axis || 'z'));
+    const baseY = sg.y || 0;
+
+    // Vertical corner pole on sidewalk curb
+    mastParts.push({ x: sg.x, y: baseY + poleH * 0.5, z: sg.z, sx: 0.42, sy: poleH, sz: 0.42, ry: 0 });
+    // Cantilevered horizontal mast arm reaching out over the approaching traffic lane
+    const ax = sg.x + armDx * (armLen * 0.5);
+    const az = sg.z + armDz * (armLen * 0.5);
+    mastParts.push({
+      x: ax, y: baseY + poleH - 0.32, z: az,
+      sx: Math.abs(armDx) > 0.5 ? armLen : 0.30,
+      sy: 0.30,
+      sz: Math.abs(armDz) > 0.5 ? armLen : 0.30,
+      ry: 0,
+    });
+    // 3-lens signal head housing box suspended near tip of mast arm
+    const hx = sg.x + armDx * (armLen * 0.84);
+    const hz = sg.z + armDz * (armLen * 0.84);
+    const faceRot = sigAxis === 'z' ? 0 : Math.PI * 0.5;
+    mastParts.push({
+      x: hx, y: baseY + poleH - 0.90, z: hz,
+      sx: 0.65, sy: 1.92, sz: 0.56,
+      ry: faceRot,
+    });
+    lensHeads.push({ x: hx, y: baseY + poleH - 0.90, z: hz, rotY: faceRot, phase: sg.phase, axis: sigAxis });
+  }
+
+  if (mastParts.length > 0) {
+    const mastMesh = new THREE.InstancedMesh(unitBox, mastMat, mastParts.length);
+    mastMesh.frustumCulled = false;
+    for (let i = 0; i < mastParts.length; i++) {
+      const mp = mastParts[i];
+      dummy.position.set(mp.x, mp.y, mp.z);
+      dummy.rotation.set(0, mp.ry, 0);
+      dummy.scale.set(mp.sx, mp.sy, mp.sz);
+      dummy.updateMatrix();
+      mastMesh.setMatrixAt(i, dummy.matrix);
+    }
+    mastMesh.instanceMatrix.needsUpdate = true;
+    group.add(mastMesh);
+  }
+
+  // Instanced glowing signal lenses (3 per head: top Red, mid Amber, bottom Green)
+  const lensTotal = lensHeads.length * 3;
+  let lensMesh = null;
+  if (lensTotal > 0) {
+    const lensGeo = new THREE.SphereGeometry(0.34, 8, 6);
+    lensMesh = new THREE.InstancedMesh(lensGeo, signalLensMat, lensTotal);
+    lensMesh.frustumCulled = false;
+    const initCol = new THREE.Color('#141820');
+    for (let h = 0; h < lensHeads.length; h++) {
+      const hd = lensHeads[h];
+      const offsets = [0.56, 0.0, -0.56]; // Red (top), Amber (mid), Green (bottom)
+      for (let l = 0; l < 3; l++) {
+        const idx = h * 3 + l;
+        dummy.position.set(hd.x, hd.y + offsets[l], hd.z);
+        dummy.rotation.set(0, hd.rotY, 0);
+        dummy.scale.set(1, 1, 0.65);
+        dummy.updateMatrix();
+        lensMesh.setMatrixAt(idx, dummy.matrix);
+        lensMesh.setColorAt(idx, initCol);
+      }
+    }
+    lensMesh.instanceMatrix.needsUpdate = true;
+    if (lensMesh.instanceColor) lensMesh.instanceColor.needsUpdate = true;
+    group.add(lensMesh);
+  }
+
+  // 2. Sidewalk Utility Poles + Cross-Arms + Pole-Top Transformers
+  const poles = infra.poles || [];
+  if (poles.length > 0) {
+    const poleBoxes = [];
+    for (let i = 0; i < poles.length; i++) {
+      const pl = poles[i];
+      poleBoxes.push({ x: pl.x, y: pl.y + pl.h * 0.5, z: pl.z, sx: 0.36, sy: pl.h, sz: 0.36, ry: 0 });
+      // Cross-arm perpendicular to sidewalk axis
+      poleBoxes.push({
+        x: pl.x, y: pl.y + pl.h - 0.8, z: pl.z,
+        sx: pl.axis === 'z' ? 2.8 : 0.28,
+        sy: 0.26,
+        sz: pl.axis === 'x' ? 2.8 : 0.28,
+        ry: 0,
+      });
+      if (i % 3 === 0) {
+        // Cylindrical transformer canister mounted below cross-arm
+        poleBoxes.push({ x: pl.x, y: pl.y + pl.h - 2.4, z: pl.z, sx: 0.78, sy: 1.35, sz: 0.78, ry: 0 });
+      }
+    }
+    const poleMesh = new THREE.InstancedMesh(unitBox, woodMetalMat, poleBoxes.length);
+    poleMesh.frustumCulled = false;
+    for (let i = 0; i < poleBoxes.length; i++) {
+      const pb = poleBoxes[i];
+      dummy.position.set(pb.x, pb.y, pb.z);
+      dummy.rotation.set(0, pb.ry, 0);
+      dummy.scale.set(pb.sx, pb.sy, pb.sz);
+      dummy.updateMatrix();
+      poleMesh.setMatrixAt(i, dummy.matrix);
+    }
+    poleMesh.instanceMatrix.needsUpdate = true;
+    group.add(poleMesh);
+  }
+
+  // 3. Sagging Parabolic Catenary Power Lines & Cross-Street Overhead Cables
+  const cables = infra.cables || [];
+  if (cables.length > 0) {
+    const wireVerts = [];
+    const segs = 6;
+    for (let i = 0; i < cables.length; i++) {
+      const cb = cables[i];
+      const dx = cb.x2 - cb.x1;
+      const dz = cb.z2 - cb.z1;
+      const len = Math.hypot(dx, dz) || 1;
+      const nx = -dz / len;
+      const nz = dx / len;
+      const wires = cb.wires || 1;
+      for (let w = 0; w < wires; w++) {
+        const lat = wires === 1 ? 0 : (w / (wires - 1) - 0.5) * 2.1;
+        for (let s = 0; s < segs; s++) {
+          const t0 = s / segs;
+          const t1 = (s + 1) / segs;
+          const sag0 = 4 * t0 * (1 - t0) * cb.sag;
+          const sag1 = 4 * t1 * (1 - t1) * cb.sag;
+          wireVerts.push(
+            cb.x1 + dx * t0 + nx * lat, cb.y1 + (cb.y2 - cb.y1) * t0 - sag0, cb.z1 + dz * t0 + nz * lat,
+            cb.x1 + dx * t1 + nx * lat, cb.y1 + (cb.y2 - cb.y1) * t1 - sag1, cb.z1 + dz * t1 + nz * lat
+          );
+        }
+      }
+    }
+    if (wireVerts.length > 0) {
+      const wireGeo = new THREE.BufferGeometry();
+      wireGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(wireVerts), 3));
+      const wireLines = new THREE.LineSegments(wireGeo, wireMat);
+      wireLines.frustumCulled = false;
+      group.add(wireLines);
+    }
+  }
+
+  // 4. Sidewalk Transit Shelters, Backlit Ad Kiosks & Plaza Benches / Totems
+  const furniture = infra.furniture || [];
+  if (furniture.length > 0) {
+    const shelterBoxes = [];
+    const benchBoxes = [];
+    const glowBoxes = [];
+    for (let i = 0; i < furniture.length; i++) {
+      const fn = furniture[i];
+      if (fn.kind === 'shelter') {
+        // Canopy roof + glass back wall + bench
+        shelterBoxes.push({ x: fn.x, y: fn.y + 3.1, z: fn.z, sx: 2.6, sy: 0.25, sz: 5.8, ry: fn.rot });
+        shelterBoxes.push({ x: fn.x, y: fn.y + 1.6, z: fn.z, sx: 0.22, sy: 2.8, sz: 5.4, ry: fn.rot });
+        benchBoxes.push({ x: fn.x, y: fn.y + 0.55, z: fn.z, sx: 0.9, sy: 0.45, sz: 3.8, ry: fn.rot });
+      } else if (fn.kind === 'kiosk' || fn.kind === 'totem') {
+        const hK = fn.kind === 'totem' ? 5.2 : 3.2;
+        const wK = fn.kind === 'totem' ? 1.5 : 1.15;
+        shelterBoxes.push({ x: fn.x, y: fn.y + hK * 0.5, z: fn.z, sx: wK, sy: hK, sz: 0.45, ry: fn.rot });
+        glowBoxes.push({ x: fn.x, y: fn.y + hK * 0.54, z: fn.z, sx: wK * 0.84, sy: hK * 0.68, sz: 0.52, ry: fn.rot });
+      } else {
+        benchBoxes.push({ x: fn.x, y: fn.y + 0.52, z: fn.z, sx: 1.0, sy: 0.52, sz: 2.8, ry: fn.rot });
+      }
+    }
+    const buildInst = (arr, mat) => {
+      if (!arr.length) return;
+      const im = new THREE.InstancedMesh(unitBox, mat, arr.length);
+      im.frustumCulled = false;
+      for (let i = 0; i < arr.length; i++) {
+        const b = arr[i];
+        dummy.position.set(b.x, b.y, b.z);
+        dummy.rotation.set(0, b.ry, 0);
+        dummy.scale.set(b.sx, b.sy, b.sz);
+        dummy.updateMatrix();
+        im.setMatrixAt(i, dummy.matrix);
+      }
+      im.instanceMatrix.needsUpdate = true;
+      group.add(im);
+    };
+    buildInst(shelterBoxes, shelterGlassMat);
+    buildInst(benchBoxes, benchMat);
+    buildInst(glowBoxes, kioskGlowMat);
+  }
+
+  let signalGlow = 1.0;
+  let isMono = false;
+  const colRed = new THREE.Color();
+  const colAmb = new THREE.Color();
+  const colGrn = new THREE.Color();
+  const colOff = new THREE.Color('#10141c');
+  let lastBucket = -1;
+
+  function refreshSignalColors(timeSec, force = false) {
+    if (!lensMesh || !lensHeads.length) return;
+    lensMesh.visible = signalGlow > 0.01;
+    if (!lensMesh.visible) return;
+    // Signals transition every ~1.9s; quantize updates to 10Hz unless forced for near-zero CPU overhead!
+    const bucket = Math.floor(timeSec * 10);
+    if (!force && bucket === lastBucket) return;
+    lastBucket = bucket;
+
+    const g = Math.min(2.5, signalGlow);
+    if (isMono) {
+      colRed.setRGB(0.95 * g, 0.95 * g, 0.95 * g);
+      colAmb.setRGB(0.68 * g, 0.68 * g, 0.68 * g);
+      colGrn.setRGB(0.84 * g, 0.84 * g, 0.84 * g);
+    } else {
+      colRed.setRGB(1.0 * g, 0.16 * g, 0.14 * g);
+      colAmb.setRGB(1.0 * g, 0.72 * g, 0.14 * g);
+      colGrn.setRGB(0.14 * g, 0.96 * g, 0.48 * g);
+    }
+    colOff.setRGB(0.06, 0.07, 0.09);
+
+    for (let h = 0; h < lensHeads.length; h++) {
+      const hd = lensHeads[h];
+      const st = evalTrafficSignalState(timeSec, hd.phase, hd.axis); // 0=Green, 1=Amber, 2=Red
+      const base = h * 3;
+      lensMesh.setColorAt(base + 0, st === 2 ? colRed : colOff);
+      lensMesh.setColorAt(base + 1, st === 1 ? colAmb : colOff);
+      lensMesh.setColorAt(base + 2, st === 0 ? colGrn : colOff);
+    }
+    if (lensMesh.instanceColor) lensMesh.instanceColor.needsUpdate = true;
+  }
+
+  let elapsed = 0;
+  function update(dt) {
+    elapsed += dt;
+    refreshSignalColors(elapsed, false);
+  }
+
+  function setSignalGlow(val) {
+    signalGlow = Math.max(0, Number(val) ?? 1.0);
+    refreshSignalColors(elapsed, true);
+  }
+
+  function setLook(look) {
+    isMono = !!(look && look.signals && look.signals.billMono > 0.5);
+    const pal = computeSpecialPalette(look, U, 0.31);
+    mastMat.uniforms.uCol.value.copy(pal.pad).lerp(col('#384252'), 0.55);
+    shelterGlassMat.uniforms.uCol.value.copy(pal.gallery).lerp(col('#6aa6c8'), isMono ? 0.0 : 0.45);
+    kioskGlowMat.color.set(isMono ? '#dcdcdc' : ((look && look.accent) || '#6be4ff'));
+    wireMat.color.set(isMono ? '#2a2a2a' : '#252e3b');
+    refreshSignalColors(elapsed, true);
+  }
+
+  refreshSignalColors(0, true);
+  return {
+    group,
+    signalCount: signals.length,
+    cableCount: cables.length,
+    furnitureCount: furniture.length,
+    update,
+    setSignalGlow,
+    setLook,
+    get signalGlow() { return signalGlow; },
+  };
+}
+
 

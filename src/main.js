@@ -17,10 +17,12 @@ import {
   WATER_MODE_NAMES, TERRAIN_MODE_NAMES, TREE_MODE_NAMES, describeMoonPhase,
   buildSigns, buildHolos,
   buildTransitInfrastructure, buildBridges, buildHarbor, buildSpaceport,
+  buildStreetInfrastructure,
 } from './scene.js';
 import { makePostProcessor, ART_STYLE_NAMES } from './post.js';
-import { FlyControls } from './controls.js';
+import { FlyControls, CAMERA_STYLE_NAMES } from './controls.js';
 import { CameraPathRecorder, makeSceneExporter } from './recorder.js';
+import { makeMinimap } from './minimap.js';
 
 // Colours are authored as plain sRGB and written straight out — keep THREE's
 // colour management out of the way.
@@ -181,20 +183,50 @@ let timeOfDay = initialExact
   : (params.get('t') !== null
     ? clampFloat(params.get('t'), 0, 24, LOOK_BY_ID[lookId].defTime)
     : LOOK_BY_ID[lookId].defTime);
+let daySpeed = initialExact
+  ? (initialExact.daySpeed ?? 1)
+  : (params.get('ds') !== null ? clampFloat(params.get('ds'), 0.05, 5, 1) : 1);
+let trafficSpeed = initialExact
+  ? (initialExact.trafficSpeed ?? 1)
+  : (params.get('tsp') !== null ? clampFloat(params.get('tsp'), 0, 3, 1) : 1);
+let camSpeed = initialExact
+  ? (initialExact.camSpeed ?? 1)
+  : (params.get('csp') !== null ? clampFloat(params.get('csp'), 0.2, 3.5, 1) : 1);
+let camRadius = initialExact
+  ? (initialExact.camRadius ?? 2.2)
+  : (params.get('crad') !== null ? clampFloat(params.get('crad'), 0.5, 12, 2.2) : 2.2);
+let camSmooth = initialExact
+  ? (initialExact.camSmooth ?? 0.72)
+  : (params.get('csm') !== null ? clampFloat(params.get('csm'), 0, 1, 0.72) : 0.72);
+let camStyle = initialExact
+  ? (initialExact.camStyle ?? 0)
+  : clampInt(params.get('cst'), 0, 3, 0);
+let pathSmooth = initialExact ? (initialExact.pathSmooth ?? 0.65) : 0.65;
 let heightScale = initialExact ? initialExact.heightScale : 1;
 
 const initLookDefTint = LOOK_BY_ID[lookId].defTint ?? 0.72;
 const tune = initialExact
-  ? { tint: initLookDefTint, cloudSeed: 0, cloudEvol: 0.35, cloudLac: 2.08, glyphStyle: 0, signAnim: 1, ...initialExact.tune }
+  ? {
+      tint: initLookDefTint,
+      searchLight: 1, trafficLight: 1, vehLight: 1,
+      cloudSeed: 0, cloudEvol: 0.35, cloudLac: 2.08, cloudElev: 1, cloudRange: 1,
+      glyphStyle: 0, signAnim: 1,
+      ...initialExact.tune,
+    }
   : {
       tint: params.get('tn') !== null ? clampFloat(params.get('tn'), 0, 1, initLookDefTint) : initLookDefTint,
       win: 1, glow: 1, fog: 1, lights: 1, traffic: 1,
+      searchLight: params.get('sl') !== null ? clampFloat(params.get('sl'), 0, 2.5, 1) : 1,
+      trafficLight: params.get('tl') !== null ? clampFloat(params.get('tl'), 0, 2.5, 1) : 1,
+      vehLight: params.get('vl') !== null ? clampFloat(params.get('vl'), 0, 2.5, 1) : 1,
       clouds: params.get('cl') !== null ? clampFloat(params.get('cl'), 0, 2.4, 1) : 1,
       cloudType: clampInt(params.get('ct'), 0, 5, 0),
       cloudStyle: clampInt(params.get('cs'), 0, 6, 0),
       cloudSeed: params.get('cseed') !== null ? clampFloat(params.get('cseed'), 0, 100, 0) : 0,
       cloudEvol: params.get('cevol') !== null ? clampFloat(params.get('cevol'), 0, 2.5, 0.35) : 0.35,
       cloudLac: params.get('clac') !== null ? clampFloat(params.get('clac'), 1.4, 3.2, 2.08) : 2.08,
+      cloudElev: params.get('cel') !== null ? clampFloat(params.get('cel'), 0.35, 2.4, 1) : 1,
+      cloudRange: params.get('crg') !== null ? clampFloat(params.get('crg'), 0.3, 3.0, 1) : 1,
       glyphStyle: clampInt(params.get('gl'), 0, 2, 0),
       signAnim: params.get('sa') !== null ? clampFloat(params.get('sa'), 0, 2.5, 1) : 1,
       haze: 1, sun: 1, vib: 1,
@@ -322,14 +354,38 @@ function boot() {
   let bridgeGroup = null;
   let harborObj = null;
   let spaceportObj = null;
+  let streetInfraObj = null;
   let city = null;
   let cityCollider = null;
   let poiList = [];
   let glideOn = initialExact ? !!initialExact.glide : false;
+  let freelookOn = initialExact ? !!initialExact.freelook : false;
   let collideOn = initialExact ? initialExact.collide !== false : true;
   let avoidOn = initialExact ? initialExact.avoidance !== false : true;
-  let timeCycleOn = false;
+  let timeCycleOn = initialExact ? !!initialExact.dayCycle : false;
   let activePresetId = '';
+
+  controls.speedMul = camSpeed;
+  controls.colliderRadius = camRadius;
+  controls.smoothness = camSmooth;
+  controls.motionStyle = camStyle;
+
+  const minimap = makeMinimap({
+    canvas: $('#minimap'),
+    labelEl: $('#minimap-label'),
+    onSelectSpot: (spot) => {
+      if (spot && spot.poi) flyToLandmark(spot.poi);
+      else if (spot) flyToLandmark(spot);
+    },
+  });
+  const minimapZooms = [1.0, 2.0, 3.5];
+  let minimapZoomIdx = 0;
+  $('#b-minimap-zoom').onclick = () => {
+    minimapZoomIdx = (minimapZoomIdx + 1) % minimapZooms.length;
+    const z = minimapZooms[minimapZoomIdx];
+    minimap.setZoom(z);
+    $('#b-minimap-zoom').textContent = `${z}\u00D7`;
+  };
 
   function computePlanetRadius() {
     return Math.max(1500, cityRadius * CELL * 1.05 + suburbReach * 950);
@@ -384,10 +440,12 @@ function boot() {
     lamps = makeLamps(city, world.lampMat);
     pools = makeLightPools(city, world.poolMat);
     searchlights = makeSearchlights(city, world.beamMat);
+    searchlights.setAmount(tune.searchLight ?? 1);
     vehicles = makeVehicles(city, world.trailMat, 1400, cityCollider, {
       swarmMat: world.swarmMat,
       swarmCount: 18600,
       transitAmt,
+      trafficSpeed,
       U,
     });
     vehicles.setCollision(collideOn);
@@ -403,12 +461,15 @@ function boot() {
     bridgeGroup = buildBridges(city, U, world.beaconMat, world.lampMat);
     harborObj = buildHarbor(city, U, world.beaconMat, world.lampMat);
     spaceportObj = buildSpaceport(city, U, world.beaconMat, world.lampMat, world.beamMat);
+    streetInfraObj = buildStreetInfrastructure(city, U);
+    streetInfraObj.setSignalGlow(tune.trafficLight ?? 1);
     trees.setNature(look, treeMode);
     trees.setScale(vegScale);
     transitGroup.setLook(look);
     bridgeGroup.setLook(look);
     harborObj.setLook(look);
     spaceportObj.setLook(look);
+    streetInfraObj.setLook(look);
     weather.setTint(look);
     if (boulevardGroup && boulevardGroup.userData.lineMat) {
       boulevardGroup.userData.lineMat.color.set(look.ground.line);
@@ -432,12 +493,14 @@ function boot() {
     cityGroup.add(bridgeGroup);
     cityGroup.add(harborObj.group);
     cityGroup.add(spaceportObj.group);
+    cityGroup.add(streetInfraObj.group);
     applyHeight();
 
     $('#stat-towers').textContent = city.towers.toLocaleString('en-US');
     $('#stat-boxes').textContent = city.count.toLocaleString('en-US');
     $('#stat-seed').textContent = String(seed);
     buildPois();
+    minimap.setCity(city, LOOK_BY_ID[lookId]);
     syncGlideNode();
     syncURL();
   }
@@ -501,21 +564,38 @@ function boot() {
     $('#water-amt-label').textContent = (waterMode === 4 || waterAmount <= 0.005) ? 'Off' : `${Math.round(waterAmount * 100)}%`;
     $('#shoredist-label').textContent = `${shoreDist.toFixed(1)}\u00D7`;
     $('#cloud-label').textContent = tune.clouds <= 0.005 ? 'Off' : `${Math.round(tune.clouds * 100)}%`;
+    $('#cloudelev-label').textContent = `${(tune.cloudElev ?? 1).toFixed(2)}\u00D7`;
+    $('#cloudrange-label').textContent = `${(tune.cloudRange ?? 1).toFixed(2)}\u00D7`;
     $('#cloud-lac-label').textContent = `Lac ${(tune.cloudLac ?? 2.08).toFixed(2)}`;
+    $('#traffspeed-label').textContent = trafficSpeed <= 0.01 ? 'Paused' : `${trafficSpeed.toFixed(2)}\u00D7`;
+    $('#dayspeed-label').textContent = `${daySpeed.toFixed(2)}\u00D7`;
     $('#transit-label').textContent = transitAmt <= 0.01 ? 'Off' : `${Math.round(transitAmt * 100)}%`;
     $('#maritime-label').textContent = maritimeAmt <= 0.01 ? 'Off' : `${Math.round(maritimeAmt * 100)}%`;
     $('#air-label').textContent = airAmt <= 0.01 ? 'Off' : `${Math.round(airAmt * 100)}%`;
     $('#signs-label').textContent = signAmt <= 0.01 ? 'Off' : `${Math.round(signAmt * 100)}%`;
     $('#megawrap-label').textContent = megaWrap <= 0.01 ? 'Off' : `${Math.round(megaWrap * 100)}%`;
     $('#sign-anim-label').textContent = (tune.signAnim ?? 1) <= 0.01 ? 'Static' : `${(tune.signAnim ?? 1).toFixed(1)}\u00D7`;
+    $('#searchlights-label').textContent = (tune.searchLight ?? 1) <= 0.01 ? 'Off' : `${Math.round((tune.searchLight ?? 1) * 100)}%`;
+    $('#trafflights-label').textContent = (tune.trafficLight ?? 1) <= 0.01 ? 'Off' : `${Math.round((tune.trafficLight ?? 1) * 100)}%`;
+    $('#vehlights-label').textContent = (tune.vehLight ?? 1) <= 0.01 ? 'Off' : `${Math.round((tune.vehLight ?? 1) * 100)}%`;
+    $('#lights-label').textContent = (tune.lights ?? 1) <= 0.01 ? 'Off' : `${Math.round((tune.lights ?? 1) * 100)}%`;
     $('#veg-cover-label').textContent = vegCover <= 0.01 ? 'Off' : `${Math.round(vegCover * 100)}%`;
     $('#veg-scale-label').textContent = `${vegScale.toFixed(1)}\u00D7`;
+    $('#camspeed-label').textContent = `${camSpeed.toFixed(2)}\u00D7`;
+    $('#camrad-label').textContent = `${camRadius.toFixed(1)}m`;
+    $('#camsmooth-label').textContent = `${Math.round(camSmooth * 100)}%`;
+    $('#pathsmooth-label').textContent = `Smooth ${Math.round(pathSmooth * 100)}%`;
   }
 
   function syncAllSliders() {
     $('#seed-input').value = String(seed);
     $('#sel-look').value = lookId;
     $('#sl-tint').value = String(tune.tint ?? 0.72);
+    $('#sel-camstyle').value = String(camStyle);
+    $('#sl-camspeed').value = String(camSpeed);
+    $('#sl-camrad').value = String(camRadius);
+    $('#sl-camsmooth').value = String(camSmooth);
+    $('#sl-pathsmooth').value = String(pathSmooth);
     $('#sl-curve').value = String(worldCurve);
     $('#sl-radius').value = String(cityRadius);
     $('#sl-suburbs').value = String(suburbReach);
@@ -529,6 +609,7 @@ function boot() {
     $('#sl-veg-scale').value = String(vegScale);
     $('#sl-height').value = String(heightScale);
     $('#sl-traffic').value = String(trafficToSlider(tune.traffic));
+    $('#sl-traffspeed').value = String(trafficSpeed);
     $('#sl-transit').value = String(transitAmt);
     $('#sl-maritime').value = String(maritimeAmt);
     $('#sl-air').value = String(airAmt);
@@ -536,11 +617,16 @@ function boot() {
     $('#sl-megawrap').value = String(megaWrap);
     $('#sel-glyph').value = String(tune.glyphStyle ?? 0);
     $('#sl-sign-anim').value = String(tune.signAnim ?? 1);
+    $('#sl-searchlights').value = String(tune.searchLight ?? 1);
+    $('#sl-trafflights').value = String(tune.trafficLight ?? 1);
+    $('#sl-vehlights').value = String(tune.vehLight ?? 1);
     $('#sl-win').value = String(tune.win);
     $('#sl-glow').value = String(tune.glow);
     $('#sl-fog').value = String(tune.fog);
     $('#sl-lights').value = String(tune.lights);
     $('#sl-clouds').value = String(tune.clouds);
+    $('#sl-cloudelev').value = String(tune.cloudElev ?? 1);
+    $('#sl-cloudrange').value = String(tune.cloudRange ?? 1);
     $('#sl-cloud-seed').value = String(tune.cloudSeed ?? 0);
     $('#sl-cloud-evol').value = String(tune.cloudEvol ?? 0.35);
     $('#sl-cloud-lac').value = String(tune.cloudLac ?? 2.08);
@@ -548,6 +634,7 @@ function boot() {
     $('#sl-sun').value = String(tune.sun);
     $('#sl-vib').value = String(tune.vib);
     $('#sl-time').value = String(timeOfDay);
+    $('#sl-dayspeed').value = String(daySpeed);
     $('#sl-dust').value = String(dustLevel);
     $('#sl-weather').value = String(weatherMode);
     $('#sel-cloudtype').value = String(tune.cloudType ?? 0);
@@ -617,6 +704,14 @@ function boot() {
     };
     applyLook(U, look, lookTune);
     applyTime(U, look, timeOfDay, { ...lookTune, sat: tune.vib });
+    if (searchlights && searchlights.syncBaseFromLook) {
+      searchlights.syncBaseFromLook((look.signals && look.signals.beamK) ?? 0.22);
+      searchlights.setAmount(tune.searchLight ?? 1);
+    }
+    if (streetInfraObj) {
+      streetInfraObj.setLook(look);
+      streetInfraObj.setSignalGlow(tune.trafficLight ?? 1);
+    }
     if (world.clouds) world.clouds.visible = U.uCloud.value > 0.008;
     if (billboards) billboards.visible = signAmt > 0.01;
     if (signGroup) signGroup.visible = signAmt > 0.01;
@@ -630,6 +725,7 @@ function boot() {
     if (trees) trees.setNature(look, treeMode);
     if (vehicles) vehicles.setPalette(look);
     if (weather) weather.setTint(look);
+    if (minimap) minimap.setLook(look);
     if (boulevardGroup && boulevardGroup.userData.lineMat) {
       boulevardGroup.userData.lineMat.color.set(look.ground.line);
     }
@@ -715,11 +811,20 @@ function boot() {
       worldCurve,
       heightScale,
       timeOfDay,
+      dayCycle: timeCycleOn,
+      daySpeed,
+      trafficSpeed,
       weatherMode,
       dustLevel,
       glide: glideOn,
+      freelook: freelookOn,
       collide: collideOn,
       avoidance: avoidOn,
+      camSpeed,
+      camRadius,
+      camSmooth,
+      camStyle,
+      pathSmooth,
       tune: { ...tune },
       post: { ...postState },
       custom: LOOK_BY_ID.custom.customConfig ? { ...LOOK_BY_ID.custom.customConfig } : { ...DEFAULT_CUSTOM },
@@ -769,6 +874,18 @@ function boot() {
     worldCurve = st.worldCurve;
     heightScale = st.heightScale;
     timeOfDay = st.timeOfDay;
+    timeCycleOn = !!st.dayCycle;
+    daySpeed = st.daySpeed ?? 1;
+    trafficSpeed = st.trafficSpeed ?? 1;
+    camSpeed = st.camSpeed ?? 1;
+    camRadius = st.camRadius ?? 2.2;
+    camSmooth = st.camSmooth ?? 0.72;
+    camStyle = st.camStyle ?? 0;
+    pathSmooth = st.pathSmooth ?? 0.65;
+    controls.speedMul = camSpeed;
+    controls.colliderRadius = camRadius;
+    controls.smoothness = camSmooth;
+    controls.motionStyle = camStyle;
     weatherMode = st.weatherMode;
     dustLevel = st.dustLevel;
     Object.assign(tune, st.tune);
@@ -785,12 +902,14 @@ function boot() {
     else {
       syncWorldGeometry();
       applyHeight();
+      if (vehicles && vehicles.setTrafficSpeed) vehicles.setTrafficSpeed(trafficSpeed);
     }
     refreshLook(false);
 
     if (st.avoidance !== avoidOn) setAvoidanceState(st.avoidance);
     if (st.collide !== collideOn) setCollisionState(st.collide);
     if (st.glide !== glideOn) setGlideState(st.glide);
+    if (!!st.freelook !== freelookOn) setFreelookState(!!st.freelook);
 
     if (applyBookmarks && st.bookmarks && st.bookmarks.length) {
       bookmarks = st.bookmarks.map((b) => ({ ...b }));
@@ -1100,6 +1219,7 @@ function boot() {
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) return;
     if (e.key === 'h' || e.key === 'H') toggleUI();
     else if (e.key === 'g' || e.key === 'G') toggleGlide();
+    else if (e.key === 'l' || e.key === 'L') toggleFreelook();
     else if (e.key === 'v' || e.key === 'V') toggleAvoidance();
     else if (e.key === 'c' || e.key === 'C') toggleCollision();
     else if (e.key === 't' || e.key === 'T') toggleTimeCycle();
@@ -1129,6 +1249,27 @@ function boot() {
   bindSlider($('#sl-tint'), (v) => {
     tune.tint = clampFloat(v, 0, 1, 0.72);
     refreshLook();
+  });
+  $('#sel-camstyle').value = String(camStyle);
+  $('#sel-camstyle').onchange = (ev) => {
+    camStyle = clampInt(ev.target.value, 0, 3, 0);
+    controls.motionStyle = camStyle;
+    flash(`Camera · ${CAMERA_STYLE_NAMES[camStyle] || 'Cinematic Glide'}`);
+  };
+  bindSlider($('#sl-camspeed'), (v) => {
+    camSpeed = clampFloat(v, 0.2, 3.5, 1);
+    controls.speedMul = camSpeed;
+    syncFeatureLabels();
+  });
+  bindSlider($('#sl-camrad'), (v) => {
+    camRadius = clampFloat(v, 0.5, 12, 2.2);
+    controls.colliderRadius = camRadius;
+    syncFeatureLabels();
+  });
+  bindSlider($('#sl-camsmooth'), (v) => {
+    camSmooth = clampFloat(v, 0, 1, 0.72);
+    controls.smoothness = camSmooth;
+    syncFeatureLabels();
   });
   bindSlider($('#sl-curve'), (v) => {
     worldCurve = clampFloat(v, 0, 1, 0);
@@ -1209,6 +1350,12 @@ function boot() {
     if (vehicles) vehicles.update(0, tune.traffic, heightScale);
     syncTrafficLabel();
   });
+  bindSlider($('#sl-traffspeed'), (v) => {
+    trafficSpeed = clampFloat(v, 0, 3, 1);
+    if (vehicles && vehicles.setTrafficSpeed) vehicles.setTrafficSpeed(trafficSpeed);
+    else U.uTrafficSpeed.value = trafficSpeed;
+    syncFeatureLabels();
+  });
   bindSlider($('#sl-transit'), (v) => {
     transitAmt = clampFloat(v, 0, 2.5, 1);
     if (vehicles && vehicles.setTransitAmt) vehicles.setTransitAmt(transitAmt);
@@ -1268,11 +1415,28 @@ function boot() {
     tune.signAnim = clampFloat(v, 0, 2.5, 1);
     refreshLook();
   });
+  bindSlider($('#sl-searchlights'), (v) => {
+    tune.searchLight = clampFloat(v, 0, 2.5, 1);
+    if (searchlights && searchlights.setAmount) searchlights.setAmount(tune.searchLight);
+    syncFeatureLabels();
+  });
+  bindSlider($('#sl-trafflights'), (v) => {
+    tune.trafficLight = clampFloat(v, 0, 2.5, 1);
+    if (streetInfraObj && streetInfraObj.setSignalGlow) streetInfraObj.setSignalGlow(tune.trafficLight);
+    syncFeatureLabels();
+  });
+  bindSlider($('#sl-vehlights'), (v) => {
+    tune.vehLight = clampFloat(v, 0, 2.5, 1);
+    U.uVehLight.value = tune.vehLight;
+    syncFeatureLabels();
+  });
   bindSlider($('#sl-win'), (v) => { tune.win = v; refreshLook(); });
   bindSlider($('#sl-glow'), (v) => { tune.glow = v; refreshLook(); });
   bindSlider($('#sl-fog'), (v) => { tune.fog = v; refreshLook(); });
   bindSlider($('#sl-lights'), (v) => { tune.lights = v; refreshLook(); });
   bindSlider($('#sl-clouds'), (v) => { tune.clouds = v; refreshLook(); });
+  bindSlider($('#sl-cloudelev'), (v) => { tune.cloudElev = clampFloat(v, 0.35, 2.4, 1); refreshLook(); });
+  bindSlider($('#sl-cloudrange'), (v) => { tune.cloudRange = clampFloat(v, 0.3, 3.0, 1); refreshLook(); });
   bindSlider($('#sl-cloud-seed'), (v) => { tune.cloudSeed = v; refreshLook(); });
   bindSlider($('#sl-cloud-evol'), (v) => { tune.cloudEvol = v; refreshLook(); });
   bindSlider($('#sl-cloud-lac'), (v) => { tune.cloudLac = v; refreshLook(); });
@@ -1280,6 +1444,10 @@ function boot() {
   bindSlider($('#sl-sun'), (v) => { tune.sun = v; refreshLook(); });
   bindSlider($('#sl-vib'), (v) => { tune.vib = v; refreshLook(); });
   bindSlider($('#sl-time'), (v) => { timeOfDay = v; refreshLook(); });
+  bindSlider($('#sl-dayspeed'), (v) => {
+    daySpeed = clampFloat(v, 0.05, 5, 1);
+    syncFeatureLabels();
+  });
   bindSlider($('#sl-weather'), (v) => {
     weatherMode = Math.round(v);
     weather.setMode(weatherMode);
@@ -1365,6 +1533,7 @@ function boot() {
     $('#b-path-clear').disabled = kfCount === 0 && !rec;
     $('#b-path-render').disabled = !has || rec || renderingPathVideo;
     $('#b-path-render').classList.toggle('rec-on', renderingPathVideo);
+    $('#b-pathsmooth').disabled = !has || rec;
 
     const scrub = $('#sl-scrub');
     scrub.disabled = !has || rec;
@@ -1479,6 +1648,22 @@ function boot() {
     pathRecorder.applyAt(tSec, camera, controls);
     syncPathUI();
   });
+  bindSlider($('#sl-pathsmooth'), (v) => {
+    pathSmooth = clampFloat(v, 0, 1, 0.65);
+    syncFeatureLabels();
+    if (pathRecorder.hasPath && !pathRecorder.recording) {
+      pathRecorder.smoothPath(pathSmooth);
+      if (!pathRecorder.playing) pathRecorder.applyAt(pathRecorder.playhead, camera, controls);
+    }
+  });
+  $('#b-pathsmooth').onclick = () => {
+    if (!pathRecorder.hasPath || pathRecorder.recording) return;
+    pathRecorder.smoothPath(pathSmooth);
+    persistPath();
+    if (!pathRecorder.playing) pathRecorder.applyAt(pathRecorder.playhead, camera, controls);
+    syncPathUI();
+    flash(`Smoothed camera path · ${Math.round(pathSmooth * 100)}% cinematic spline`);
+  };
 
   // Scene Render Export: high-res clean PNG still + live WebM/MP4 video + automated Path->Video render!
   $('#b-snap').onclick = async () => {
@@ -1617,10 +1802,24 @@ function boot() {
     if (announce) flash(collideOn ? '\u2B21 Collision on' : '\u25CC Noclip');
   }
 
+  function setFreelookState(on, announce = false) {
+    freelookOn = !!on;
+    controls.setFreelook(freelookOn);
+    const b = $('#b-freelook');
+    b.classList.toggle('on', freelookOn);
+    b.setAttribute('aria-pressed', String(freelookOn));
+    b.title = `Free look-around mode — decouple head gaze from flight travel direction: ${freelookOn ? 'on' : 'off'} (L)`;
+    if (announce) {
+      flash(freelookOn ? '\u25CE Free look-around on (drag to look around freely)' : 'Free look-around off (forward-locked)');
+    }
+  }
+
   function toggleGlide() { setGlideState(!glideOn, true); }
+  function toggleFreelook() { setFreelookState(!freelookOn, true); }
   function toggleAvoidance() { setAvoidanceState(!avoidOn, true); }
   function toggleCollision() { setCollisionState(!collideOn, true); }
   $('#b-glide').onclick = toggleGlide;
+  $('#b-freelook').onclick = toggleFreelook;
   $('#b-avoid').onclick = toggleAvoidance;
   $('#b-collide').onclick = toggleCollision;
 
@@ -1862,10 +2061,11 @@ function boot() {
   function animate() {
     try {
       const dt = Math.min(clock.getDelta(), 0.05);
-      U.uTime.value += dt;
+      // Seamless 120.0s periodic noise cycle — zero jump across wrap!
+      U.uTime.value = (U.uTime.value + dt) % 120.0;
       if (timeCycleOn) {
-        timeOfDay = (timeOfDay + dt * 0.48) % 24;
-        tune.moonph = ((tune.moonph + dt * 0.032) % 2 + 2) % 2;
+        timeOfDay = (timeOfDay + dt * 0.48 * daySpeed) % 24;
+        tune.moonph = ((tune.moonph + dt * 0.032 * daySpeed) % 2 + 2) % 2;
         $('#sl-time').value = String(timeOfDay);
         $('#sl-moonph').value = String(tune.moonph);
         refreshLook(false, true);
@@ -1926,8 +2126,10 @@ function boot() {
       if (vehicles) vehicles.update(dt, tune.traffic, heightScale);
       if (harborObj) harborObj.update(dt);
       if (spaceportObj) spaceportObj.update(dt);
+      if (streetInfraObj) streetInfraObj.update(dt);
       if (searchlights) searchlights.update(dt);
       if (weather) weather.update(dt, camera.position);
+      if (minimap) minimap.render(camera, controls, pathRecorder);
       world.sky.position.copy(camera.position);
       post.render(scene, camera, U.uTime.value);
       requestAnimationFrame(animate);
@@ -1941,6 +2143,7 @@ function boot() {
   refreshLook(!initialExact);
   setAvoidanceState(avoidOn, false);
   setCollisionState(collideOn, false);
+  setFreelookState(freelookOn, false);
   if (glideOn) setGlideState(true, false);
   if (initialExact && initialExact.camera) {
     controls.setPose(initialExact.camera);

@@ -663,6 +663,47 @@ test('Phase-12: feature amount dials (0=off .. cranked), shoreline distance, sho
   assert.ok(dFar > dNear + 400, `larger shoreDist pushes shoreline further offshore (dNear=${dNear.toFixed(0)}, dFar=${dFar.toFixed(0)})`);
 });
 
+test('Phase-13 city: dry-land traffic grid (no street lanes over water), bridge lanes, street infrastructure, harbor beach & organic water shapes', () => {
+  for (const wm of [0, 1, 2, 3]) {
+    const c = generateCity({ seed: 4417, radius: 5, waterMode: wm, waterAmount: 1.0, shoreDist: 1.0 });
+    const streetGridLanes = c.lanes.filter((L) => L.kind === 'street' || L.kind === 'thru' || L.kind === 'turn');
+    assert.ok(streetGridLanes.length > 80, `wm=${wm}: healthy dry street grid (${streetGridLanes.length} lanes)`);
+    for (const L of streetGridLanes) {
+      const mx = (L.x1 + L.x2) * 0.5;
+      const mz = (L.z1 + L.z2) * 0.5;
+      assert.equal(
+        isPointInWater(c, mx, mz, 2),
+        false,
+        `wm=${wm}: street-grid lane (${L.kind} deck=${L.deck}) midpoint (${mx.toFixed(0)}, ${mz.toFixed(0)}) must not cross water`
+      );
+    }
+  }
+
+  const coastal = generateCity({ seed: 4417, radius: 5, waterMode: 1, waterAmount: 1.1, maritimeAmt: 1.2 });
+  // River bridges carry dedicated elevated crossing lanes
+  if (coastal.bridges.length > 0) {
+    assert.ok(coastal.lanes.some((L) => L.kind === 'bridge'), 'river bridges carry explicit elevated bridge traffic lanes');
+  }
+
+  // Street infrastructure: cantilevered traffic lights, utility poles, sagging catenary cables & public furniture
+  assert.ok(coastal.streetInfra, 'city.streetInfra generated');
+  assert.ok(coastal.streetInfra.signals.length >= 16, `expected >=16 intersection signal nodes, got ${coastal.streetInfra.signals.length}`);
+  assert.ok(coastal.streetInfra.poles.length >= 20, `expected >=20 sidewalk utility poles, got ${coastal.streetInfra.poles.length}`);
+  assert.ok(coastal.streetInfra.cables.length >= 20, `expected >=20 overhead power/cross-street cables, got ${coastal.streetInfra.cables.length}`);
+  assert.ok(coastal.streetInfra.furniture.length >= 20, `expected >=20 sidewalk shelters/kiosks/plaza benches, got ${coastal.streetInfra.furniture.length}`);
+  for (const sig of coastal.streetInfra.signals) {
+    assert.equal(isPointInWater(coastal, sig.x, sig.z, 6), false, 'traffic signal intersection sits on dry land');
+  }
+
+  // Multi-lobed harbor lagoons, inland kettle pond & smooth 44-step river + harbor beach & promenade
+  const pond = coastal.water.find((w) => w.kind === 'pond');
+  const river = coastal.water.find((w) => w.kind === 'river');
+  assert.ok(pond && pond.pts.length >= 24, 'organic multi-lobed inland pond generated');
+  assert.ok(river && river.pts.length >= 80, 'high-resolution meandering river ribbon generated');
+  assert.ok(coastal.harbor && coastal.harbor.beach && coastal.harbor.promenade, 'harbor features golden crescent beach & boardwalk promenade');
+});
+
+
 
 
 

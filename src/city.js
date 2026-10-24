@@ -1094,7 +1094,8 @@ export function generateCity(
     coastAngle, terrainSeedX, terrainSeedZ,
   });
   const transit = makeTransitNetwork(seed, radius, collider, inWater, transitAmt);
-  const lanes = makeLanes(seed, radius, boulevards, collider, terrainSeedX, terrainSeedZ, inWater, suburbSpan, transit);
+  const lanes = makeLanes(seed, radius, boulevards, collider, terrainSeedX, terrainSeedZ, inWater, suburbSpan, transit, bridges);
+  const streetInfra = makeStreetInfrastructure(seed, radius, boulevards, places, inWater);
   const lamps = makeLamps(seed, radius, boulevards, mediaZone, inWater);
   for (let i = 0; i < subLamps.length; i++) lamps.push(subLamps[i]);
   const trees = makeTrees(seed, radius, water, lmCells, places, boulevards, sites, inRestricted, vegCover, vegScale);
@@ -1107,7 +1108,7 @@ export function generateCity(
     coastAngle, terrainSeedX, terrainSeedZ,
     count: n, towers, maxY, x, y, z, w, h, d, s, kind, style, rot,
     districts, landmarks, places, suburbPOIs, mediaZone, lanes, transit,
-    harbor, bridges, spaceport,
+    harbor, bridges, spaceport, streetInfra,
     beacons, lamps, sites, water, boulevards, trees, treeLinks, bills, signs, holos,
   };
 }
@@ -1294,7 +1295,8 @@ function makeLanes(
   terrainSeedZ = 0,
   inWater = null,
   suburbSpan = 4000,
-  transit = null
+  transit = null,
+  bridges = []
 ) {
   const lanes = [];
   const span = radius * CELL + CELL * 0.85;
@@ -1313,6 +1315,20 @@ function makeLanes(
       prof[s] = y1 + (y2 - y1) * h;
     }
     return prof;
+  };
+
+  // Stop the orthogonal street & air-grid traffic network from continuing above water bodies!
+  const segmentDry = (x1, z1, cx, cz, x2, z2, pad = 6.0) => {
+    if (!inWater) return true;
+    const steps = 8;
+    for (let s = 0; s <= steps; s++) {
+      const t = s / steps;
+      const om = 1 - t;
+      const px = om * om * x1 + 2 * om * t * cx + t * t * x2;
+      const pz = om * om * z1 + 2 * om * t * cz + t * t * z2;
+      if (inWater(px, pz, pad)) return false;
+    }
+    return true;
   };
 
   const segmentClear = (x1, z1, cx, cz, x2, z2, y1, y2, pad = 4.8) => {
@@ -1434,6 +1450,9 @@ function makeLanes(
           const yFlat = D.axis === 'ns' ? dk.yNS : dk.yEW;
           const pad = dIdx === 0 ? 4.5 : 4.8;
 
+          if (!segmentDry(pOut.x, pOut.z, (pOut.x + pIn.x) * 0.5, (pOut.z + pIn.z) * 0.5, pIn.x, pIn.z, 6.0)) {
+            continue;
+          }
           if (!segmentClear(pOut.x, pOut.z, (pOut.x + pIn.x) * 0.5, (pOut.z + pIn.z) * 0.5, pIn.x, pIn.z, yFlat, yFlat, pad)) {
             continue;
           }
@@ -1445,7 +1464,7 @@ function makeLanes(
             pIn.x, pIn.z,
             yFlat, yFlat,
             segSpd, dk.layer,
-            { axis: D.axis, deck: dIdx, kind: 'street' }
+            { axis: D.axis, deck: dIdx, kind: 'street', ix, iz, nix, niz, dCode }
           );
           addMap(startBlocks, `${dIdx}:${ix}:${iz}:${dCode}`, idx);
           addMap(arriveBlocks, `${dIdx}:${nix}:${niz}:${dCode}`, idx);
@@ -1500,7 +1519,10 @@ function makeLanes(
     const straightNext = startBlocks.get(`${dIdx}:${ix}:${iz}:${dCode}`);
     if (straightNext && straightNext.length) {
       const pOutS = gatePos(ix, iz, dCode, true);
-      if (segmentClear(pIn.x, pIn.z, (pIn.x + pOutS.x) * 0.5, (pIn.z + pOutS.z) * 0.5, pOutS.x, pOutS.z, yIn, yIn, 5.5)) {
+      if (
+        segmentDry(pIn.x, pIn.z, (pIn.x + pOutS.x) * 0.5, (pIn.z + pOutS.z) * 0.5, pOutS.x, pOutS.z, 6.0)
+        && segmentClear(pIn.x, pIn.z, (pIn.x + pOutS.x) * 0.5, (pIn.z + pOutS.z) * 0.5, pOutS.x, pOutS.z, yIn, yIn, 5.5)
+      ) {
         const sConn = pushSeg(
           pIn.x, pIn.z,
           (pIn.x + pOutS.x) * 0.5, (pIn.z + pOutS.z) * 0.5,
@@ -1524,6 +1546,7 @@ function makeLanes(
       const yOut = DT.axis === 'ns' ? dk.yNS : dk.yEW;
       const cx = D.axis === 'ns' ? pIn.latX : pOutT.latX;
       const cz = D.axis === 'ns' ? pOutT.latZ : pIn.latZ;
+      if (!segmentDry(pIn.x, pIn.z, cx, cz, pOutT.x, pOutT.z, 6.0)) continue;
       if (!segmentClear(pIn.x, pIn.z, cx, cz, pOutT.x, pOutT.z, yIn, yOut, 5.5)) {
         continue;
       }
@@ -1635,7 +1658,7 @@ function makeLanes(
         const sz2 = b.z1 + dz * u1 + nz * 8.5 * side;
         const scx = (sx1 + sx2) * 0.5;
         const scz = (sz1 + sz2) * 0.5;
-        if (segmentClear(sx1, sz1, scx, scz, sx2, sz2, yG, yG, 6.5)) {
+        if (segmentDry(sx1, sz1, scx, scz, sx2, sz2, 8.0) && segmentClear(sx1, sz1, scx, scz, sx2, sz2, yG, yG, 6.5)) {
           const bIdx = pushSeg(
             sx1, sz1, scx, scz, sx2, sz2,
             yG, yG, 78 + R(k, side > 0 ? 41 : 42) * 42, 'ground',
@@ -1646,6 +1669,30 @@ function makeLanes(
           }
           prevSegs.push({ idx: bIdx, uEnd: u1 });
         }
+      }
+    }
+  }
+
+  // Dedicated Bridge-Deck Vehicle Lanes across River Bridges (vehicles cross ON the bridge deck, never over bare water!)
+  if (Array.isArray(bridges) && bridges.length > 0) {
+    for (let b = 0; b < bridges.length; b++) {
+      const br = bridges[b];
+      const dx = br.x2 - br.x1;
+      const dz = br.z2 - br.z1;
+      const bLen = Math.hypot(dx, dz) || 1;
+      const nx = -dz / bLen;
+      const nz = dx / bLen;
+      const yBr = (br.yDeck ?? 18) + 2.2;
+      for (const side of [1, -1]) {
+        const lx1 = (side > 0 ? br.x1 : br.x2) + nx * 4.2 * side;
+        const lz1 = (side > 0 ? br.z1 : br.z2) + nz * 4.2 * side;
+        const lx2 = (side > 0 ? br.x2 : br.x1) + nx * 4.2 * side;
+        const lz2 = (side > 0 ? br.z2 : br.z1) + nz * 4.2 * side;
+        pushSeg(
+          lx1, lz1, (lx1 + lx2) * 0.5, (lz1 + lz2) * 0.5, lx2, lz2,
+          yBr, yBr, 68 + R(b, side > 0 ? 71 : 73) * 20, 'ground',
+          { axis: 'bridge', deck: 0, kind: 'bridge' }
+        );
       }
     }
   }
@@ -1825,18 +1872,46 @@ function makeWaters(seed, sites, radius, waterMode = 0, coastAngle = 0.7, sx = 0
   const limit = Math.min(waterSites.length, waterMode === 0 ? (1 + Math.floor(hash2i(5, 61, seed) * 2)) : 1);
   for (let k = 0; k < limit; k++) {
     const s = waterSites[k];
-    const rad = (160 + hash2i(k, 67, seed) * 240) * amtScale;
+    const rad = (175 + hash2i(k, 67, seed) * 235) * amtScale;
     const pts = [];
-    const m = 10 + Math.floor(hash2i(k, 71, seed) * 6);
+    // Smooth multi-harmonic Fourier shoreline so lagoons & ponds have natural kidney/cove bays instead of spiky polygons!
+    const m = 32;
+    const ph1 = hash2i(k, 71, seed) * Math.PI * 2;
+    const ph2 = hash2i(k, 73, seed) * Math.PI * 2;
+    const ph3 = hash2i(k, 79, seed) * Math.PI * 2;
+    const stretch = 1.16 + hash2i(k, 83, seed) * 0.28;
+    const rotP = hash2i(k, 87, seed) * Math.PI;
+    const cp = Math.cos(rotP), sp = Math.sin(rotP);
     for (let i = 0; i < m; i++) {
       const a = (i / m) * Math.PI * 2;
-      const rr = rad * (0.55 + hash2i(k * 31 + i, 79, seed) * 0.8);
-      pts.push([s.x + Math.cos(a) * rr, s.z + Math.sin(a) * rr]);
+      const lobe = 0.78
+        + 0.22 * Math.sin(2 * a + ph1)
+        + 0.14 * Math.cos(3 * a - ph2)
+        + 0.07 * Math.sin(5 * a + ph3);
+      const lx = Math.cos(a) * rad * lobe * stretch;
+      const lz = Math.sin(a) * rad * lobe * (2.0 - stretch * 0.78);
+      pts.push([s.x + lx * cp - lz * sp, s.z + lx * sp + lz * cp]);
     }
     out.push({ x: s.x, z: s.z, r: rad, pts, kind: 'harbor', seed: hash2i(k, 89, seed) });
   }
 
-  // Build meandering river channel in both Harbor+River (0) and Coastal Ocean+Harbor (1) modes!
+  // Natural multi-lobed park/countryside kettle pond in wet basin modes (0, 1, 3)
+  const parkSites = sites.filter((s) => s.kind === 'park');
+  if (parkSites.length > 0 && waterMode !== 2) {
+    const ps = parkSites[0];
+    const pRad = (52 + hash2i(9, 69, seed) * 38) * Math.min(1.35, amtScale);
+    const pondPts = [];
+    const mP = 28;
+    const pPh = hash2i(11, 77, seed) * Math.PI * 2;
+    for (let i = 0; i < mP; i++) {
+      const a = (i / mP) * Math.PI * 2;
+      const rLobe = pRad * (0.76 + 0.24 * Math.cos(2 * a + pPh) + 0.13 * Math.sin(3 * a - pPh * 0.7));
+      pondPts.push([ps.x + 36 + Math.cos(a) * rLobe * 1.25, ps.z - 28 + Math.sin(a) * rLobe * 0.85]);
+    }
+    out.push({ x: ps.x + 36, z: ps.z - 28, r: pRad, pts: pondPts, kind: 'pond', seed: hash2i(13, 93, seed) });
+  }
+
+  // Build sinuous meandering river channel in both Harbor+River (0) and Coastal Ocean+Harbor (1) modes!
   if (waterMode === 0 || waterMode === 1) {
     const rAng = waterMode === 0 ? coastAngle : (coastAngle + Math.PI);
     const ca = Math.cos(rAng);
@@ -1851,8 +1926,8 @@ function makeWaters(seed, sites, radius, waterMode = 0, coastAngle = 0.7, sx = 0
       startX = c0 * uMouth - s0 * vMouth;
       startZ = s0 * uMouth + c0 * vMouth;
     }
-    const steps = 30;
-    const maxLen = Math.max(4600, coreSpan * 4.5);
+    const steps = 44;
+    const maxLen = Math.max(4800, coreSpan * 4.6);
     const leftBank = [];
     const rightBank = [];
     const centerline = [];
@@ -1861,10 +1936,17 @@ function makeWaters(seed, sites, radius, waterMode = 0, coastAngle = 0.7, sx = 0
       const t = i / steps;
       const u = t * maxLen;
       const lateralBias = latSign * t * 420;
-      const meander = lateralBias + Math.sin(u * 0.00145 + sx) * (95 + t * 240)
-        + Math.cos(u * 0.00062 - sz) * (45 + t * 150);
+      const sBend1 = Math.sin(u * 0.00155 + sx);
+      const sBend2 = Math.cos(u * 0.00068 - sz);
+      const sBend3 = Math.sin(u * 0.00310 + sx * 1.7);
+      const meander = lateralBias
+        + sBend1 * (115 + t * 255)
+        + sBend2 * (55 + t * 165)
+        + sBend3 * (22 + t * 38);
       const dMeander = (latSign * 420) / maxLen
-        + Math.cos(u * 0.00145 + sx) * 0.00145 * (95 + t * 240);
+        + Math.cos(u * 0.00155 + sx) * 0.00155 * (115 + t * 255)
+        - Math.sin(u * 0.00068 - sz) * 0.00068 * (55 + t * 165)
+        + Math.cos(u * 0.00310 + sx * 1.7) * 0.00310 * (22 + t * 38);
       const cx = startX + ca * u - sa * meander;
       const cz = startZ + sa * u + ca * meander;
       const tx = ca - sa * dMeander;
@@ -1872,7 +1954,9 @@ function makeWaters(seed, sites, radius, waterMode = 0, coastAngle = 0.7, sx = 0
       const tl = Math.hypot(tx, tz) || 1;
       const nx = -tz / tl;
       const nz = tx / tl;
-      const halfW = (36 + t * 42 + Math.sin(i * 1.3 + sx) * 8) * amtScale;
+      // Natural fluvial morphology: wider at estuary mouth & outer oxbow bends, narrower on straight riffles
+      const bendSwelling = Math.abs(sBend1) * 14 + (1 - Math.min(1, t * 3.5)) * 18;
+      const halfW = (34 + t * 44 + bendSwelling + Math.sin(i * 0.9 + sx) * 6) * amtScale;
       leftBank.push([cx + nx * halfW, cz + nz * halfW]);
       rightBank.push([cx - nx * halfW, cz - nz * halfW]);
       centerline.push({ x: cx, z: cz, tx: tx / tl, tz: tz / tl, nx, nz, halfW, u });
@@ -2489,8 +2573,8 @@ function addTower(push, pushBeacon, pushBill, pushSign, rand, x0, x1, z0, z1, h0
       const [bx, bz] = rotOff(cx, cz, 0, (rand() < 0.5 ? 1 : -1) * (td / 2 + 1.25), segRot);
       pushBill({ x: bx, y: by, z: bz, w: bw, h: bh, d: 2.2, rot: segRot, seed: rand(), mega: wantMega });
     }
-    // High signAmt adds a complementary secondary billboard on an adjacent face!
-    if (signAmt > 1.25 && H > 105 && rand() < (signAmt - 1.0) * 0.55) {
+    // High signAmt adds complementary secondary billboards on adjacent faces!
+    if (signAmt > 1.25 && H > 82 && rand() < Math.min(0.92, (signAmt - 1.0) * 0.85)) {
       const [bx2, bz2] = rotOff(cx, cz, 0, (rand() < 0.5 ? 1 : -1) * (td / 2 + 1.25), segRot);
       pushBill({ x: bx2, y: Math.max(44, H * 0.72), z: bz2, w: Math.min(42, tw * 0.78), h: 12 + rand() * 10, d: 2.2, rot: segRot, seed: rand() });
     }
@@ -2521,6 +2605,34 @@ function addTower(push, pushBeacon, pushBill, pushSign, rand, x0, x1, z0, z1, h0
     pushSign({ x: fx, y: 8 + rand() * 9, z: fz, w: Math.min(34, w * 0.65), h: 3.4 + rand() * 3.2, d: 1.8, rot, seed: rand() });
   }
   addGrit(push, rand, cx, cz, w, dp, d, 1, rot);
+
+  // Deterministic 3D rooftop architectural diversity (twin comms antennas, chiller penthouses, water towers & dishes — uses hash2i so upstream rand() sequence stays 100% deterministic!)
+  const rSeed = hash2i(Math.round(cx * 3), Math.round(cz * 3), Math.round(H * 7));
+  const rSeed2 = hash2i(Math.round(cz * 5), Math.round(cx * 2), Math.round(tw * 11));
+  if (H > 28 && tw > 12 && td > 12) {
+    if (rSeed < 0.32) {
+      // Twin asymmetric comms whip antennas + microwave drum
+      const [ax1, az1] = rotOff(cx, cz, tw * 0.26, td * 0.24, segRot);
+      const [ax2, az2] = rotOff(cx, cz, -tw * 0.22, -td * 0.20, segRot);
+      const h1 = 8 + rSeed2 * 18;
+      const h2 = 5 + (1 - rSeed2) * 12;
+      push(ax1, y + 2.2 + h1 * 0.5, az1, 0.75, h1, 0.75, rSeed, KIND.MAST, style, segRot);
+      push(ax2, y + 2.2 + h2 * 0.5, az2, 0.65, h2, 0.65, rSeed2, KIND.MAST, style, segRot);
+      push(ax1, y + 2.2 + h1 * 0.62, az1, 2.2, 1.8, 0.9, rSeed2, KIND.SLAB, style, segRot + 0.4);
+    } else if (rSeed < 0.58) {
+      // Classic rooftop cylindrical water tank on steel trestle legs + chiller unit
+      const [wx, wz] = rotOff(cx, cz, (rSeed2 - 0.5) * tw * 0.42, (0.5 - rSeed2) * td * 0.38, segRot);
+      push(wx, y + 3.4, wz, 2.8, 2.4, 2.8, rSeed, KIND.MAST, 2, segRot);
+      push(wx, y + 6.4, wz, 4.4, 4.6, 4.4, rSeed2, KIND.SLAB, 2, segRot);
+      push(wx, y + 6.4, wz, 4.4, 4.6, 4.4, rSeed2, KIND.SLAB, 2, segRot + Math.PI * 0.25);
+    } else if (rSeed < 0.82) {
+      // Twin louvered HVAC cooling-tower units + rooftop duct spine
+      const [hx1, hz1] = rotOff(cx, cz, -tw * 0.18, 0, segRot);
+      const [hx2, hz2] = rotOff(cx, cz, tw * 0.18, 0, segRot);
+      push(hx1, y + 3.8, hz1, Math.min(6.5, tw * 0.28), 3.4, Math.min(6.5, td * 0.32), rSeed, KIND.SLAB, 2, segRot);
+      push(hx2, y + 3.5, hz2, Math.min(5.8, tw * 0.26), 2.8, Math.min(5.8, td * 0.28), rSeed2, KIND.SLAB, 2, segRot);
+    }
+  }
 }
 
 /**
@@ -3895,8 +4007,8 @@ function makeHarbor(seed, radius, water, waterMode, waterAmount, coastAngle, coa
   const tanX = -outZ;
   const tanZ = outX;
   const rotOut = Math.atan2(outX, outZ);
-  const pierCount = Math.max(2, Math.min(6, Math.round(3 * Math.min(1.8, Math.max(0.5, maritimeAmt)))));
-  const quayLen = pierCount * 96 + 90;
+  const pierCount = Math.max(3, Math.min(7, Math.round(4 * Math.min(1.8, Math.max(0.5, maritimeAmt)))));
+  const quayLen = pierCount * 92 + 110;
   const piers = [];
   const cranes = [];
   const containers = [];
@@ -3904,11 +4016,11 @@ function makeHarbor(seed, radius, water, waterMode, waterAmount, coastAngle, coa
   const ships = [];
 
   for (let p = 0; p < pierCount; p++) {
-    const along = (p - (pierCount - 1) * 0.5) * 96;
-    const isContainerPier = p % 2 === 0;
-    const isCruisePier = p === 1 || (pierCount >= 4 && p === 3);
-    const len = (isCruisePier ? 215 : isContainerPier ? 195 : 135) * (0.85 + 0.15 * Math.min(1.6, maritimeAmt));
-    const wid = isContainerPier ? 26 : (isCruisePier ? 22 : 14);
+    const along = (p - (pierCount - 1) * 0.5) * 92;
+    const isContainerPier = p % 2 === 0 && p < pierCount - 1;
+    const isCruisePier = p === 1 || (pierCount >= 5 && p === 3);
+    const len = (isCruisePier ? 225 : isContainerPier ? 205 : 148) * (0.85 + 0.15 * Math.min(1.6, maritimeAmt));
+    const wid = isContainerPier ? 26 : (isCruisePier ? 22 : 13);
     const px = anchorX + tanX * along + outX * (len * 0.5);
     const pz = anchorZ + tanZ * along + outZ * (len * 0.5);
     piers.push({ x: px, y: yQuay, z: pz, len, wid, rot: rotOut, kind: isCruisePier ? 'cruise' : (isContainerPier ? 'cargo' : 'marina') });
@@ -3926,7 +4038,6 @@ function makeHarbor(seed, radius, water, waterMode, waterAmount, coastAngle, coa
           boom: 48,
         });
       }
-      // Container stacks on pier & quay apron
       for (let sIdx = 0; sIdx < 8; sIdx++) {
         const dOut = -18 + sIdx * 20;
         containers.push({
@@ -3938,7 +4049,6 @@ function makeHarbor(seed, radius, water, waterMode, waterAmount, coastAngle, coa
           seed: hash2i(p * 13 + sIdx, 547, seed),
         });
       }
-      // Docked Heavy Container Ship alongside cargo pier
       ships.push({
         kind: 'container',
         docked: true,
@@ -3946,12 +4056,13 @@ function makeHarbor(seed, radius, water, waterMode, waterAmount, coastAngle, coa
         y: 0.2,
         z: anchorZ + tanZ * (along - wid * 0.5 - 19) + outZ * (len * 0.58),
         rot: rotOut,
+        fwdX: outX,
+        fwdZ: outZ,
         len: 178 + hash2i(p, 557, seed) * 36,
         wid: 28,
         seed: hash2i(p, 563, seed),
       });
     } else if (isCruisePier) {
-      // Docked Illuminated Luxury Cruise Liner alongside cruise terminal pier!
       ships.push({
         kind: 'cruise',
         docked: true,
@@ -3959,16 +4070,18 @@ function makeHarbor(seed, radius, water, waterMode, waterAmount, coastAngle, coa
         y: 0.2,
         z: anchorZ + tanZ * (along + wid * 0.5 + 18) + outZ * (len * 0.60),
         rot: rotOut,
+        fwdX: outX,
+        fwdZ: outZ,
         len: 196 + hash2i(p, 569, seed) * 42,
         wid: 27,
         seed: hash2i(p, 571, seed),
       });
     } else {
-      // Pleasure marina slips with moored motor-yachts & sailboats
-      const nBoats = Math.max(2, Math.round(6 * maritimeAmt));
+      // Pleasure marina timber finger-pier slips with moored motor-yachts & sailboats
+      const nBoats = Math.max(3, Math.round(7 * maritimeAmt));
       for (let b = 0; b < nBoats; b++) {
         const side = b % 2 === 0 ? 1 : -1;
-        const dOut = 28 + Math.floor(b / 2) * 26;
+        const dOut = 24 + Math.floor(b / 2) * 24;
         boats.push({
           x: anchorX + tanX * (along + side * (wid * 0.5 + 7)) + outX * dOut,
           y: 0.35,
@@ -3981,9 +4094,29 @@ function makeHarbor(seed, radius, water, waterMode, waterAmount, coastAngle, coa
     }
   }
 
-  // Offshore Cruising Fleet (Container Ships & Luxury Cruise Liners steaming across open sea/lake!)
+  // Golden Harbor Crescent Beach & Waterfront Timber Boardwalk flanking the marina side of the port!
+  const beachAlong = ((pierCount - 1) * 0.5) * 92 + 155;
+  const beach = {
+    x: anchorX + tanX * beachAlong + outX * 14,
+    y: Math.max(0.18, yQuay * 0.15),
+    z: anchorZ + tanZ * beachAlong + outZ * 14,
+    len: 230,
+    wid: 62,
+    rot: rotOut,
+    outX, outZ, tanX, tanZ,
+  };
+  const promenade = {
+    x: anchorX - outX * 12,
+    y: yQuay,
+    z: anchorZ - outZ * 12,
+    len: quayLen + 180,
+    wid: 18,
+    rot: rotOut,
+  };
+
+  // Offshore Cruising Fleet (Container Ships & Luxury Cruise Liners steaming across open sea/lake with live Kelvin V-wakes!)
   if (waterMode === 1 || waterMode === 2 || waterMode === 3) {
-    const cruiseFleet = Math.max(1, Math.min(10, Math.round(4 * maritimeAmt)));
+    const cruiseFleet = Math.max(2, Math.min(10, Math.round(4 * maritimeAmt)));
     for (let s = 0; s < cruiseFleet; s++) {
       const isCruise = s % 2 === 1;
       const distOut = (waterMode === 3 ? 520 : 620) + s * 240 + hash2i(s, 593, seed) * 180;
@@ -4012,6 +4145,8 @@ function makeHarbor(seed, radius, water, waterMode, waterAmount, coastAngle, coa
     z: anchorZ,
     outX, outZ, tanX, tanZ, rot: rotOut,
     quayLen,
+    beach,
+    promenade,
     piers,
     cranes,
     containers,
@@ -4134,5 +4269,167 @@ function makeSpaceport(seed, radius, coreSpan, coastAngle, inWater, terrainY, te
     amt: airAmt,
   };
 }
+
+/**
+ * Street-Level Urban Infrastructure:
+ *   - Cantilevered intersection traffic-light signals (NS vs EW green-wave phase)
+ *   - Sidewalk utility poles, sagging 3-wire overhead power lines & cross-street canyon cables
+ *   - Sidewalk transit shelters, backlit ad totems, street kiosks & public-plaza seating
+ */
+function makeStreetInfrastructure(seed, radius, boulevards = [], places = [], inWater = null) {
+  const signals = [];
+  const poles = [];
+  const cables = [];
+  const furniture = [];
+  const isDry = (px, pz, pad = 16) => !(inWater && inWater(px, pz, pad));
+  const R = (a, b) => hash2i(a, b, seed ^ 0x47d39b1f);
+
+  const lim = Math.min(radius, 8);
+  for (let ix = -lim; ix <= lim; ix++) {
+    for (let iz = -lim; iz <= lim; iz++) {
+      const gx = ix * CELL;
+      const gz = iz * CELL;
+      if (!isDry(gx, gz, 38)) continue;
+      const aveX = (((ix % 4) + 4) % 4 === 0);
+      const aveZ = (((iz % 4) + 4) % 4 === 0);
+      const swx = aveX ? AVENUE : STREET;
+      const swz = aveZ ? AVENUE : STREET;
+
+      // Place cantilevered traffic signals on all avenue intersections and ~65% of minor intersections
+      if (aveX || aveZ || R(ix * 7, iz * 11) < 0.65) {
+        const phase = fract((ix * 0.17 + iz * 0.23) + 10.0);
+        const cornerX = swx * 0.5 - 2.1;
+        const cornerZ = swz * 0.5 - 2.1;
+        const pushSig = (s) => { if (isDry(s.x, s.z, 12)) signals.push(s); };
+        // NE corner mast-arm overhanging N-S northbound lanes (faces S, axis='ns')
+        pushSig({
+          x: gx + cornerX, z: gz + cornerZ,
+          rot: Math.PI, // arm points -X across northbound lane
+          armLen: aveX ? 9.5 : 7.0,
+          h: 6.8,
+          axis: 'ns',
+          phase,
+          ix, iz,
+        });
+        // SW corner mast-arm overhanging N-S southbound lanes
+        pushSig({
+          x: gx - cornerX, z: gz - cornerZ,
+          rot: 0, // arm points +X across southbound lane
+          armLen: aveX ? 9.5 : 7.0,
+          h: 6.8,
+          axis: 'ns',
+          phase,
+          ix, iz,
+        });
+        // NW & SE corner mast-arms overhanging E-W cross-traffic lanes (axis='ew')
+        pushSig({
+          x: gx - cornerX, z: gz + cornerZ,
+          rot: -Math.PI * 0.5,
+          armLen: aveZ ? 9.5 : 7.0,
+          h: 6.6,
+          axis: 'ew',
+          phase,
+          ix, iz,
+        });
+        pushSig({
+          x: gx + cornerX, z: gz - cornerZ,
+          rot: Math.PI * 0.5,
+          armLen: aveZ ? 9.5 : 7.0,
+          h: 6.6,
+          axis: 'ew',
+          phase,
+          ix, iz,
+        });
+      }
+
+      // Sidewalk transit shelter + backlit ad totem + street kiosk along avenues & busy corners
+      if ((aveX || aveZ) && R(ix * 19 + 3, iz * 23 + 5) < 0.58) {
+        const side = R(ix, iz + 91) < 0.5 ? 1 : -1;
+        const fx = gx + side * (swx * 0.5 - 2.3);
+        const fz = gz + side * (swz * 0.5 + 16.0);
+        if (isDry(fx, fz, 14)) {
+          furniture.push({
+            kind: R(ix + 5, iz * 3) < 0.62 ? 'shelter' : 'kiosk',
+            x: fx, y: 0, z: fz,
+            rot: 0,
+            seed: R(ix * 13, iz * 29),
+          });
+        }
+      }
+    }
+  }
+
+  // Utility poles & sagging catenary 3-wire overhead power lines along non-avenue cross-streets + cross-street canyon cables!
+  for (let ix = -lim; ix <= lim; ix++) {
+    const aveX = (((ix % 4) + 4) % 4 === 0);
+    if (aveX) continue; // grand avenues keep utilities underground; side streets carry atmospheric overhead poles & wires!
+    if (R(ix + 41, 17) > 0.68) continue;
+    const swx = STREET;
+    const poleX = ix * CELL + (ix % 2 === 0 ? 1 : -1) * (swx * 0.5 - 1.7);
+    let prevPole = null;
+    for (let iz = -lim; iz <= lim; iz++) {
+      const swz = ((((iz % 4) + 4) % 4 === 0) ? AVENUE : STREET);
+      const pA = { x: poleX, y: 0, z: iz * CELL + swz * 0.5 + 9.0, h: 9.6, rot: 0 };
+      const pB = { x: poleX, y: 0, z: (iz + 1) * CELL - swz * 0.5 - 9.0, h: 9.6, rot: 0 };
+      for (const pt of [pA, pB]) {
+        if (Math.abs(pt.z) > lim * CELL) continue;
+        if (!isDry(pt.x, pt.z, 15)) {
+          prevPole = null;
+          continue;
+        }
+        poles.push(pt);
+        if (prevPole && Math.hypot(pt.x - prevPole.x, pt.z - prevPole.z) < 125) {
+          for (const armOff of [-1.35, 0.0, 1.35]) {
+            cables.push({
+              x1: prevPole.x + armOff, y1: prevPole.h - 0.6, z1: prevPole.z,
+              x2: pt.x + armOff, y2: pt.h - 0.6, z2: pt.z,
+              sag: 1.35 + Math.abs(armOff) * 0.18,
+              kind: 'power',
+            });
+          }
+        }
+        prevPole = pt;
+      }
+      // Occasional cross-street overhead tram/utility catenary cable spanning between building facades!
+      if (iz < lim && R(ix * 29, iz * 37) < 0.48) {
+        const zMid = (iz + 0.5) * CELL;
+        const xSpanL = ix * CELL - (swx * 0.5 + 0.6);
+        const xSpanR = ix * CELL + (swx * 0.5 + 0.6);
+        if (isDry(ix * CELL, zMid, 15)) {
+          const yCab = 9.5 + R(ix + 9, iz + 13) * 4.8;
+          cables.push({
+            x1: xSpanL, y1: yCab, z1: zMid,
+            x2: xSpanR, y2: yCab + (R(ix, iz) - 0.5) * 0.8, z2: zMid + (R(iz, ix) - 0.5) * 6.0,
+            sag: 1.15,
+            kind: 'cross',
+          });
+        }
+      }
+    }
+  }
+
+  // Public-space seating clusters, pergolas & illuminated plaza totems around named places
+  for (let p = 0; p < places.length; p++) {
+    const pl = places[p];
+    if (!isDry(pl.x, pl.z, 14)) continue;
+    const count = pl.kind === 'park' || pl.kind === 'plaza' ? 6 : 3;
+    for (let k = 0; k < count; k++) {
+      const a = (k / count) * Math.PI * 2 + pl.seed * 3.1;
+      const rr = Math.min(34, (pl.r || 32) * 0.52);
+      const bx = pl.x + Math.cos(a) * rr;
+      const bz = pl.z + Math.sin(a) * rr;
+      if (!isDry(bx, bz, 12)) continue;
+      furniture.push({
+        kind: k % 2 === 0 ? 'bench' : 'totem',
+        x: bx, y: 0, z: bz,
+        rot: a + Math.PI * 0.5,
+        seed: fract(pl.seed + k * 0.23),
+      });
+    }
+  }
+
+  return { signals, poles, cables, furniture };
+}
+
 
 

@@ -18,12 +18,15 @@ import {
   WATER_MODE_NAMES, TERRAIN_MODE_NAMES, TREE_MODE_NAMES, GLYPH_STYLE_NAMES, describeMoonPhase,
   buildSigns, buildHolos,
   buildTransitInfrastructure, buildBridges, buildHarbor, buildSpaceport,
+  buildStreetInfrastructure, evalTrafficSignalState,
 } from '../src/scene.js';
 import {
-  WORLD_PRESETS, DEFAULT_BOOKMARKS, encodeExactState, decodeExactState,
+  WORLD_PRESETS, DEFAULT_BOOKMARKS, normalizeExactState, encodeExactState, decodeExactState,
 } from '../src/presets.js';
-import { FlyControls } from '../src/controls.js';
+import { FlyControls, CAMERA_STYLE_NAMES } from '../src/controls.js';
 import { CameraPathRecorder, makeSceneExporter } from '../src/recorder.js';
+import { makeMinimap } from '../src/minimap.js';
+import { isPointInWater, makeCityCollider } from '../src/city.js';
 
 test('every look preset has a complete schema', () => {
   for (const L of LOOKS) {
@@ -1458,6 +1461,227 @@ test('Phase-12 scene: Unreal Cinema look + uTint diversity, non-flooding shorewa
   veh.update(0.1, 1.0, 1.0);
   assert.equal(veh.bodies[2].count, 0, 'setTransitAmt(0) immediately hides all public transit trains');
 });
+
+test('Phase-13 scene: small adjustable camera collider + freelook, minimap + path smoothing, universal 24h cycle, looped noise, cloud range, stylized water wakes, lights & street infra', () => {
+  const prevWin = globalThis.window;
+  globalThis.window = { addEventListener() {} };
+  try {
+    // 1) Small adjustable camera collider slips through narrow building cracks without clipping into walls + freelook decouples gaze
+    const cam = new THREE.PerspectiveCamera(62, 1, 2, 28000);
+    const fakeDom = { addEventListener() {}, setPointerCapture() {} };
+    const ctl = new FlyControls(cam, fakeDom);
+    assert.ok(ctl.colliderRadius <= 2.5, `default camera colliderRadius (${ctl.colliderRadius}m) is much smaller than old 9m`);
+    assert.equal(CAMERA_STYLE_NAMES.length, 4, '4 camera motion styles available');
+
+    // Construct a synthetic narrow 5.0m alley crack between two tall towers (x in [-24, -2.5] and [+2.5, +24])
+    const crackCollider = makeCityCollider({
+      count: 2,
+      x: new Float32Array([-13.25, 13.25]),
+      y: new Float32Array([60, 60]),
+      z: new Float32Array([0, 0]),
+      w: new Float32Array([21.5, 21.5]),
+      h: new Float32Array([120, 120]),
+      d: new Float32Array([80, 80]),
+      rot: new Float32Array([0, 0]),
+      landmarks: [],
+      places: [],
+    });
+    ctl.collider = crackCollider;
+    ctl.colliderRadius = 1.6;
+    ctl.avoidance = false; // test pure narrow-gap passage along x = 0
+    cam.position.set(0, 30, 60);
+    ctl.yaw = 0;
+    ctl.pitch = 0;
+    ctl.keys.add('KeyW');
+    for (let i = 0; i < 30; i++) ctl.update(0.05);
+    assert.ok(cam.position.z < -10, `small 1.6m camera collider slips cleanly through 5m building crack (z=${cam.position.z.toFixed(1)})`);
+    assert.equal(crackCollider.hitsPoint(cam.position.x, cam.position.y, cam.position.z, 0.5), false, 'camera never enters tower walls');
+
+    // Attempt to fly straight through the solid left tower wall: no-clip solver blocks penetration smoothly
+    ctl.keys.clear();
+    cam.position.set(-13.25, 30, 55);
+    ctl.syncFromCamera();
+    ctl.keys.add('KeyW');
+    for (let i = 0; i < 35; i++) ctl.update(0.05);
+    assert.equal(crackCollider.hitsPoint(cam.position.x, cam.position.y, cam.position.z, 0.5), false, 'substepped solver prevents tunneling through solid wall');
+    ctl.keys.clear();
+
+    // Separate look-around (`freelook`) mode: rotating head gaze keeps flight travel direction unchanged
+    cam.position.set(0, 180, 500);
+    ctl.yaw = 0;
+    ctl.pitch = 0;
+    ctl.setFreelook(true);
+    assert.equal(ctl.freelook, true);
+    ctl.lookYaw = Math.PI * 0.5; // look 90 deg sideways (-X) while travel heading stays -Z (`yaw === 0`)!
+    ctl.lookPitch = -0.25;
+    ctl.collider = null;
+    ctl.keys.add('KeyW');
+    for (let i = 0; i < 10; i++) ctl.update(0.05);
+    assert.ok(cam.position.z < 460 && Math.abs(cam.position.x) < 2.0, 'freelook W-key still flies along travel heading (-Z) while gazing 90 deg sideways');
+
+    // 2) Post-recording cinematic camera path smoothing reduces jitter & preserves manual keyframes
+    const rec = new CameraPathRecorder();
+    for (let k = 0; k <= 20; k++) {
+      const isAnchor = k === 0 || k === 10 || k === 20;
+      const jitter = (k % 2 === 0 ? 1 : -1) * (isAnchor ? 0 : 18);
+      rec.frames.push({
+        t: k * 0.5,
+        x: k * 25 + jitter,
+        y: 120 + jitter * 0.6,
+        z: 300 - k * 20,
+        qx: 0,
+        qy: Math.sin((k * 0.06 + (isAnchor ? 0 : (k % 2) * 0.12)) * 0.5),
+        qz: 0,
+        qw: Math.cos((k * 0.06 + (isAnchor ? 0 : (k % 2) * 0.12)) * 0.5),
+        manual: k === 10,
+      });
+    }
+    const manualAnchorBefore = { ...rec.frames[10] };
+    const accelEnergy = (frames) => {
+      let s = 0;
+      for (let i = 1; i < frames.length - 1; i++) {
+        const ax = frames[i - 1].x - 2 * frames[i].x + frames[i + 1].x;
+        const ay = frames[i - 1].y - 2 * frames[i].y + frames[i + 1].y;
+        s += ax * ax + ay * ay;
+      }
+      return s;
+    };
+    const roughE = accelEnergy(rec.frames);
+    rec.smoothPath(0.8);
+    const smoothE = accelEnergy(rec.frames);
+    assert.ok(smoothE < roughE * 0.25, `post-recording path smoothing cuts jitter >75% (rough=${roughE.toFixed(0)} -> smooth=${smoothE.toFixed(0)})`);
+    assert.ok(Math.abs(rec.frames[10].x - manualAnchorBefore.x) < 1e-4, 'manual keyframe anchor is preserved');
+
+    // 3) Universal 24-hour Day/Night cycle across ALL 9 looks
+    const U = makeUniforms();
+    const world = makeWorld(U);
+    const luma = (c) => 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
+    for (const lk of LOOKS) {
+      applyLook(U, lk);
+      applyTime(U, lk, 12.2);
+      const noonSky = luma(U.uZen.value) + luma(U.uHor.value);
+      const noonSunK = U.uSunK.value;
+      applyTime(U, lk, 2.2);
+      const nightSky = luma(U.uZen.value) + luma(U.uHor.value);
+      const nightSunK = U.uSunK.value;
+      assert.ok(noonSky > nightSky + 0.18, `${lk.id}: full day/night cycle brightens sky at noon (${noonSky.toFixed(2)} vs ${nightSky.toFixed(2)})`);
+      assert.ok(noonSunK > nightSunK * 1.35, `${lk.id}: noon sun key exceeds 02:12 night key (${noonSunK.toFixed(2)} vs ${nightSunK.toFixed(2)})`);
+      if (lk.id === 'metropolis') {
+        for (const hr of [2.2, 7.0, 12.2, 18.0, 22.5]) {
+          applyTime(U, lk, hr);
+          const chroma = Math.max(U.uZen.value.r, U.uZen.value.g, U.uZen.value.b) - Math.min(U.uZen.value.r, U.uZen.value.g, U.uZen.value.b);
+          assert.ok(chroma < 1e-5, `metropolis stays strictly monochrome at hour ${hr}`);
+        }
+      }
+    }
+
+    // 4) Cloud elevation & vertical range, looped noise, stylized water wakes, ad archetypes & street infrastructure
+    applyLook(U, LOOK_BY_ID.realistic, { cloudElev: 1.65, cloudRange: 2.2, vehLight: 1.8 });
+    assert.ok(Math.abs(U.uCloudElev.value - 1.65) < 1e-5 && Math.abs(U.uCloudRange.value - 2.2) < 1e-5, 'cloudElev & cloudRange wired to uniforms');
+    assert.ok(Math.abs(U.uVehLight.value - 1.8) < 1e-5, 'vehLight wired to uVehLight uniform');
+    assert.ok(SHADERS.GLSL_NOISE.includes('PC_LOOP = 120.0') && SHADERS.GLSL_NOISE.includes('evalLoopedToggle'), 'GLSL periodic looped noise helpers defined');
+    assert.ok(SHADERS.GLSL_GLYPHS.includes('evalSimulatedAd'), 'procedural 8-archetype simulated ads defined');
+    assert.ok(SHADERS.WATER_FRAG.includes('uShipWakes') && SHADERS.GROUND_FRAG.includes('shoreDryRoad'), 'stylized ship wakes & dry-land road shore mask active');
+
+    const { city, collider } = growCity(4417, 5, world.towerMat, 1.0, { waterMode: 1, maritimeAmt: 1.2, U });
+    const harborObj = buildHarbor(city, U, world.beaconMat, world.lampMat);
+    harborObj.update(1.0);
+    assert.ok(U.uShipWakes.value.some((w) => Math.hypot(w.z, w.w) > 1), 'harbor ships populate live uShipWakes vectors');
+
+    const streetInfra = buildStreetInfrastructure(city, U);
+    assert.ok(streetInfra.signalCount >= 16 && streetInfra.cableCount >= 20, '3D traffic signals & overhead power cables built');
+    streetInfra.setSignalGlow(0);
+    assert.equal(streetInfra.signalGlow, 0, 'traffic lights intensity dial scales down to 0');
+    streetInfra.setSignalGlow(1.5);
+    streetInfra.update(6.5);
+    assert.notEqual(evalTrafficSignalState(2.0, 0, 'z'), evalTrafficSignalState(16.0, 0, 'z'), 'intersection signals cycle Green -> Red');
+
+    const search = makeSearchlights(city, world.beamMat);
+    search.setAmount(0);
+    assert.equal(search.group.visible, false, 'searchlights dial hides shafts at 0');
+    search.setAmount(1.4);
+    assert.equal(search.group.visible, true);
+
+    const veh = makeVehicles(city, world.trailMat, 300, collider, { swarmMat: world.swarmMat, swarmCount: 600, trafficSpeed: 1.8, U });
+    assert.ok(Math.abs(veh.trafficSpeed - 1.8) < 1e-5, 'initial trafficSpeed applied');
+    veh.setTrafficSpeed(0.4);
+    assert.ok(Math.abs(U.uTrafficSpeed.value - 0.4) < 1e-5, 'setTrafficSpeed updates CPU & GPU swarm uniform');
+    const cA = veh.swarmGeo.getAttribute('aCurveA');
+    const cC = veh.swarmGeo.getAttribute('aCurveC');
+    for (let i = 0; i < 200; i++) {
+      if (cC.getW(i) !== 0) {
+        const mx = (cA.getX(i) + cC.getX(i)) * 0.5;
+        const mz = (cA.getY(i) + cC.getY(i)) * 0.5;
+        assert.equal(isPointInWater(city, mx, mz, 2), false, `GPU swarm street route ${i} stays out of water`);
+      }
+    }
+
+    // 5) Interactive minimap renders city sites, camera frustum & recorded path + keyframes
+    let drawCalls = 0;
+    let selectedSpot = null;
+    const stubCtx = new Proxy({}, {
+      get(_t, prop) {
+        if (prop === 'measureText') return () => ({ width: 20 });
+        if (prop === 'createRadialGradient' || prop === 'createLinearGradient') {
+          return () => ({ addColorStop() {} });
+        }
+        return () => { drawCalls++; };
+      },
+      set() { return true; },
+    });
+    const listeners = {};
+    const stubCanvas = {
+      width: 276,
+      height: 176,
+      getContext: () => stubCtx,
+      addEventListener: (ev, fn) => { listeners[ev] = fn; },
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 276, height: 176 }),
+    };
+    const mm = makeMinimap({
+      canvas: stubCanvas,
+      labelEl: { textContent: '' },
+      onSelectSpot: (sp) => { selectedSpot = sp; },
+    });
+    mm.setCity(city, LOOK_BY_ID.bladerunner);
+    mm.render(cam, ctl, rec);
+    assert.ok(drawCalls > 40, `minimap drew city, sites, camera & recorded path (${drawCalls} canvas ops)`);
+    if (listeners.click) {
+      listeners.click({ clientX: 138, clientY: 88 });
+      assert.ok(selectedSpot && Number.isFinite(selectedSpot.x), 'clicking minimap selects fly-to coordinates/site');
+    }
+
+    // 6) Exact-state roundtrip preserves all Phase-13 settings
+    const token = encodeExactState(normalizeExactState({
+      seed: 4417,
+      lookId: 'tron',
+      dayCycle: true,
+      daySpeed: 2.25,
+      trafficSpeed: 1.65,
+      freelook: true,
+      camSpeed: 1.8,
+      camRadius: 1.4,
+      camSmooth: 0.86,
+      camStyle: 2,
+      pathSmooth: 0.78,
+      tune: { cloudElev: 1.45, cloudRange: 2.1, searchLight: 1.7, trafficLight: 1.5, vehLight: 0.6 },
+    }));
+    const dec = decodeExactState(token);
+    assert.equal(dec.dayCycle, true);
+    assert.equal(dec.daySpeed, 2.25);
+    assert.equal(dec.trafficSpeed, 1.65);
+    assert.equal(dec.freelook, true);
+    assert.equal(dec.camRadius, 1.4);
+    assert.equal(dec.camStyle, 2);
+    assert.equal(dec.tune.cloudElev, 1.45);
+    assert.equal(dec.tune.cloudRange, 2.1);
+    assert.equal(dec.tune.searchLight, 1.7);
+    assert.equal(dec.tune.trafficLight, 1.5);
+    assert.equal(dec.tune.vehLight, 0.6);
+  } finally {
+    globalThis.window = prevWin;
+  }
+});
+
 
 
 

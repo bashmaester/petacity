@@ -104,6 +104,70 @@ float fbm3(vec3 p) {
   }
   return s;
 }
+const float PC_LOOP = 120.0;
+const float PC_TAU  = 6.28318530718;
+
+float loopPhase(float t) {
+  return fract(t / PC_LOOP);
+}
+
+float loopPhase(float t, float harmonics) {
+  float k = max(1.0, floor(harmonics + 0.5));
+  return fract(loopPhase(t) * k);
+}
+
+float loopSin(float t, float approxHz, float ph) {
+  float k = max(1.0, floor(approxHz * PC_LOOP + 0.5));
+  return sin(loopPhase(t) * PC_TAU * k + ph);
+}
+
+float loopCos(float t, float approxHz, float ph) {
+  float k = max(1.0, floor(approxHz * PC_LOOP + 0.5));
+  return cos(loopPhase(t) * PC_TAU * k + ph);
+}
+
+vec2 loopOrbit(float t, float radius, float harmonic) {
+  float k = max(1.0, floor(harmonic + 0.5));
+  float a = loopPhase(t) * PC_TAU * k;
+  return vec2(cos(a), sin(a)) * radius;
+}
+
+float evalLoopedToggle(vec2 cellId, float t, float approxRate, float seedOff) {
+  float nSlots = max(3.0, floor(approxRate * PC_LOOP + 0.5));
+  float cyc = loopPhase(t) * nSlots + fract(seedOff * 7.13) * nSlots;
+  float s0 = mod(floor(cyc), nSlots);
+  float s1 = mod(s0 + 1.0, nSlots);
+  float blend = smoothstep(0.76, 1.0, fract(cyc));
+  float h0 = hash12(cellId + vec2(s0 * 1.37, seedOff * 41.9));
+  float h1 = hash12(cellId + vec2(s1 * 1.37, seedOff * 41.9));
+  return mix(h0, h1, blend);
+}
+
+float evalLoopedToggle(float t, float approxRate, vec2 cellId, float seedOff) {
+  return evalLoopedToggle(cellId, t, approxRate, seedOff);
+}
+
+// Strictly 24.0-hour periodic circadian occupancy curve (zero jump at 24.0 -> 0.0!)
+float evalCircadian24(float dayH, float bPhase, float flrHash, float roomHash) {
+  float h = mod(mod(dayH, 24.0) + 24.0, 24.0);
+  float dEve = abs(h - (20.1 + bPhase * 0.8 + flrHash * 0.6));
+  dEve = min(dEve, 24.0 - dEve);
+  float evePeak = exp(-(dEve * dEve) / (3.35 * 3.35));
+
+  float dMorn = abs(h - (7.15 + bPhase * 0.4));
+  dMorn = min(dMorn, 24.0 - dMorn);
+  float mornPeak = exp(-(dMorn * dMorn) / (1.55 * 1.55)) * (0.45 + 0.55 * step(0.35, flrHash));
+
+  float dNoon = abs(h - 12.6);
+  dNoon = min(dNoon, 24.0 - dNoon);
+  float dayDip = exp(-(dNoon * dNoon) / (4.1 * 4.1));
+
+  float nightOwl = 0.28 + 0.44 * step(0.75, flrHash) + 0.18 * step(0.80, roomHash);
+  float dayBase = 0.30 + 0.32 * step(0.64, flrHash);
+  float base = mix(nightOwl, dayBase, dayDip);
+  return clamp(base + evePeak * 0.86 + mornPeak * 0.38, 0.18, 1.22);
+}
+
 float fbm4Cloud(vec3 p, float w, float lac, float seedOff) {
   float s = 0.0;
   float a = 0.5;
@@ -243,12 +307,14 @@ float evalSingleGlyphDist(vec2 p, float gid, float glyphStyle) {
 float evalSynthGlyph(vec2 cellUv, float charSeed, float glyphStyle, float animT, float strokeW) {
   if (cellUv.x < 0.08 || cellUv.x > 0.92 || cellUv.y < 0.08 || cellUv.y > 0.92) return 0.0;
   vec2 p = (cellUv - 0.08) / 0.84;
-  // Quantized temporal glyph-morphing: symbols periodically rewrite into new syllabograms!
-  float phase = animT * 0.28 + charSeed * 19.7;
-  float epoch = floor(phase);
+  // Seamlessly looped glyph-morphing over PC_LOOP = 120s (zero jump on cycle reset!)
+  float nEpochs = 32.0;
+  float phase = fract(animT / PC_LOOP) * nEpochs + fract(charSeed * 19.7) * nEpochs;
+  float ep0 = mod(floor(phase), nEpochs);
+  float ep1 = mod(ep0 + 1.0, nEpochs);
   float morph = smoothstep(0.74, 0.96, fract(phase));
-  float g0 = floor(hash12(vec2(charSeed * 97.3, epoch * 13.1)) * 64.0);
-  float g1 = floor(hash12(vec2(charSeed * 97.3, (epoch + 1.0) * 13.1)) * 64.0);
+  float g0 = floor(hash12(vec2(charSeed * 97.3, ep0 * 13.1)) * 64.0);
+  float g1 = floor(hash12(vec2(charSeed * 97.3, ep1 * 13.1)) * 64.0);
   float d0 = evalSingleGlyphDist(p, g0, glyphStyle);
   float d1 = evalSingleGlyphDist(p, g1, glyphStyle);
   float d = mix(d0, d1, morph);
@@ -256,15 +322,16 @@ float evalSynthGlyph(vec2 cellUv, float charSeed, float glyphStyle, float animT,
   return 1.0 - smoothstep(strokeW - aa * 0.5, strokeW + aa, d);
 }
 
-// Multi-character Linear-Synth text line with authentic Aegean double-dot word dividers
+// Multi-character Linear-Synth text line with seamless integer-period scrolling
 float evalGlyphLine(vec2 uv, float cols, float scrollT, float rowSeed, float glyphStyle, float animT) {
   if (uv.y < 0.04 || uv.y > 0.96) return 0.0;
-  float xShift = uv.x * cols + scrollT;
-  float cid = floor(xShift);
+  float loopScroll = floor(abs(scrollT) / max(animT, 1e-4) * PC_LOOP * 0.2 + 0.5) * 5.0 * sign(scrollT) * fract(animT / PC_LOOP);
+  if (abs(scrollT) < 1e-4) loopScroll = 0.0;
+  float xShift = uv.x * cols + loopScroll;
+  float cid = mod(floor(xShift), 20.0);
   vec2 cUv = vec2(fract(xShift), uv.y);
   float wordSlot = mod(cid + floor(rowSeed * 11.0), 5.0);
   if (wordSlot > 3.5) {
-    // Linear A/B vertical colon word-separator puncta (:)
     float dDot = min(
       length(cUv - vec2(0.5, 0.34)),
       length(cUv - vec2(0.5, 0.68))
@@ -274,6 +341,158 @@ float evalGlyphLine(vec2 uv, float cols, float scrollT, float rowSeed, float gly
   float chSeed = hash12(vec2(cid * 1.73, rowSeed * 53.7));
   if (chSeed < 0.08) return 0.0;
   return evalSynthGlyph(cUv, chSeed, glyphStyle, animT, 0.056);
+}
+
+// Simulated Commercial Ad Illustrations (Synth-Cola bottle, Cyber-Car, Off-World Ring Planet,
+// Fashion Visor Portrait, Steaming Noodle Bowl, Market Candlesticks, Equalizer & Chrono Dial)
+vec3 evalSimulatedAd(vec2 uv, float seed, float glyphStyle, float animT, vec3 colA, vec3 colB, vec3 darkBg) {
+  float ph = fract(animT / PC_LOOP);
+  float ang = ph * PC_TAU;
+  float adKind = floor(fract(seed * 29.17) * 8.0);
+  // Diversify ad palette per-seed so adjacent billboards feel like distinct competing brands!
+  vec3 altC = vec3(fract(seed * 3.7) * 0.7 + 0.3, fract(seed * 7.1) * 0.6 + 0.35, fract(seed * 11.3) * 0.7 + 0.3);
+  vec3 brandA = mix(colA, mix(colA, altC, 0.45), step(0.45, fract(seed * 5.1)));
+  vec3 brandB = mix(colB, mix(colB, altC.zyx, 0.45), step(0.45, fract(seed * 8.9)));
+  vec3 col = darkBg;
+
+  if (adKind < 0.5) {
+    // 0: Fizzy Synth-Beverage Bottle + Rising Bubbles + Price Pill + Brand Copy
+    vec2 bp = uv - vec2(0.26, 0.50);
+    float neck = step(0.16, bp.y) * step(bp.y, 0.33) * (1.0 - smoothstep(0.038, 0.052, abs(bp.x)));
+    float shoulder = smoothstep(0.06, 0.17, bp.y) * (1.0 - smoothstep(0.17, 0.20, bp.y));
+    float halfW = mix(0.095 + 0.015 * sin(bp.y * 18.0), 0.042, shoulder);
+    float body = step(-0.34, bp.y) * step(bp.y, 0.17) * (1.0 - smoothstep(halfW - 0.012, halfW, abs(bp.x)));
+    float bottle = clamp(max(neck, body), 0.0, 1.0);
+    float labelBand = bottle * step(-0.10, bp.y) * step(bp.y, 0.05);
+    // Rising effervescent bubbles (looped!)
+    float bub = 0.0;
+    for (int i = 0; i < 4; i++) {
+      float fi = float(i);
+      float by = fract(ph * (3.0 + fi) + fi * 0.27 + seed) * 0.76 + 0.12;
+      float bx = 0.26 + sin(ang * 2.0 + fi * 2.1) * 0.12;
+      bub += 1.0 - smoothstep(0.014, 0.026, length((uv - vec2(bx, by)) * vec2(1.3, 1.0)));
+    }
+    float title = evalGlyphLine(vec2(clamp((uv.x - 0.44) / 0.50, 0.0, 1.0), clamp((uv.y - 0.54) / 0.30, 0.0, 1.0)), 4.0, 0.0, seed * 13.0, glyphStyle, animT) * step(0.44, uv.x) * step(0.54, uv.y) * step(uv.y, 0.84);
+    float badgeBox = step(0.48, uv.x) * step(uv.x, 0.88) * step(0.18, uv.y) * step(uv.y, 0.40);
+    float priceTxt = evalGlyphLine(vec2(clamp((uv.x - 0.51) / 0.34, 0.0, 1.0), clamp((uv.y - 0.21) / 0.14, 0.0, 1.0)), 3.0, 0.0, seed * 31.0, glyphStyle, animT) * badgeBox;
+    col = mix(col, brandB * 0.26, step(0.0, uv.x - uv.y * 0.35 - 0.36));
+    col = mix(col, brandA * 1.15, bottle);
+    col = mix(col, darkBg * 1.5 + brandB * 0.9, labelBand);
+    col += brandB * clamp(bub, 0.0, 1.0) * 0.85;
+    col = mix(col, brandA * 1.2, title);
+    col = mix(col, brandB * 0.85, badgeBox * (1.0 - priceTxt));
+  } else if (adKind < 1.5) {
+    // 1: Sleek Cyber-Coupe / Spinner Showroom Ad + Speed Lines
+    vec2 cp = (uv - vec2(0.46, 0.42)) * vec2(1.0, 1.35);
+    float chassis = step(-0.34, cp.x) * step(cp.x, 0.36) * step(-0.10, cp.y) * step(cp.y, 0.04 + 0.09 * (1.0 - abs(cp.x * 2.4)));
+    float canopy = step(-0.14, cp.x) * step(cp.x, 0.16) * step(0.02, cp.y) * (1.0 - smoothstep(0.09, 0.12, length((cp - vec2(0.0, 0.02)) * vec2(0.75, 1.1))));
+    float wheelL = 1.0 - smoothstep(0.055, 0.072, length((cp - vec2(-0.20, -0.09)) * vec2(1.15, 1.0)));
+    float wheelR = 1.0 - smoothstep(0.055, 0.072, length((cp - vec2(0.21, -0.09)) * vec2(1.15, 1.0)));
+    float car = clamp(max(chassis, canopy) - (wheelL + wheelR) * 0.5, 0.0, 1.0);
+    float rimGlow = (1.0 - smoothstep(0.015, 0.032, abs(length((cp - vec2(-0.20, -0.09)) * vec2(1.15, 1.0)) - 0.045)))
+                  + (1.0 - smoothstep(0.015, 0.032, abs(length((cp - vec2(0.21, -0.09)) * vec2(1.15, 1.0)) - 0.045)));
+    float streak = step(0.75, fract(uv.y * 14.0)) * step(uv.x, 0.24 + 0.1 * sin(ang * 4.0 + uv.y * 9.0)) * step(0.28, uv.y) * step(uv.y, 0.56);
+    float hdr = evalGlyphLine(vec2(uv.x * 0.88 + 0.06, clamp((uv.y - 0.72) / 0.20, 0.0, 1.0)), 6.0, 0.0, seed * 19.0, glyphStyle, animT) * step(0.72, uv.y) * step(uv.y, 0.92);
+    float spec = evalGlyphLine(vec2(uv.x, clamp((uv.y - 0.07) / 0.14, 0.0, 1.0)), 11.0, animT * 0.6, seed * 43.0, glyphStyle, animT) * step(0.07, uv.y) * step(uv.y, 0.21);
+    col = mix(col, brandA * 1.1, car + rimGlow * 0.9);
+    col += brandB * (streak * 0.65 + spec * 0.9);
+    col = mix(col, brandB * 1.18, hdr);
+  } else if (adKind < 2.5) {
+    // 2: Off-World Colony Travel Ad ("A New Life Awaits"): Ringed Planet + Arc Trajectory + Departures
+    vec2 pp = (uv - vec2(0.32, 0.56)) * vec2(1.25, 1.0);
+    float planet = 1.0 - smoothstep(0.17, 0.19, length(pp));
+    vec2 rp = vec2(pp.x * 0.92 + pp.y * 0.38, -pp.x * 0.38 + pp.y * 0.92) * vec2(1.0, 3.4);
+    float ring = (1.0 - smoothstep(0.022, 0.045, abs(length(rp) - 0.29))) * (1.0 - planet * step(0.0, rp.y));
+    float moonlet = 1.0 - smoothstep(0.025, 0.04, length(pp - vec2(cos(ang) * 0.26, sin(ang) * 0.14)));
+    float copy1 = evalGlyphLine(vec2(clamp((uv.x - 0.54) / 0.40, 0.0, 1.0), clamp((uv.y - 0.56) / 0.26, 0.0, 1.0)), 4.0, 0.0, seed * 7.0, glyphStyle, animT) * step(0.54, uv.x) * step(0.56, uv.y) * step(uv.y, 0.82);
+    float copy2 = evalGlyphLine(vec2(uv.x, clamp((uv.y - 0.10) / 0.16, 0.0, 1.0)), 10.0, -animT * 0.5, seed * 29.0, glyphStyle, animT) * step(0.10, uv.y) * step(uv.y, 0.26);
+    col = mix(col, mix(brandB * 0.5, brandA * 1.15, clamp(pp.y * 3.0 + 0.5, 0.0, 1.0)), planet);
+    col = mix(col, brandB * 1.25, clamp(ring + moonlet, 0.0, 1.0));
+    col = mix(col, brandA * 1.15, copy1);
+    col = mix(col, brandB, copy2 * 0.9);
+  } else if (adKind < 3.5) {
+    // 3: High-Fashion / Cyber-Optics Portrait Silhouette + Glowing Visor Strip
+    vec2 fp = (uv - vec2(0.30, 0.50)) * vec2(1.25, 1.0);
+    float head = 1.0 - smoothstep(0.18, 0.20, length((fp - vec2(0.0, 0.08)) * vec2(1.15, 0.92)));
+    float shoulders = (1.0 - smoothstep(0.28, 0.31, abs(fp.x))) * step(-0.38, fp.y) * step(fp.y, -0.08);
+    float neckS = (1.0 - smoothstep(0.065, 0.08, abs(fp.x))) * step(-0.12, fp.y) * step(fp.y, 0.0);
+    float sil = clamp(max(max(head, shoulders), neckS), 0.0, 1.0);
+    float visor = head * step(0.07, fp.y) * step(fp.y, 0.13) * (1.0 - smoothstep(0.13, 0.16, abs(fp.x)));
+    float scanV = 0.65 + 0.35 * sin(ang * 3.0 + fp.x * 16.0);
+    float brandLogo = evalSynthGlyph(vec2(clamp((uv.x - 0.58) / 0.30, 0.0, 1.0), clamp((uv.y - 0.42) / 0.42, 0.0, 1.0)), seed * 17.0, glyphStyle, animT, 0.048) * step(0.58, uv.x) * step(uv.x, 0.88) * step(0.42, uv.y) * step(uv.y, 0.84);
+    float sub = evalGlyphLine(vec2(clamp((uv.x - 0.52) / 0.42, 0.0, 1.0), clamp((uv.y - 0.14) / 0.18, 0.0, 1.0)), 5.0, 0.0, seed * 37.0, glyphStyle, animT) * step(0.52, uv.x) * step(0.14, uv.y) * step(uv.y, 0.32);
+    col = mix(darkBg, brandB * 0.28, step(0.50, uv.x));
+    col = mix(col, brandA * 0.42, sil);
+    col = mix(col, brandB * (1.35 * scanV), visor);
+    col = mix(col, brandA * 1.2, clamp(brandLogo + sub * 0.85, 0.0, 1.0));
+  } else if (adKind < 4.5) {
+    // 4: Street-Food / Steaming Noodle Bowl Neon Sign + Chopsticks
+    vec2 np = (uv - vec2(0.32, 0.36)) * vec2(1.2, 1.0);
+    float bowl = (1.0 - smoothstep(0.22, 0.24, length(np))) * step(np.y, 0.02);
+    float rimB = (1.0 - smoothstep(0.015, 0.03, abs(np.y - 0.02))) * step(abs(np.x), 0.24);
+    float chop1 = 1.0 - smoothstep(0.010, 0.022, glyphSeg(np, vec2(-0.04, 0.03), vec2(0.24, 0.20)));
+    float chop2 = 1.0 - smoothstep(0.010, 0.022, glyphSeg(np, vec2(-0.06, 0.07), vec2(0.23, 0.26)));
+    float steam = 0.0;
+    for (int s = 0; s < 3; s++) {
+      float fs = float(s) - 1.0;
+      float sy = clamp((uv.y - 0.42) / 0.40, 0.0, 1.0);
+      float sx = 0.30 + fs * 0.07 + sin(sy * 7.0 - ang * 3.0 + fs) * 0.022;
+      steam += (1.0 - smoothstep(0.010, 0.024, abs(uv.x - sx))) * step(0.42, uv.y) * step(uv.y, 0.80) * (1.0 - sy * 0.5);
+    }
+    float vBan = evalSynthGlyph(vec2(clamp((uv.x - 0.64) / 0.24, 0.0, 1.0), fract(uv.y * 4.0)), hash12(vec2(floor(uv.y * 4.0), seed * 23.0)), glyphStyle, animT, 0.058) * step(0.64, uv.x) * step(uv.x, 0.88) * step(0.12, uv.y) * step(uv.y, 0.88);
+    col = mix(col, brandA * 1.15, clamp(bowl * 0.85 + rimB + chop1 + chop2, 0.0, 1.0));
+    col += brandB * clamp(steam, 0.0, 1.0) * 0.95;
+    col = mix(col, brandB * 1.18, vBan);
+  } else if (adKind < 5.5) {
+    // 5: Exchange Market Candlestick Chart + Live Ticker
+    float colIdx = floor(clamp((uv.x - 0.08) / 0.84, 0.0, 0.999) * 10.0);
+    float cf = fract(clamp((uv.x - 0.08) / 0.84, 0.0, 0.999) * 10.0);
+    float cH = hash12(vec2(colIdx, floor(seed * 53.0)));
+    float waveShift = 0.08 * sin(ang * 2.0 + colIdx * 0.7);
+    float loY = 0.30 + cH * 0.22 + waveShift;
+    float hiY = loY + 0.12 + fract(cH * 7.3) * 0.22;
+    float wick = step(abs(cf - 0.5), 0.07) * step(loY - 0.06, uv.y) * step(uv.y, hiY + 0.06);
+    float candle = step(0.22, cf) * step(cf, 0.78) * step(loY, uv.y) * step(uv.y, hiY) * step(0.08, uv.x) * step(uv.x, 0.92);
+    float bull = step(0.45, fract(cH * 3.9));
+    vec3 cCol = mix(brandB, brandA * 1.2, bull);
+    float tick = evalGlyphLine(vec2(uv.x, clamp((uv.y - 0.07) / 0.15, 0.0, 1.0)), 12.0, animT * 0.9, seed * 61.0, glyphStyle, animT) * step(0.07, uv.y) * step(uv.y, 0.22);
+    col = mix(col, cCol, clamp(candle + wick * 0.65, 0.0, 1.0));
+    col = mix(col, brandA, tick * 0.92);
+  } else if (adKind < 6.5) {
+    // 6: Club / Music Equalizer Spectrum + Strobe Halo
+    float barId = floor(clamp((uv.x - 0.08) / 0.84, 0.0, 0.999) * 12.0);
+    float bf = fract(clamp((uv.x - 0.08) / 0.84, 0.0, 0.999) * 12.0);
+    float beat = 0.22 + 0.52 * (0.5 + 0.5 * sin(ang * (4.0 + mod(barId, 5.0)) + barId * 1.3 + seed * 10.0));
+    float seg = step(0.18, fract(uv.y * 16.0));
+    float eq = step(0.16, bf) * step(bf, 0.84) * step(0.24, uv.y) * step(uv.y, 0.24 + beat) * seg * step(0.08, uv.x) * step(uv.x, 0.92);
+    float top = evalGlyphLine(vec2(uv.x * 0.88 + 0.06, clamp((uv.y - 0.78) / 0.15, 0.0, 1.0)), 7.0, -animT * 0.5, seed * 15.0, glyphStyle, animT) * step(0.78, uv.y) * step(uv.y, 0.93);
+    col = mix(col, mix(brandA, brandB, clamp((uv.y - 0.24) / 0.55, 0.0, 1.0)) * 1.2, eq);
+    col = mix(col, brandA * 1.15, top);
+  } else {
+    // 7: Luxury Chrono / Radar Dial + Sweeping Hand + Minimalist Crest
+    vec2 dp = (uv - vec2(0.30, 0.50)) * vec2(1.3, 1.0);
+    float r = length(dp);
+    float dial = (1.0 - smoothstep(0.24, 0.26, r)) * smoothstep(0.21, 0.23, r);
+    float aD = atan(dp.y, dp.x);
+    float ticks = (1.0 - smoothstep(0.17, 0.21, abs(r - 0.19))) * step(0.75, cos(aD * 12.0));
+    vec2 handDir = vec2(cos(-ang * 2.0), sin(-ang * 2.0));
+    float hand = 1.0 - smoothstep(0.008, 0.020, glyphSeg(dp, vec2(0.0), handDir * 0.19));
+    float txt1 = evalGlyphLine(vec2(clamp((uv.x - 0.54) / 0.40, 0.0, 1.0), clamp((uv.y - 0.52) / 0.26, 0.0, 1.0)), 4.0, 0.0, seed * 47.0, glyphStyle, animT) * step(0.54, uv.x) * step(0.52, uv.y) * step(uv.y, 0.78);
+    float txt2 = evalGlyphLine(vec2(clamp((uv.x - 0.54) / 0.40, 0.0, 1.0), clamp((uv.y - 0.22) / 0.18, 0.0, 1.0)), 6.0, 0.0, seed * 71.0, glyphStyle, animT) * step(0.54, uv.x) * step(0.22, uv.y) * step(uv.y, 0.40);
+    col = mix(col, brandA * 1.15, clamp(dial + ticks * 0.8 + txt1, 0.0, 1.0));
+    col = mix(col, brandB * 1.25, clamp(hand + txt2 * 0.85, 0.0, 1.0));
+  }
+  return col;
+}
+
+vec4 evalSimulatedAd(vec2 uv, float seed, float glyphStyle, float animT) {
+  vec3 ch = evalSimulatedAd(uv, seed, glyphStyle, animT, vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0));
+  float spec = max(0.0, ch.z);
+  float wA = max(0.0, ch.x - spec * 0.5);
+  float wB = max(0.0, ch.y - spec * 0.5);
+  float mask = clamp(wA + wB + spec, 0.0, 1.0);
+  float mixAB = wB / max(0.001, wA + wB);
+  return vec4(mask, clamp(mixAB, 0.0, 1.0), clamp(spec, 0.0, 1.0), 1.0);
 }
 `;
 
@@ -455,6 +674,8 @@ uniform float uCloudStyle;
 uniform float uCloudSeed;
 uniform float uCloudEvol;
 uniform float uCloudLac;
+uniform float uCloudElev;
+uniform float uCloudRange;
 uniform float uHaze;
 uniform float uTime;
 uniform float uSunGlow;
@@ -484,11 +705,15 @@ vec2 intersectSphereShell(vec3 oc, vec3 rd, float rad) {
 // 0 = Cumulus, 1 = Cumulonimbus thunderheads, 2 = Stratocumulus deck,
 // 3 = High ice Cirrus, 4 = Multi-layer Altocumulus + Cirrus, 5 = Low Sea-of-Clouds
 float skyCumulusDensity(vec3 p, float h01, float covK, float cType, float t) {
-  vec3 wind = vec3(t * 22.0, 0.0, t * 9.5);
-  float w4 = t * 0.095 * max(uCloudEvol, 0.0);
+  // Closed circular orbital drift & 4D evolution in noise space -> 100% seamless loop at PC_LOOP = 120s!
+  vec2 orbWind = loopOrbit(t, 440.0, 1.0);
+  vec3 wind = vec3(orbWind.x, 0.0, orbWind.y * 0.65);
+  float w4 = loopSin(t, 0.025, 0.0) * 1.85 * max(uCloudEvol, 0.0) + loopCos(t, 0.017, 1.1) * 0.95 * max(uCloudEvol, 0.0);
   float lac = clamp(uCloudLac, 1.25, 3.4);
   float sOff = uCloudSeed;
   float over = clamp((covK - 1.05) / 1.15, 0.0, 1.0);
+  // Multi-stratum vertical modulation when cloud range is tall (> 500m) so clouds form layered decks
+  float multiDeck = 0.78 + 0.22 * cos(h01 * 9.42 + sOff);
 
   if (cType > 2.5 && cType < 3.5) {
     // 3: High ice-crystal Cirrus & wind-sheared mares' tails
@@ -564,12 +789,12 @@ float skyCumulusDensity(vec3 p, float h01, float covK, float cType, float t) {
     return clamp((shape - thresh) * 3.4, 0.0, 1.0) * prof;
   }
 
-  // 0: Fair-weather Cumulus humilis / mediocris
+  // 0: Fair-weather Cumulus humilis / mediocris (multi-tier vertical spread!)
   vec3 q = (p + wind) * vec3(0.00034, 0.00072, 0.00034);
   float macro = fbm4Cloud(q, w4, lac, sOff);
   float billow = fbm4Cloud(q * 2.35 + vec3(3.7, -1.9, 5.1), w4 * 1.3, lac, sOff + 6.2);
-  float detail = vnoise4(vec4(q * 5.8 - vec3(t * 0.08, 0.0, 0.0), w4 * 1.7 + sOff));
-  float prof = smoothstep(0.02, 0.22, h01) * smoothstep(1.0, 0.36, h01);
+  float detail = vnoise4(vec4(q * 5.8 + vec3(orbWind.x * 0.002, 0.0, orbWind.y * 0.002), w4 * 1.7 + sOff));
+  float prof = smoothstep(0.02, 0.20, h01) * smoothstep(1.0, 0.34, h01) * multiDeck;
   float shape = (macro * 0.66 + billow * 0.34) * (0.55 + 0.62 * prof) - detail * 0.14;
   float thresh = mix(clamp(0.56 - covK * 0.21, 0.20, 0.62), 0.08, over);
   return clamp((shape - thresh) * 2.85, 0.0, 1.0) * prof;
@@ -691,15 +916,17 @@ void main() {
     vec3 oc = cameraPosition - sphereCenter;
     float rCam = length(oc);
 
-    // Cloud shell base & ceiling adapt to selected meteorological cloud type
-    float baseH = 580.0;
-    float topH = 1580.0;
+    // Cloud shell base & vertical range driven by uCloudElev (80..1400m) & uCloudRange (120..2400m)
+    float elevBase = max(55.0, uCloudElev);
+    float spanRange = max(90.0, uCloudRange);
+    float baseH = elevBase * 1.45;
+    float topH = baseH + spanRange * 1.28;
     float extMul = 1.0;
-    if (uCloudType > 0.5 && uCloudType < 1.5) { baseH = 420.0; topH = 2420.0; extMul = 1.25; }
-    else if (uCloudType > 1.5 && uCloudType < 2.5) { baseH = 500.0; topH = 980.0; extMul = 1.35; }
-    else if (uCloudType > 2.5 && uCloudType < 3.5) { baseH = 1340.0; topH = 1960.0; extMul = 0.46; }
-    else if (uCloudType > 3.5 && uCloudType < 4.5) { baseH = 540.0; topH = 2040.0; extMul = 0.95; }
-    else if (uCloudType > 4.5) { baseH = 85.0; topH = 355.0; extMul = 1.55; }
+    if (uCloudType > 0.5 && uCloudType < 1.5) { baseH = elevBase * 1.05; topH = baseH + spanRange * 2.35; extMul = 1.25; }
+    else if (uCloudType > 1.5 && uCloudType < 2.5) { baseH = elevBase * 1.25; topH = baseH + spanRange * 0.72; extMul = 1.35; }
+    else if (uCloudType > 2.5 && uCloudType < 3.5) { baseH = elevBase * 2.35 + 420.0; topH = baseH + spanRange * 0.85; extMul = 0.46; }
+    else if (uCloudType > 3.5 && uCloudType < 4.5) { baseH = elevBase * 1.30; topH = baseH + spanRange * 1.95; extMul = 0.95; }
+    else if (uCloudType > 4.5) { baseH = max(42.0, elevBase * 0.28); topH = baseH + max(130.0, spanRange * 0.45); extMul = 1.55; }
 
     float rBase = atmoR + baseH;
     float rTop = atmoR + topH;
@@ -808,6 +1035,8 @@ attribute vec3 aCenter;
 attribute vec3 aScale;
 attribute float aSeed;
 uniform float uCloudType;
+uniform float uCloudElev;
+uniform float uCloudRange;
 varying vec3 vWorld;
 varying vec3 vCenterW;
 varying vec3 vAxisX;
@@ -820,27 +1049,29 @@ void main() {
   vSeed = aSeed;
   vec3 ctr = aCenter;
   vec3 scl = aScale;
-  // Morph 3D skyscraper-weaving cloud volumes by selected cloud type without rebuilding geometry!
+  // Distribute 3D cloud volumes across [uCloudElev .. uCloudElev + uCloudRange] so clouds span realistic multi-altitude strata!
+  float hFrac = clamp((aCenter.y - 185.0) / 315.0 * 0.55 + fract(aSeed * 7.31) * 0.45, 0.0, 1.0);
+  float baseY = max(55.0, uCloudElev);
+  float spanY = max(80.0, uCloudRange);
+  float vThick = clamp(sqrt(spanY / 780.0), 0.55, 1.85);
+  ctr.y = baseY + hFrac * spanY;
+  scl.y *= vThick;
+
   if (uCloudType > 0.5 && uCloudType < 1.5) {
-    // 1: Cumulonimbus towering storm columns
-    ctr.y = 260.0 + (aCenter.y - 330.0) * 1.45;
-    scl *= vec3(1.15, 2.05, 1.15);
+    ctr.y = baseY * 0.85 + hFrac * spanY * 1.45;
+    scl *= vec3(1.15, 1.85, 1.15);
   } else if (uCloudType > 1.5 && uCloudType < 2.5) {
-    // 2: Stratocumulus wide horizontal roll sheets
-    ctr.y = 385.0 + (aCenter.y - 330.0) * 0.36;
+    ctr.y = baseY * 1.05 + hFrac * spanY * 0.42;
     scl *= vec3(1.75, 0.52, 1.55);
   } else if (uCloudType > 2.5 && uCloudType < 3.5) {
-    // 3: High ice Cirrus wind-sheared wisps
-    ctr.y = 840.0 + (aCenter.y - 330.0) * 0.85;
+    ctr.y = baseY * 1.85 + 320.0 + hFrac * spanY * 0.75;
     scl *= vec3(2.25, 0.28, 0.85);
   } else if (uCloudType > 3.5 && uCloudType < 4.5) {
-    // 4: Multi-layer (split puffs into mid altocumulus & high cirrus decks)
     float upper = step(0.5, fract(aSeed * 13.7));
-    ctr.y = mix(340.0 + (aCenter.y - 330.0) * 0.35, 860.0 + (aCenter.y - 330.0) * 0.55, upper);
+    ctr.y = mix(baseY + hFrac * spanY * 0.42, baseY + spanY * (0.68 + hFrac * 0.48), upper);
     scl *= mix(vec3(1.35, 0.65, 1.35), vec3(2.0, 0.32, 0.9), upper);
   } else if (uCloudType > 4.5) {
-    // 5: Low urban Sea-of-Clouds hugging skyscraper canyons (spires & pyramids pierce above!)
-    ctr.y = 95.0 + (aCenter.y - 330.0) * 0.34;
+    ctr.y = max(38.0, baseY * 0.28) + hFrac * max(85.0, spanY * 0.36);
     scl *= vec3(1.90, 0.54, 1.85);
   }
 
@@ -912,8 +1143,9 @@ float puffVolDensity(vec3 pL, float covK, float cType, float seed, float t) {
   float wallFade = smoothstep(0.88, 0.56, r) * baseFloor;
   float coreEnv = (1.0 - smoothstep(0.18, 0.86, r)) * baseFloor;
   vec3 freq = (cType > 2.5 && cType < 3.5) ? vec3(1.4, 3.3, 4.5) : vec3(2.35, 2.35, 2.35);
-  vec3 drift = vec3(t * 0.045, 0.0, t * 0.022) + seed * 17.3;
-  float w4 = t * 0.105 * max(uCloudEvol, 0.0);
+  vec2 orbP = loopOrbit(t, 0.85, 1.0);
+  vec3 drift = vec3(orbP.x, 0.0, orbP.y * 0.7) + seed * 17.3;
+  float w4 = loopSin(t, 0.025, seed * 6.28) * 1.95 * max(uCloudEvol, 0.0);
   float lac = clamp(uCloudLac, 1.25, 3.4);
   float n1 = fbm4Cloud(pL * freq + drift, w4, lac, uCloudSeed + seed * 7.0);
   float n2 = fbm4Cloud(pL * (freq * 2.15) - drift * 1.4, w4 * 1.35, lac, uCloudSeed + 4.3);
@@ -1311,13 +1543,15 @@ void main() {
   float gridFade = 1.0 - smoothstep(spanBoost * 0.86, spanBoost * 1.15, rDist);
   float aveFade = 1.0 - smoothstep(spanBoost * 0.94, spanBoost * 1.32, rDist);
 
-  float walkW = 4.2;
-  float roadX = step(dx, swx * 0.5 - walkW) * mix(gridFade, aveFade, isAveX);
-  float roadZ = step(dz, swz * 0.5 - walkW) * mix(gridFade, aveFade, isAveZ);
-  float coreRoad = max(roadX, roadZ) * smoothstep(8.0, 26.0, coastDist);
+  float walkW = 4.6;
+  // Strictly cut off core streets, sidewalks & lane markings before the shoreline/beach!
+  float shoreDryRoad = smoothstep(14.0, 38.0, coastDist);
+  float roadX = step(dx, swx * 0.5 - walkW) * mix(gridFade, aveFade, isAveX) * shoreDryRoad;
+  float roadZ = step(dz, swz * 0.5 - walkW) * mix(gridFade, aveFade, isAveZ) * shoreDryRoad;
+  float coreRoad = max(roadX, roadZ);
 
-  // 2. Road-Aligned Curvilinear Trapezoid Blocks, Dense Suburban Streets & Parallel House Lots
-  float dryMask = smoothstep(16.0, 58.0, coastDist) * (1.0 - slopeSteep);
+  // 2. Road-Aligned Curvilinear Trapezoid Blocks, High-Density Painted Suburban Sprawl & Lots
+  float dryMask = smoothstep(18.0, 62.0, coastDist) * (1.0 - slopeSteep);
   float blockH = fract(sin(rw.cellU * 12.9898 + rw.cellV * 78.233 + uTerrainSeed.x * 3.1) * 43758.5453);
   float blockH2 = fract(blockH * 13.71 + rw.cellV * 0.37);
 
@@ -1327,50 +1561,93 @@ void main() {
   float ringRoad = (1.0 - smoothstep(5.4, 7.8, rw.dRing)) * dryMask * (1.0 - smoothstep(uSuburbSpan * 0.95, uSuburbSpan * 1.40, rDist)) * (1.0 - gridFade * 0.85);
 
   // Suburban sprawl stretches far across uSuburbSpan and surges outward along major radial roads!
-  float subSpanEff = uSuburbSpan * (0.86 + 0.34 * corrMask);
+  float subActive = smoothstep(uCitySpan * 1.02, uCitySpan * 1.32, uSuburbSpan);
+  float subSpanEff = uSuburbSpan * (0.94 + 0.36 * corrMask);
   float subBelt = (1.0 - gridFade)
-    * (1.0 - smoothstep(subSpanEff * 0.72, subSpanEff * 1.14, rDist))
-    * dryMask;
-  float subPatch = smoothstep(0.24, 0.52, fbm(p * 0.00085 + vec2(-4.2, 8.7)) + corrMask * 0.28);
-  float subZone = clamp(subBelt * (0.48 + 0.52 * subPatch), 0.0, 1.0);
+    * (1.0 - smoothstep(subSpanEff * 0.76, subSpanEff * 1.26, rDist))
+    * dryMask * subActive;
+  float subPatch = smoothstep(0.18, 0.48, fbm(p * 0.00085 + vec2(-4.2, 8.7)) + corrMask * 0.32);
+  float subZone = clamp(subBelt * (0.56 + 0.44 * subPatch), 0.0, 1.0);
 
-  // Internal parallel residential streets inside each road-bounded trapezoid block
-  float nLanes = 2.0 + floor(blockH2 * 3.0); // 2..4 parallel streets per trapezoid block
+  // Internal parallel residential streets (3..5 streets per trapezoid block for dense sprawl!)
+  float nLanes = 3.0 + floor(blockH2 * 3.0);
   float orientAlongRing = step(0.42, blockH);
   float stCoord = orientAlongRing > 0.5 ? rw.fv * nLanes : rw.fu * nLanes;
   float stSpanM = orientAlongRing > 0.5 ? (380.0 / nLanes) : (rw.spanU / nLanes);
   float stFrac = fract(stCoord);
   float dLocalSt = min(stFrac, 1.0 - stFrac) * stSpanM;
-  float localRoad = (1.0 - smoothstep(3.8, 5.6, dLocalSt)) * subZone * step(10.0, min(rw.dArt, rw.dRing));
+  float localRoad = (1.0 - smoothstep(3.6, 5.4, dLocalSt)) * subZone * step(10.0, min(rw.dArt, rw.dRing));
 
   float subRoad = clamp(max(max(artRoad, ringRoad), localRoad), 0.0, 1.0);
   float road = max(coreRoad, subRoad * 0.94);
 
-  float walkBandX = step(swx * 0.5 - walkW, dx) * step(dx, swx * 0.5 + 1.2) * (1.0 - roadZ) * mix(gridFade, aveFade, isAveX);
-  float walkBandZ = step(swz * 0.5 - walkW, dz) * step(dz, swz * 0.5 + 1.2) * (1.0 - roadX) * mix(gridFade, aveFade, isAveZ);
-  float subWalk = (1.0 - smoothstep(5.4, 7.6, min(min(rw.dArt - 3.6, rw.dRing - 1.2), dLocalSt))) * subZone * (1.0 - subRoad);
-  float sidewalk = clamp(max(max(walkBandX, walkBandZ) * smoothstep(10.0, 28.0, coastDist), subWalk * 0.65), 0.0, 1.0);
+  // Rich Street-Level Sidewalks: stone pavers, raised curb bevel, street-tree pits & storm-drain grates
+  float walkBandX = step(swx * 0.5 - walkW, dx) * step(dx, swx * 0.5 + 1.4) * (1.0 - roadZ) * mix(gridFade, aveFade, isAveX) * shoreDryRoad;
+  float walkBandZ = step(swz * 0.5 - walkW, dz) * step(dz, swz * 0.5 + 1.4) * (1.0 - roadX) * mix(gridFade, aveFade, isAveZ) * shoreDryRoad;
+  float subWalk = (1.0 - smoothstep(5.2, 7.4, min(min(rw.dArt - 3.6, rw.dRing - 1.2), dLocalSt))) * subZone * (1.0 - subRoad);
+  float sidewalk = clamp(max(max(walkBandX, walkBandZ), subWalk * 0.68), 0.0, 1.0);
 
-  vec3 walkCol = mix(uGBlock, uGStreet, 0.35) + uGLine * 0.05;
-  vec2 paver = abs(fract(p / 3.6) - 0.5);
-  float joint = 1.0 - smoothstep(0.0, 0.06, min(paver.x, paver.y));
-  walkCol *= 1.0 - joint * 0.14;
+  vec3 walkCol = mix(uGBlock, uGStreet, 0.28) + vec3(0.055, 0.052, 0.048) + uGLine * 0.04;
+  vec2 paver = abs(fract(p / 3.2) - 0.5);
+  float joint = 1.0 - smoothstep(0.0, 0.055, min(paver.x, paver.y));
+  walkCol *= 1.0 - joint * 0.16;
+  // Sidewalk tree-pit planters & tactile curb strip every 18m along urban sidewalks
+  float treePitX = (1.0 - smoothstep(0.9, 1.35, length(vec2(dx - (swx * 0.5 - 2.1), (fract(p.y / 18.0) - 0.5) * 18.0)))) * walkBandX;
+  float treePitZ = (1.0 - smoothstep(0.9, 1.35, length(vec2(dz - (swz * 0.5 - 2.1), (fract(p.x / 18.0) - 0.5) * 18.0)))) * walkBandZ;
+  float treePit = clamp(treePitX + treePitZ, 0.0, 1.0) * step(18.0, min(dx + dz, 99.0));
+  walkCol = mix(walkCol, mix(uGBlock * 0.65, vec3(0.11, 0.19, 0.11), 0.55), treePit * 0.85);
 
-  // Road-aligned trapezoidal & rectangular house lots inside each residential block
-  float lotAlong = orientAlongRing > 0.5 ? rw.fu * max(6.0, floor(rw.spanU / 26.0)) : rw.fv * 14.0;
-  float lotSkew = (fract(blockH * 19.3) - 0.5) * 0.28;
+  // Road-aligned residential micro-lots + Painted Distant Suburban Sprawl Texture (roofs, driveways, pools & yards!)
+  float lotDensity = max(8.0, floor(rw.spanU / 19.0));
+  float lotAlong = orientAlongRing > 0.5 ? rw.fu * lotDensity : rw.fv * 20.0;
+  float lotSkew = (fract(blockH * 19.3) - 0.5) * 0.22;
   float lotIdx = floor(lotAlong + (stFrac - 0.5) * lotSkew);
   float lotF = fract(lotAlong + (stFrac - 0.5) * lotSkew);
-  float lotSpanM = orientAlongRing > 0.5 ? (rw.spanU / max(6.0, floor(rw.spanU / 26.0))) : (380.0 / 14.0);
+  float lotSpanM = orientAlongRing > 0.5 ? (rw.spanU / lotDensity) : (380.0 / 20.0);
   float dLotSide = min(lotF, 1.0 - lotF) * lotSpanM;
   float dBackFence = abs(stFrac - 0.5) * stSpanM;
   float lotEdgeM = min(dLotSide, dBackFence);
-  float lotHash = fract(sin(lotIdx * 17.13 + floor(stCoord) * 41.7 + blockH * 97.3) * 43758.5453);
+  float rowSide = sign(stFrac - 0.5);
+  float lotHash = fract(sin(lotIdx * 17.13 + floor(stCoord * 2.0) * 41.7 + blockH * 97.3) * 43758.5453);
 
-  float lotHedge = (1.0 - smoothstep(0.65, 1.85, lotEdgeM)) * subZone * (1.0 - subRoad) * step(6.5, dLocalSt);
-  vec3 lushHint = mix(uGBlock, vec3(0.11, 0.20, 0.11) + uGBlock * 0.55, 0.48);
-  vec3 yardTint = mix(uGBlock * 0.90, lushHint * 1.15, lotHash);
-  vec3 col = mix(uGBlock, yardTint, subZone * 0.85);
+  float lotHedge = (1.0 - smoothstep(0.55, 1.65, lotEdgeM)) * subZone * (1.0 - subRoad) * step(6.2, dLocalSt);
+  vec3 lushHint = mix(uGBlock, vec3(0.11, 0.21, 0.11) + uGBlock * 0.52, 0.50);
+  vec3 yardTint = mix(uGBlock * 0.88, lushHint * 1.16, lotHash);
+  vec3 col = mix(uGBlock, yardTint, subZone * 0.88);
+
+  // Painted suburban sprawl rooftops, concrete driveways & backyard pools inside residential parcels!
+  float sprawlGlow = 0.0;
+  if (subZone > 0.02 && subRoad < 0.5) {
+    float setback = 8.5 + fract(lotHash * 5.3) * 4.5;
+    float houseDepth = 8.0 + fract(lotHash * 11.7) * 5.0;
+    float houseHalfW = clamp(lotSpanM * (0.28 + 0.12 * fract(lotHash * 3.1)), 3.2, 8.5);
+    float lotCenterDist = abs(lotF - 0.5) * lotSpanM;
+    float inDepth = step(setback, dLocalSt) * step(dLocalSt, setback + houseDepth) * step(5.0, dBackFence);
+    float inWidth = 1.0 - smoothstep(houseHalfW - 0.6, houseHalfW + 0.4, lotCenterDist);
+    float hasHouse = step(0.12, lotHash) * step(11.5, min(rw.dArt, rw.dRing));
+    float houseMask = inDepth * inWidth * hasHouse * subZone;
+
+    // Pitched gable roof ridge shading (sunlit slope vs shaded slope!)
+    float roofRidge = (dLocalSt - setback) / max(houseDepth, 1.0) - 0.5;
+    float gableShade = 0.82 + 0.34 * sign(roofRidge) * rowSide * clamp(uSunDir.x * 0.6 + uSunDir.z * 0.6, -1.0, 1.0);
+    vec3 roofTile = mix(uGBlock * 1.15, vec3(0.36, 0.22, 0.17), 0.55); // terracotta shingle
+    if (lotHash > 0.36) roofTile = mix(uGBlock * 1.1, vec3(0.24, 0.26, 0.30), 0.60); // slate grey
+    if (lotHash > 0.68) roofTile = mix(uGBlock * 1.15, vec3(0.33, 0.29, 0.24), 0.58); // warm cedar/tan
+    if (lotHash > 0.88) roofTile = mix(uGBlock * 1.2, vec3(0.46, 0.45, 0.43), 0.55); // commercial flat membrane
+
+    // Concrete driveway connecting street curb to garage
+    float driveOff = (lotF - 0.28) * lotSpanM;
+    float driveway = (1.0 - smoothstep(1.4, 2.1, abs(driveOff))) * step(4.8, dLocalSt) * step(dLocalSt, setback + 1.5) * hasHouse * subZone;
+    // Occasional turquoise backyard swimming pool
+    float poolMask = step(0.86, lotHash) * (1.0 - smoothstep(1.8, 2.5, length(vec2(lotCenterDist, dLocalSt - (setback + houseDepth + 4.5))))) * step(4.0, dBackFence) * subZone;
+
+    col = mix(col, mix(uGStreet, vec3(0.32, 0.32, 0.34), 0.35), driveway * 0.78);
+    col = mix(col, roofTile * gableShade, houseMask * 0.92);
+    col = mix(col, vec3(0.14, 0.52, 0.64), poolMask * 0.75);
+    // Warm nocturnal suburban window/porch & streetlamp clusters stretching to the horizon!
+    float nightLamp = (1.0 - smoothstep(1.5, 5.5, abs(dLocalSt - 5.8))) * step(0.68, fract(lotIdx * 0.37 + blockH * 7.0));
+    sprawlGlow = (houseMask * step(0.42, fract(lotHash * 23.1)) * 0.42 + nightLamp * 0.55) * subZone;
+  }
 
   // 3. Road-Aligned Trapezoidal & Parallel-Strip Farmland (matches bounding roads!)
   float isArid = (uTerrainMode > 0.5 && uTerrainMode < 1.5) ? 1.0 : ((uTerrainMode > 2.5 && uTerrainMode < 3.5) ? 0.75 : 0.0);
@@ -1432,9 +1709,9 @@ void main() {
   col = mix(col, uGStreet * 0.65, lotHedge * 0.55);
   col *= 0.91 + 0.18 * vnoise(p * 0.018);
 
-  // Subtle warm porch / driveway glints along suburban residential lots
+  // Subtle warm porch / driveway & sprawl streetlamp glints along suburban residential lots
   float subPorch = step(0.74, lotHash) * smoothstep(3.0, 9.0, lotEdgeM) * smoothstep(6.0, 14.0, dLocalSt) * subZone * (1.0 - subRoad);
-  col += uPoolCol * subPorch * max(uLightK, 0.12) * 0.34;
+  col += uPoolCol * (subPorch * 0.26 + sprawlGlow * 0.48) * max(uLightK, 0.08);
 
   // 4. 3D Distant Terrain Biomes: Mountains, Desert Dunes & Mesas, Rolling Hills, Volcanic Badlands
   float outerLand = 1.0 - gridFade;
@@ -1475,16 +1752,26 @@ void main() {
   }
   col *= reliefShade;
 
-  // 5. Coastal Sandy Beach / Rocky Waterfront Apron along Ocean & Lake Shores
-  if (uWaterMode > 0.5 && uWaterMode < 3.5 && coastDist < 68.0) {
-    float beachBand = (1.0 - smoothstep(6.0, 62.0, max(coastDist, 0.0))) * (1.0 - gridFade * 0.75);
-    vec3 sandShore = mix(uGBlock + vec3(0.22, 0.19, 0.13), vec3(0.46, 0.40, 0.30) + uFogCol * 0.2, 0.58);
-    float wetTide = 1.0 - smoothstep(-4.0, 14.0, coastDist);
-    sandShore *= mix(1.0, 0.58, wetTide);
-    col = mix(col, sandShore, beachBand * 0.82);
+  // 5. Natural Water-to-Land Shore Transition: Wet Swash, Golden Crescent Beach, Shingle & Dune Grass!
+  if (uWaterAmt > 0.005 && uWaterMode > 0.5 && uWaterMode < 3.5 && coastDist < 112.0) {
+    float pocket = smoothstep(-0.28, 0.38, sin(p.x * 0.0013 - p.y * 0.0011 + uTerrainSeed.x * 2.1));
+    float beachWidth = mix(34.0, 88.0, pocket);
+    float beachBand = (1.0 - smoothstep(4.0, beachWidth, max(coastDist, 0.0))) * (1.0 - road * 0.85);
+    float duneGrass = smoothstep(beachWidth * 0.58, beachWidth * 0.92, coastDist) * (1.0 - smoothstep(beachWidth * 0.92, beachWidth + 28.0, coastDist));
+    float sandRipple = 0.93 + 0.07 * sin(coastDist * 0.85 + vnoise(p * 0.04) * 3.0);
+    vec3 drySand = mix(uGBlock * 0.75 + vec3(0.46, 0.39, 0.27), vec3(0.68, 0.58, 0.42) + uSunFogCol * 0.18, 0.68) * sandRipple;
+    vec3 pebbleHeadland = mix(vec3(0.28, 0.27, 0.26), uGBlock + vec3(0.14, 0.13, 0.12), 0.45);
+    vec3 shoreSurf = mix(pebbleHeadland, drySand, pocket);
+    // Dark glistening wet foreshore sand right where waves wash up (coastDist -5..16m)
+    float wetSwash = 1.0 - smoothstep(-3.0, 16.0, coastDist);
+    vec3 wetSand = shoreSurf * 0.52 + uFogCol * 0.12;
+    shoreSurf = mix(shoreSurf, wetSand, wetSwash);
+    col = mix(col, shoreSurf, beachBand * 0.92);
+    vec3 grassCol = mix(uGBlock, vec3(0.18, 0.29, 0.15), 0.62);
+    col = mix(col, grassCol, duneGrass * (1.0 - road) * 0.55);
   }
 
-  // Centre lines, multi-lane dashes on core avenues, kerbs & intersection zebra crosswalks
+  // Centre lines, multi-lane dashes on core avenues, storm-drain curbs & zebra crosswalks (clipped before beach/water!)
   float dashZ = step(0.42, fract(p.y / 14.0));
   float dashX = step(0.42, fract(p.x / 14.0));
   float centerX = (1.0 - smoothstep(0.0, 1.25, dx)) * roadX * (1.0 - roadZ * 0.85);
@@ -1496,16 +1783,18 @@ void main() {
   ) * 0.62;
   float laneDashX = (1.0 - smoothstep(0.0, 0.75, abs(dx - 11.0))) * isAveX * dashZ * roadX * (1.0 - roadZ);
   float laneDashZ = (1.0 - smoothstep(0.0, 0.75, abs(dz - 11.0))) * isAveZ * dashX * roadZ * (1.0 - roadX);
-  float line = max(max(max(centerX, centerZ), subCenter), max(laneDashX, laneDashZ) * 0.75);
+  float stopBarX = (1.0 - smoothstep(0.0, 0.85, abs(dz - (swz * 0.5 + 3.8)))) * roadX * (1.0 - roadZ) * gridFade * shoreDryRoad;
+  float stopBarZ = (1.0 - smoothstep(0.0, 0.85, abs(dx - (swx * 0.5 + 3.8)))) * roadZ * (1.0 - roadX) * gridFade * shoreDryRoad;
+  float line = max(max(max(centerX, centerZ), subCenter), max(max(laneDashX, laneDashZ) * 0.75, max(stopBarX, stopBarZ) * 0.7));
 
-  float xingOnX = step(swz * 0.5 - walkW, dz) * step(dz, swz * 0.5 + 3.2) * roadX * step(0.42, fract(p.x / 2.6));
-  float xingOnZ = step(swx * 0.5 - walkW, dx) * step(dx, swx * 0.5 + 3.2) * roadZ * step(0.42, fract(p.y / 2.6));
-  float crosswalk = max(xingOnX, xingOnZ) * gridFade;
+  float xingOnX = step(swz * 0.5 - walkW, dz) * step(dz, swz * 0.5 + 3.2) * roadX * step(0.42, fract(p.x / 2.4));
+  float xingOnZ = step(swx * 0.5 - walkW, dx) * step(dx, swx * 0.5 + 3.2) * roadZ * step(0.42, fract(p.y / 2.4));
+  float crosswalk = max(xingOnX, xingOnZ) * gridFade * shoreDryRoad;
 
   float curb = max(
     (1.0 - smoothstep(0.0, 0.95, abs(dx - (swx * 0.5 - walkW)))) * (1.0 - roadZ) * mix(gridFade, aveFade, isAveX),
     (1.0 - smoothstep(0.0, 0.95, abs(dz - (swz * 0.5 - walkW)))) * (1.0 - roadX) * mix(gridFade, aveFade, isAveZ)
-  );
+  ) * shoreDryRoad;
   float markings = clamp(line * (0.32 + uGLineGlow * 0.7) + curb * 0.42 + crosswalk * 0.52, 0.0, 1.0);
   col = mix(col, uGLine, markings);
   col += uGLine * (line + crosswalk * 0.55) * uGLineGlow * 0.38;
@@ -1728,34 +2017,37 @@ void main() {
       if (activeScreen > 0.5) {
         vec2 uvS = (pf - vec2(0.07, 0.09)) / vec2(0.86, 0.82);
         float mode = fract(pHash * 7.31);
-        float motif = 0.0;
-        if (mode < 0.30) {
-          // Oversized Hero Linear-A/B + Synth Calligraphic Banner + scrolling bottom ticker
-          float bigGlyph = evalSynthGlyph(vec2(fract(uvS.x * 2.0), clamp((uvS.y - 0.24) / 0.68, 0.0, 1.0)), pHash + floor(uvS.x * 2.0) * 0.31, uGlyphStyle, animT, 0.052) * step(0.24, uvS.y);
-          float ticker = evalGlyphLine(vec2(uvS.x, uvS.y / 0.20), 9.0, animT * 0.85, pHash, uGlyphStyle, animT) * step(uvS.y, 0.20);
-          motif = clamp(bigGlyph + ticker * 0.9, 0.0, 1.0);
-        } else if (mode < 0.60) {
-          // Vertical Skyscraper Glyph Cascade (streaming Linear-Synth columns)
-          float colIdx = floor(uvS.x * 4.0);
-          vec2 vCell = vec2(fract(uvS.x * 4.0), fract(uvS.y * 5.0 + animT * (0.28 + 0.15 * fract(colIdx * 0.37))));
-          float cSeed = hash12(vec2(colIdx, floor(uvS.y * 5.0 + animT * (0.28 + 0.15 * fract(colIdx * 0.37))) + pHash * 17.0));
-          motif = evalSynthGlyph(vCell, cSeed, uGlyphStyle, animT, 0.058) * step(0.22, fract(pHash * 5.3 + colIdx * 0.29));
-        } else if (mode < 0.82) {
-          // Cyber-sun horizon disc + Linear-B subtitle strip
-          float sunR = length((uvS - vec2(0.5, 0.60)) * vec2(1.3, 1.0));
-          float sunM = (1.0 - smoothstep(0.22, 0.26, sunR)) * step(0.18, fract(uvS.y * 9.0 - animT * 0.2));
-          float sub = evalGlyphLine(vec2(uvS.x, (uvS.y - 0.06) / 0.18), 7.0, -animT * 0.55, pHash + 2.1, uGlyphStyle, animT) * step(0.06, uvS.y) * step(uvS.y, 0.24);
-          motif = clamp(sunM + sub, 0.0, 1.0);
+        vec3 adBg = mix(base * 0.28, styleBillColor(uBillB) * 0.16, 0.52);
+        vec3 screenRgb = adBg;
+        if (mode < 0.46) {
+          // Simulated Commercial Mega-Ad (Synth-Beverage, Cyber-Coupe, Off-World Travel, Visor Fashion, Ramen, Market, Club, Chrono)
+          vec4 simAd = evalSimulatedAd(uvS, pHash * 19.7 + vSeed * 3.1, uGlyphStyle, animT);
+          vec3 brandA = mix(uBillA, vec3(1.0, 0.62, 0.18), fract(pHash * 5.3) * 0.45 * (1.0 - uBillMono));
+          vec3 brandB = mix(uBillB, vec3(0.20, 0.95, 0.78), fract(pHash * 9.1) * 0.45 * (1.0 - uBillMono));
+          vec3 fg = styleBillColor(mix(brandA, brandB, clamp(simAd.y, 0.0, 1.0)) + vec3(0.95, 0.92, 0.85) * simAd.z * 0.42);
+          screenRgb = mix(adBg, saturate3(fg, uSat), clamp(simAd.x, 0.0, 1.0));
         } else {
-          // Kinetic harmonic waveform + corner sigil badge
-          float wave = smoothstep(0.08, 0.0, abs(uvS.y - 0.56 - 0.20 * sin(uvS.x * 6.28 + animT * 1.4 + pHash * 9.0)));
-          float badge = evalSynthGlyph((uvS - vec2(0.68, 0.08)) / 0.26, pHash * 3.1, uGlyphStyle, animT, 0.06) * step(0.68, uvS.x) * step(uvS.y, 0.34);
-          motif = clamp(wave + badge, 0.0, 1.0);
+          float motif = 0.0;
+          float scrollP = loopPhase(animT, 7.0);
+          if (mode < 0.66) {
+            float bigGlyph = evalSynthGlyph(vec2(fract(uvS.x * 2.0), clamp((uvS.y - 0.24) / 0.68, 0.0, 1.0)), pHash + floor(uvS.x * 2.0) * 0.31, uGlyphStyle, animT, 0.052) * step(0.24, uvS.y);
+            float ticker = evalGlyphLine(vec2(uvS.x, uvS.y / 0.20), 9.0, scrollP * 9.0, pHash, uGlyphStyle, animT) * step(uvS.y, 0.20);
+            motif = clamp(bigGlyph + ticker * 0.9, 0.0, 1.0);
+          } else if (mode < 0.84) {
+            float colIdx = floor(uvS.x * 4.0);
+            float vShift = loopPhase(animT, 5.0 + floor(fract(colIdx * 0.37) * 4.0)) * 5.0;
+            vec2 vCell = vec2(fract(uvS.x * 4.0), fract(uvS.y * 5.0 + vShift));
+            float cSeed = hash12(vec2(colIdx, mod(floor(uvS.y * 5.0 + vShift), 5.0) + pHash * 17.0));
+            motif = evalSynthGlyph(vCell, cSeed, uGlyphStyle, animT, 0.058) * step(0.22, fract(pHash * 5.3 + colIdx * 0.29));
+          } else {
+            float wave = smoothstep(0.08, 0.0, abs(uvS.y - 0.56 - 0.20 * loopSin(animT, 0.22, uvS.x * 6.28 + pHash * 9.0)));
+            float badge = evalSynthGlyph((uvS - vec2(0.68, 0.08)) / 0.26, pHash * 3.1, uGlyphStyle, animT, 0.06) * step(0.68, uvS.x) * step(uvS.y, 0.34);
+            motif = clamp(wave + badge, 0.0, 1.0);
+          }
+          vec3 adFg = styleBillColor(mix(uBillA, uBillB, fract(pHash * 4.1 + motif * 0.25)));
+          screenRgb = mix(adBg, saturate3(adFg, uSat), motif);
         }
-        vec3 adBg = mix(base * 0.32, styleBillColor(uBillB) * 0.18, 0.52);
-        vec3 adFg = styleBillColor(mix(uBillA, uBillB, fract(pHash * 4.1 + motif * 0.25)));
-        vec3 screenRgb = mix(adBg, saturate3(adFg, uSat), motif);
-        float scan = 0.86 + 0.14 * sin(wy * 6.0 + animT * 6.0);
+        float scan = 0.86 + 0.14 * loopSin(animT, 0.95, wy * 6.0);
         float emK = clamp(uBillK * max(uLightK, 0.28) * min(uSignAmt, 1.6), 0.0, 1.55) * 0.82;
         col = mix(col, screenRgb * (0.45 + emK) * scan, 0.92);
       } else {
@@ -1767,53 +2059,54 @@ void main() {
         col += saturate3(uWinA, uSat) * winM * step(wr, uWinDensity * 0.32) * uWinGlow * 0.55;
       }
     } else if (vDims.y < 13.5 && isStreetPod < 0.5) {
-      // Suburban residential house / cottage windows: circadian wake/sleep schedule + live switching!
+      // Suburban residential house / cottage windows: smooth 24h-periodic circadian rhythm + looped live switching!
       vec2 hg = uvm / vec2(4.2, 3.2);
       vec2 hgid = floor(hg);
       vec2 hf = fract(hg);
       float hWin = step(0.26, hf.x) * step(hf.x, 0.74) * step(0.30, hf.y) * step(hf.y, 0.76);
       float hr = hash12(hgid + vSeed * 31.7);
-      // Circadian residential activity: early-morning kitchens (5:00-7:30) + cosy dusk-to-midnight living rooms (17:15-23:45)
-      float domMorning = smoothstep(4.6 + hr * 1.1, 5.5 + hr * 0.8, uDayPhase) * (1.0 - smoothstep(7.0, 8.2, uDayPhase));
-      float domEvening = smoothstep(16.7 + hr * 1.3, 18.0 + hr * 1.0, uDayPhase) * (1.0 - smoothstep(22.2 + hr * 1.6, 23.9, uDayPhase));
-      float domLate = (uDayPhase < 1.6 ? (1.0 - smoothstep(0.2, 1.5, uDayPhase)) * step(0.65, hr) : 0.0);
-      float liveToggle = hash12(hgid + vec2(floor(uTime * (0.07 + hr * 0.11) + vSeed * 19.0), 4.7));
-      float domOcc = clamp(max(max(domMorning * 0.65, domEvening * 1.15), domLate * 0.55), 0.08, 1.0);
-      float roomOn = step(mix(hr, liveToggle, 0.36), clamp(uWinDensity * 0.92 * domOcc + 0.14 * domEvening, 0.0, 0.96));
-      float tvShimmer = (hr > 0.72) ? (0.82 + 0.18 * sin(uTime * 5.4 + hr * 47.0)) : 1.0;
+      float domOcc = evalCircadian24(uDayPhase, hr, hr, 1.0);
+      float liveToggle = evalLoopedToggle(uTime, 0.07 + hr * 0.11, hgid, vSeed * 19.0);
+      float roomOn = step(mix(hr, liveToggle, 0.36), clamp(uWinDensity * 0.95 * domOcc, 0.0, 0.96));
+      float tvShimmer = (hr > 0.72) ? (0.82 + 0.18 * loopSin(uTime, 0.85, hr * 47.0)) : 1.0;
       vec3 hCol = saturate3(mix(uWinA, mix(uPoolCol, uWinC, step(0.76, hr) * 0.45), 0.45), uSat);
-      col += hCol * hWin * roomOn * (uWinGlow * 0.82 + 0.25 * domMorning) * tvShimmer;
+      col += hCol * hWin * roomOn * (uWinGlow * 0.85) * tvShimmer;
       // Daytime sunlit glass reflection on suburban house panes
       float dayRefl = clamp(1.0 - uLightK, 0.0, 1.0) * hWin * (1.0 - roomOn * 0.6);
       col = mix(col, mix(uAmb, uSunCol, 0.35) * 0.72, dayRefl * 0.42 * (1.0 - uFlat));
     } else if (wy < 15.8 || isStreetPod > 0.5) {
-      float podH = 5.4;
+      float podH = 5.6;
       float bayW = 5.6;
       float bx = fract(uvm.x / bayW);
-      float pilaster = 1.0 - step(0.14, bx) * step(bx, 0.86);
+      float pilaster = 1.0 - step(0.13, bx) * step(bx, 0.87);
       if (wy < podH) {
-        float glass = (1.0 - pilaster) * step(0.35, wy) * step(wy, podH - 0.55);
+        float glass = (1.0 - pilaster) * step(0.32, wy) * step(wy, podH - 0.62);
+        float awning = (1.0 - pilaster * 0.5) * step(podH - 0.95, wy) * step(wy, podH - 0.52);
         float shopId = floor(uvm.x / bayW);
         float shHash = hash12(vec2(shopId, floor(vSeed * 97.0)));
-        // Late-night cafes stay open past midnight while boutiques dim after 22:30
-        float shopSched = 1.0 - 0.55 * smoothstep(22.4 + shHash * 1.4, 23.9, uDayPhase) * step(shHash, 0.65)
-          - 0.55 * (1.0 - smoothstep(1.5, 6.8, uDayPhase)) * step(shHash, 0.65);
-        float openShop = step(0.18, shHash * shopSched + uWinDensity * 0.45);
+        float shopSched = clamp(0.42 + 0.68 * evalCircadian24(uDayPhase, shHash, shHash, 0.5), 0.35, 1.15);
+        float openShop = step(0.16, shHash * shopSched + uWinDensity * 0.45);
         vec3 shopCol = mix(uPoolCol, uWinA, fract(shHash * 3.7));
-        shopCol = mix(shopCol, styleBillColor(uBillA), step(0.82, shHash) * 0.55);
+        shopCol = mix(shopCol, styleBillColor(uBillA), step(0.78, shHash) * 0.55);
         shopCol = saturate3(shopCol, uSat);
-        float interiorBand = 0.65 + 0.35 * step(0.45, fract(wy * 0.7 + shHash * 4.0));
-        col *= 1.0 - pilaster * 0.24;
-        col = mix(col, shopCol * (0.45 + uWinGlow * 0.62 + uLightK * 0.45) * interiorBand * shopSched, glass * openShop * 0.88);
-        float fascia = (1.0 - pilaster * 0.7) * step(podH - 0.55, wy) * step(wy, podH - 0.08);
-        col += saturate3(styleBillColor(mix(uWinA, uBillA, 0.35)), uSat) * fascia * step(0.35, shHash) * (0.45 + uLightK * 0.6);
+        // Ground-floor retail merchandise shelves, cafe counter & vertical mullions
+        float mull = step(0.08, fract(bx * 3.0));
+        float interiorBand = (0.62 + 0.38 * step(0.42, fract(wy * 0.75 + shHash * 4.0))) * (0.82 + 0.18 * mull);
+        col *= 1.0 - pilaster * 0.26;
+        col = mix(col, shopCol * (0.45 + uWinGlow * 0.65 + uLightK * 0.45) * interiorBand * shopSched, glass * openShop * 0.88);
+        // Striped fabric / metal street-cafe awning + illuminated shopfront glyph fascia!
+        vec3 awnCol = mix(base * 0.75, styleBillColor(mix(uBillA, uBillB, fract(shHash * 5.1))), 0.45) * (0.8 + 0.2 * step(0.5, fract(uvm.x * 1.6)));
+        col = mix(col, saturate3(awnCol, uSat), awning * step(0.32, shHash) * 0.85);
+        float fascia = (1.0 - pilaster * 0.65) * step(podH - 0.50, wy) * step(wy, podH - 0.08);
+        float shopGlyph = evalGlyphLine(vec2(clamp((bx - 0.14) / 0.72, 0.0, 1.0), clamp((wy - (podH - 0.48)) / 0.38, 0.0, 1.0)), 5.0, 0.0, shHash * 29.0, uGlyphStyle, 0.0);
+        col += saturate3(styleBillColor(mix(uWinA, uBillA, 0.45)), uSat) * fascia * (0.35 + 0.85 * shopGlyph) * step(0.28, shHash) * (0.45 + uLightK * 0.65);
       } else {
         vec2 mg = vec2(uvm.x / bayW, (wy - podH) / 4.6);
         vec2 mgid = floor(mg);
         vec2 mf = fract(mg);
         float mWin = step(0.16, mf.x) * step(mf.x, 0.84) * step(0.22, mf.y) * step(mf.y, 0.80);
         float mr = hash12(mgid + vSeed * 23.1);
-        float mToggle = hash12(mgid + vec2(floor(uTime * (0.09 + mr * 0.12) + vSeed * 13.0), 9.1));
+        float mToggle = evalLoopedToggle(uTime, 0.09 + mr * 0.12, mgid, vSeed * 13.0);
         vec3 mCol = saturate3(mix(uWinA, uWinB, step(0.6, mr)), uSat);
         col += mCol * mWin * step(mix(mr, mToggle, 0.32), uWinDensity * 1.15) * uWinGlow * 0.85;
         float cornice = step(14.9, wy) * step(wy, 15.75);
@@ -1833,60 +2126,46 @@ void main() {
       float r1 = hash12(gid + vec2(vSeed * 17.3, vSeed * 29.1));
       float flrHash = hash12(vec2(gid.y * 0.73, floor(vSeed * 113.0) + face * 7.0));
 
-      // 24-hour circadian building rhythm:
-      // - Morning trading/office spin-up (06:15-08:30)
-      // - Daylight reflective glass panes + Venetian blinds + bright interior bays (08:30-16:45)
-      // - Staggered dusk floor-by-floor & room-by-room turn-on wave (16:45-19:30)
-      // - Evening live suite switching + holo/screen shimmer (19:30-23:15)
-      // - Late-night power-down leaving night-owl floors, server bands & penthouses lit (23:15-05:30)
+      // Smooth 24-hour periodic circadian rhythm (C-infinity across 00:00 / 24:00, zero jumps!)
       float bPhase = fract(vSeed * 5.71);
-      float duskOn = smoothstep(16.4 + bPhase * 1.1 + flrHash * 1.0 + r1 * 0.7, 17.6 + bPhase * 1.1 + flrHash * 0.9, uDayPhase);
-      float lateTaper = 1.0 - 0.58 * smoothstep(22.4 + flrHash * 1.5, 23.95, uDayPhase) * step(r1, 0.72);
-      float weeHours = (uDayPhase < 5.6)
-        ? mix(0.38 + 0.45 * step(0.76, flrHash), 0.78, smoothstep(4.8, 6.4, uDayPhase) * step(0.45, flrHash))
-        : 1.0;
-      float dayOffice = (uDayPhase >= 6.4 && uDayPhase < 16.8)
-        ? (0.28 + 0.34 * step(0.66, flrHash))
-        : 1.0;
-      float circMul = (uDayPhase < 6.4) ? weeHours : ((uDayPhase < 16.8) ? dayOffice : (mix(0.34, 1.16, duskOn) * lateTaper));
+      float duskOn = evalCircadian24(uDayPhase, bPhase * 0.6 + r1 * 0.4, flrHash, 0.0);
+      float dayOffice = 1.0 - smoothstep(0.45, 0.85, duskOn);
 
-      // Live real-time suite switching: rooms flick on and off organically every few seconds
+      // Seamless PC_LOOP-periodic suite switching: rooms flick on and off organically with zero loop seams!
       float swRate = 0.08 + fract(r1 * 13.7) * 0.16;
-      float swSlot = floor(uTime * swRate + r1 * 43.0 + flrHash * 11.0);
-      float rLive = hash12(gid + vec2(swSlot * 1.37, vSeed * 41.9));
+      float rLive = evalLoopedToggle(uTime, swRate, gid, vSeed * 41.9 + flrHash * 7.0);
       float effRand = mix(r1, rLive, 0.38);
 
       // Whole-floor office ribbon boost on active corporate floors
-      float floorBand = step(0.78, flrHash) * 0.24 * duskOn;
-      float effDens = clamp(dens * circMul + floorBand, 0.0, 0.95);
+      float floorBand = step(0.78, flrHash) * 0.22 * smoothstep(0.55, 1.05, duskOn);
+      float effDens = clamp(dens * duskOn + floorBand, 0.0, 0.95);
       float litWin = step(effRand, effDens) * win;
 
       // Subtle Venetian blinds & room depth partitioning inside lit windows
       float blinds = mix(1.0, 0.72 + 0.28 * step(0.38, fract(f.y * 5.0 + r1 * 3.0)), step(0.55, fract(r1 * 9.3)));
       float holoPulse = (r1 > 0.78)
-        ? (0.78 + 0.22 * sin(uTime * (3.2 + fract(r1 * 7.1) * 4.0) + r1 * 60.0))
-        : (0.90 + 0.10 * sin(uTime * 1.4 + r1 * 45.0));
+        ? (0.78 + 0.22 * loopSin(uTime, 0.52 + fract(r1 * 7.1) * 0.62, r1 * 60.0))
+        : (0.90 + 0.10 * loopSin(uTime, 0.22, r1 * 45.0));
       litWin *= blinds * holoPulse;
 
       float r2 = hash12(gid + vec2(vSeed * 37.7, 5.0));
       vec3 lookWin = uWinA;
       if (r2 > 0.55) lookWin = uWinB;
       if (r2 > 0.82) lookWin = uWinC;
-      // Natural interior Kelvin variety (2700K warm tungsten, 3800K neutral, 5400K cool office)
       vec3 natWin = vec3(1.0, 0.82, 0.56);
       if (r2 > 0.45) natWin = vec3(1.0, 0.93, 0.82);
       if (r2 > 0.76) natWin = vec3(0.76, 0.88, 1.0);
       vec3 wc = mix(natWin, lookWin, clamp(0.22 + 0.78 * uTint, 0.0, 1.0));
 
-      // Exterior glass express elevator shaft on tall towers: glowing cabs gliding smoothly up & down!
+      // Exterior glass express elevator shaft on tall towers: integer-harmonic looped cab cycle!
       float nCols = max(3.0, floor(vDims.x / bayW));
       float elevCol = floor((fract(vSeed * 11.3) - 0.5) * (nCols * 0.5));
       float isElevShaft = step(42.0, vDims.y) * step(abs(gid.x - elevCol), 0.45) * step(0.5, densMul);
       if (isElevShaft > 0.5 && win > 0.5) {
         float shaftTop = max(18.0, vDims.y * 0.46);
-        float cabCycle = uTime * (0.14 + fract(vSeed * 3.7) * 0.14) + vSeed * 17.0;
-        float cabTri = 1.0 - abs(fract(cabCycle) * 2.0 - 1.0);
-        // Smooth S-curve acceleration/deceleration at bottom lobby & top sky-deck
+        float cabHarm = 16.0 + floor(fract(vSeed * 3.7) * 16.0);
+        float cabCycle = fract(loopPhase(uTime, cabHarm) + vSeed * 17.0);
+        float cabTri = 1.0 - abs(cabCycle * 2.0 - 1.0);
         float cabEase = cabTri * cabTri * (3.0 - 2.0 * cabTri);
         float cabY = mix(-vDims.y * 0.42, shaftTop, cabEase);
         float cabDist = abs(uvm.y - cabY);
@@ -1910,6 +2189,64 @@ void main() {
       col += saturate3(wc, uSat) * litWin * (glow + 0.24 * dayOffice * (1.0 - uLightK));
       col *= mix(1.0, 0.86 + 0.14 * (1.0 - win), clamp(uWinGlow * 0.5, 0.0, 0.6));
     }
+  } else if (face > 0.5 && face < 1.5 && vLocal.y > 0.1 && vKind < 1.5 && vDims.y > 9.0) {
+    // Rich Procedural Rooftop Diversity (Parapets, Solar PV Arrays, HVAC Fans & Ducts, Helipads, Skylights & Green Terraces!)
+    vec2 rp = uvm; // metres from roof centre in [-vDims.x*0.5..+vDims.x*0.5, -vDims.z*0.5..+vDims.z*0.5]
+    vec2 halfR = max(vDims.xz * 0.5, vec2(3.0));
+    float dRim = min(halfR.x - abs(rp.x), halfR.y - abs(rp.y));
+    float parapet = 1.0 - smoothstep(0.85, 1.35, dRim);
+    vec2 memGrid = abs(fract(rp / 3.0) - 0.5);
+    float memSeam = 1.0 - smoothstep(0.0, 0.05, min(memGrid.x, memGrid.y));
+    vec3 roofBase = col * (0.78 - 0.10 * memSeam);
+    roofBase = mix(roofBase, col * 1.24, parapet * 0.85);
+
+    float roofType = fract(vSeed * 29.17 + floor(vKind + 0.5) * 0.31);
+    float innerMask = smoothstep(1.6, 2.4, dRim);
+    if (roofType < 0.30) {
+      // 1. Rooftop Solar Photovoltaic Array: angled dark-cobalt silicon cells + silver frames + sun specular
+      float rowF = fract(rp.y / 2.6);
+      float colF = fract(rp.x / 1.8);
+      float pvPanel = step(0.24, rowF) * step(rowF, 0.88) * step(0.08, colF) * step(colF, 0.92) * innerMask;
+      float pvFrame = pvPanel * (1.0 - step(0.30, rowF) * step(rowF, 0.82) * step(0.14, colF) * step(colF, 0.86));
+      vec3 pvCell = mix(vec3(0.06, 0.11, 0.22), uAmb * 0.85 + uSunCol * 0.28 * uSunK, 0.45);
+      roofBase = mix(roofBase, saturate3(pvCell, uSat), pvPanel * 0.90);
+      roofBase = mix(roofBase, vec3(0.62, 0.66, 0.72), pvFrame * 0.65);
+    } else if (roofType < 0.60) {
+      // 2. Industrial HVAC Condenser Bank + Galvanized Sheet-Metal Ductwork
+      vec2 hvacUv = mod(rp + halfR * 0.5, vec2(7.0, 7.0)) - 3.5;
+      float fanR = length(hvacUv);
+      float hvacBox = step(max(abs(hvacUv.x), abs(hvacUv.y)), 2.2) * innerMask;
+      float fanWell = (1.0 - smoothstep(1.35, 1.55, fanR)) * hvacBox;
+      float ang = atan(hvacUv.y, hvacUv.x) + loopPhase(uTime, 24.0) * 6.2831853;
+      float blades = step(0.15, sin(ang * 4.0)) * fanWell;
+      float duct = (1.0 - smoothstep(0.45, 0.65, abs(rp.x))) * step(abs(rp.y), halfR.y * 0.68) * innerMask;
+      roofBase = mix(roofBase, roofBase * 1.35 + vec3(0.08), max(hvacBox, duct) * 0.82);
+      roofBase = mix(roofBase, roofBase * 0.28, fanWell * (1.0 - blades * 0.55));
+    } else if (roofType < 0.80 && min(vDims.x, vDims.z) > 18.0) {
+      // 3. Executive Rooftop Helipad: circular touch-down ring, 'H' stencil & perimeter beacons
+      float padR = min(halfR.x, halfR.y) * 0.62;
+      float r = length(rp);
+      float ring = smoothstep(0.55, 0.15, abs(r - padR)) * innerMask;
+      vec2 hp = rp / max(padR, 1.0);
+      float barL = step(abs(hp.x + 0.26), 0.08) * step(abs(hp.y), 0.42);
+      float barR = step(abs(hp.x - 0.26), 0.08) * step(abs(hp.y), 0.42);
+      float barM = step(abs(hp.x), 0.28) * step(abs(hp.y), 0.07);
+      float hMark = clamp(barL + barR + barM, 0.0, 1.0) * step(r, padR * 0.85);
+      float periLight = smoothstep(0.45, 0.08, abs(r - padR * 1.08)) * step(0.72, cos(atan(rp.y, rp.x) * 8.0));
+      vec3 markCol = saturate3(mix(vec3(0.92, 0.78, 0.22), uEdgeCol, clamp(uTint * 0.6, 0.0, 1.0)), uSat);
+      roofBase = mix(roofBase, roofBase * 0.65, step(r, padR) * 0.45);
+      roofBase = mix(roofBase, markCol, clamp(ring + hMark, 0.0, 1.0) * 0.88);
+      roofBase += saturate3(uWinA, uSat) * periLight * (0.55 + 0.45 * loopSin(uTime, 0.5, vSeed * 12.0)) * max(uLightK, 0.25);
+    } else {
+      // 4. Landscaped Sky-Garden Terrace + Illuminated Atrium Skylights
+      float greenBed = smoothstep(2.4, 3.6, dRim) * (1.0 - step(abs(rp.x), halfR.x * 0.34) * step(abs(rp.y), halfR.y * 0.34));
+      float skylight = step(abs(rp.x), halfR.x * 0.28) * step(abs(rp.y), halfR.y * 0.28) * innerMask;
+      float mull = step(0.12, fract(rp.x / 2.0)) * step(0.12, fract(rp.y / 2.0));
+      vec3 gardenCol = saturate3(mix(roofBase, vec3(0.12, 0.27, 0.14) + roofBase * 0.4, 0.65), uSat);
+      roofBase = mix(roofBase, gardenCol, greenBed * 0.78);
+      roofBase = mix(roofBase, saturate3(mix(uWinA, uWinB, 0.4), uSat) * (0.45 + uWinGlow * 0.65 * max(uLightK, 0.25)), skylight * mull * 0.85);
+    }
+    col = roofBase;
   }
 
   if (vKind > 2.5) {
@@ -2034,7 +2371,7 @@ void main() {
 
   if (uRole > 1.5 && uRole < 2.5) {
     // Role 2: Glowing theme-accent structural rib / conduit / crown halo
-    float pulse = 0.88 + 0.12 * sin(uTime * 1.8 + wy * 0.045);
+    float pulse = 0.88 + 0.12 * loopSin(uTime, 0.28, wy * 0.045);
     vec3 em = saturate3(uCol, uSat) * (0.72 + uBandGlow * 0.95 * max(uLightK, 0.32)) * pulse;
     col = mix(col, em, 0.86);
   } else if (uRole > 2.5) {
@@ -2049,7 +2386,6 @@ void main() {
     float densRole = (uRole > 0.5) ? 0.34 : 0.88;
     float absY = abs(ln.y);
     if (absY < 0.26) {
-      // Vertical walls (cantilever wings, arches, spires, towers, arenas, theatres)
       float bayW = (uRole > 0.5) ? 5.8 : 4.2;
       float flrH = (uRole > 0.5) ? 5.0 : 3.8;
       vec2 g = vec2(uCoord / bayW, wy / flrH);
@@ -2059,29 +2395,22 @@ void main() {
       col *= 1.0 - mullion * 0.14 * (1.0 - uFlat);
 
       float win = step(0.20, f.x) * step(f.x, 0.80) * step(0.24, f.y) * step(f.y, 0.78);
-      // Every 8th floor on primary monumental structures carries a panoramic sky-lobby ribbon!
       float skyRibbon = (uRole < 0.5 && mod(gid.y, 8.0) < 0.5) ? 1.0 : 0.0;
       float r = hash12(gid + vec2(11.7, 5.3));
       float flrH2 = hash12(vec2(gid.y * 0.67, 17.3));
-      float duskWave = smoothstep(16.5 + flrH2 * 1.1 + r * 0.6, 17.8 + flrH2 * 0.9, uDayPhase);
-      float dayKeep = (uDayPhase >= 6.4 && uDayPhase < 16.8) ? (0.32 + 0.35 * skyRibbon) : 1.0;
-      float lateDim = 1.0 - 0.45 * smoothstep(22.6 + flrH2 * 1.3, 23.95, uDayPhase) * (1.0 - skyRibbon);
-      float schedMul = (uDayPhase < 16.8) ? dayKeep : (mix(0.36, 1.15, duskWave) * lateDim);
-      float rSwitch = hash12(gid + vec2(floor(uTime * (0.09 + fract(r * 9.7) * 0.14) + r * 31.0), 6.1));
+      float schedMul = mix(evalCircadian24(uDayPhase, r, flrH2, 0.0), 1.0, skyRibbon * 0.45);
+      float rSwitch = evalLoopedToggle(uTime, 0.09 + fract(r * 9.7) * 0.14, gid, r * 31.0);
       float effR = mix(r, rSwitch, 0.35);
       float litOn = mix(step(effR, uWinDensity * densRole * schedMul), step(effR, min(0.94, (uWinDensity * 1.35 + 0.25) * schedMul)), skyRibbon) * win;
-      litOn *= 0.88 + 0.12 * sin(uTime * 1.9 + r * 52.0);
+      litOn *= 0.88 + 0.12 * loopSin(uTime, 0.30, r * 52.0);
       float rCol = hash12(gid + vec2(3.3, 19.1));
       vec3 wc = uWinA;
       if (rCol > 0.56) wc = uWinB;
       if (rCol > 0.86) wc = uWinC;
-      // Daytime sky reflection on landmark glass bays
       float dayG = clamp(1.0 - uLightK * 0.85, 0.0, 1.0) * win * (1.0 - litOn * 0.7) * (1.0 - uFlat);
       col = mix(col, saturate3(mix(uAmbG, uAmb * 1.35, 0.65) + uSunCol * 0.18 * uSunK, uSat), dayG * 0.48);
       col += saturate3(wc, uSat) * litOn * uWinGlow * (0.85 + 0.30 * skyRibbon);
     } else if (absY < 0.86) {
-      // Sloped monumental faces (Pyramids, Ziggurats, Buttresses, Geodesic Domes):
-      // Carved stepped stone/alloy courses + recessed glowing horizontal terrace galleries!
       float course = fract(wy / 5.5);
       float blockJoint = step(0.08, fract(uCoord / 7.5 + floor(wy / 5.5) * 0.5));
       col *= 0.88 + 0.15 * smoothstep(0.0, 0.22, course) * blockJoint;
@@ -2089,13 +2418,10 @@ void main() {
       vec2 sg = vec2(uCoord / 4.8, wy / 11.0);
       vec2 sgid = floor(sg);
       vec2 sf = fract(sg);
-      // Horizontal recessed terrace slits along pyramid/dome courses
       float slit = step(0.16, sf.x) * step(sf.x, 0.84) * step(0.62, sf.y) * step(sf.y, 0.86);
       float sr = hash12(sgid + vec2(23.4, 9.1));
-      float sSwitch = hash12(sgid + vec2(floor(uTime * (0.08 + fract(sr * 11.3) * 0.14) + sr * 29.0), 3.9));
-      float sDusk = (uDayPhase >= 6.5 && uDayPhase < 16.6)
-        ? 0.34
-        : mix(0.42, 1.12, smoothstep(16.6 + fract(sr * 3.1), 17.9 + fract(sr * 3.1), max(uDayPhase, 17.5 * step(uDayPhase, 6.5))));
+      float sSwitch = evalLoopedToggle(uTime, 0.08 + fract(sr * 11.3) * 0.14, sgid, sr * 29.0);
+      float sDusk = evalCircadian24(uDayPhase, sr, fract(sr * 3.1), 0.0);
       float sOn = step(mix(sr, sSwitch, 0.34), uWinDensity * densRole * 0.95 * sDusk) * slit;
       vec3 swc = mix(uWinA, uWinB, step(0.58, hash12(sgid + 7.7)));
       col += saturate3(swc, uSat) * sOn * uWinGlow * 0.92;
@@ -2199,6 +2525,7 @@ void main() {
 export const VEHICLE_FRAG = /* glsl */ `
 uniform vec3 uSunDir;
 uniform float uLightK;
+uniform float uVehLight;
 uniform float uBillMono;
 uniform float uTint;
 varying vec3 vHullCol;
@@ -2211,40 +2538,36 @@ void main() {
   float skyHemi = 0.45 + 0.55 * clamp(n.y * 0.5 + 0.5, 0.0, 1.0);
   float shade = mix(0.46 * skyHemi + 0.78 * sunD, 0.68 * skyHemi + 0.32 * sunD, uLightK * 0.55);
 
-  // Derive a per-instance automotive coat from vHullCol hash so vehicles vary naturally!
   float coatId = fract(dot(vHullCol, vec3(17.31, 43.17, 29.53)));
-  vec3 autoPaint = vec3(0.76, 0.80, 0.85); // brushed DeLorean stainless silver
-  if (coatId > 0.18) autoPaint = vec3(0.92, 0.70, 0.12); // Fifth Element cab gold-yellow
-  if (coatId > 0.34) autoPaint = vec3(0.16, 0.24, 0.38); // midnight sapphire
-  if (coatId > 0.50) autoPaint = vec3(0.88, 0.90, 0.93); // pearl white
-  if (coatId > 0.64) autoPaint = vec3(0.24, 0.27, 0.31); // titanium gunmetal
-  if (coatId > 0.78) autoPaint = vec3(0.74, 0.16, 0.20); // crimson metallic
-  if (coatId > 0.90) autoPaint = vec3(0.18, 0.42, 0.36); // racing emerald
+  vec3 autoPaint = vec3(0.76, 0.80, 0.85);
+  if (coatId > 0.18) autoPaint = vec3(0.92, 0.70, 0.12);
+  if (coatId > 0.34) autoPaint = vec3(0.16, 0.24, 0.38);
+  if (coatId > 0.50) autoPaint = vec3(0.88, 0.90, 0.93);
+  if (coatId > 0.64) autoPaint = vec3(0.24, 0.27, 0.31);
+  if (coatId > 0.78) autoPaint = vec3(0.74, 0.16, 0.20);
+  if (coatId > 0.90) autoPaint = vec3(0.18, 0.42, 0.36);
   vec3 effHull = mix(autoPaint, vHullCol, clamp(uTint, 0.0, 1.0));
+  float vL = max(uVehLight, 0.0);
 
   vec3 col;
   if (vRole < 0.5) {
-    // Role 0: Painted / brushed-alloy primary vehicle hull
     col = mix(vPartTint, effHull, 0.76) * shade + vec3(0.08) * pow(sunD, 6.0) * (1.0 - uLightK * 0.55);
   } else if (vRole < 1.5) {
-    // Role 1: Dark alloy trim, louvers, hover-pontoons & undercarriage
     col = mix(vPartTint, effHull * 0.38, 0.28) * (0.55 + 0.45 * shade);
   } else if (vRole < 2.5) {
-    // Role 2: Tinted cockpit canopy glass + warm interior instrument glint
-    col = vPartTint * (0.55 + 0.65 * skyHemi) + effHull * 0.14 * uLightK;
+    col = vPartTint * (0.55 + 0.65 * skyHemi) + effHull * 0.14 * uLightK * vL;
   } else if (vRole < 3.5) {
-    // Role 3: FRONT HEADLIGHTS (+X) — crisp warm-white / ice-xenon (untinted by hull!)
-    vec3 headRgb = vPartTint * (1.05 + uLightK * 1.15);
+    vec3 headRgb = mix(effHull * 0.35, vPartTint * (1.05 + uLightK * 1.15) * max(vL, 0.08), clamp(vL, 0.0, 1.0));
+    if (vL > 1.0) headRgb *= vL;
     float lum = dot(headRgb, vec3(0.299, 0.587, 0.114));
     col = mix(headRgb, vec3(lum), clamp(uBillMono, 0.0, 1.0));
   } else if (vRole < 4.5) {
-    // Role 4: REAR TAILLIGHTS (-X) — vivid crimson-ruby brake & thruster bar (untinted by hull!)
-    vec3 tailRgb = vPartTint * (1.05 + uLightK * 1.25);
+    vec3 tailRgb = mix(effHull * 0.25, vPartTint * (1.05 + uLightK * 1.25) * max(vL, 0.08), clamp(vL, 0.0, 1.0));
+    if (vL > 1.0) tailRgb *= vL;
     float lum = dot(tailRgb, vec3(0.299, 0.587, 0.114));
     col = mix(tailRgb, vec3(lum * 0.85), clamp(uBillMono, 0.0, 1.0));
   } else {
-    // Role 5: Illuminated taxi roof crest / hover-pad / train passenger window strip
-    vec3 accRgb = mix(vPartTint, vHullCol * 0.65 + vPartTint * 0.65, 0.35) * (0.88 + uLightK * 0.95);
+    vec3 accRgb = mix(vPartTint, vHullCol * 0.65 + vPartTint * 0.65, 0.35) * (0.22 + (0.66 + uLightK * 0.95) * vL);
     float lum = dot(accRgb, vec3(0.299, 0.587, 0.114));
     col = mix(accRgb, vec3(lum), clamp(uBillMono, 0.0, 1.0));
   }
@@ -2261,7 +2584,7 @@ uniform float uTime;
 varying float vTwinkle;
 ${GLSL_CURVE}
 void main() {
-  vTwinkle = 0.55 + 0.45 * sin(uTime * 2.6 + aPhase * 6.28318);
+  vTwinkle = 0.55 + 0.45 * sin(uTime * 2.61799388 + aPhase * 6.28318);
   vec4 wp = modelMatrix * vec4(position, 1.0);
   wp.xyz = bendWorld(wp.xyz);
   vec4 mv = viewMatrix * wp;
@@ -2273,15 +2596,17 @@ void main() {
 export const BEACON_FRAG = /* glsl */ `
 uniform vec3 uBeaconCol;
 uniform float uLightK;
+uniform float uVehLight;
 uniform float uSteady;
 varying float vTwinkle;
 void main() {
+  if (uVehLight <= 0.005) discard;
   vec2 c = gl_PointCoord - 0.5;
   float r = length(c) * 2.0;
   if (r > 1.0) discard;
   float core = pow(1.0 - r, 2.2);
   float tw = mix(vTwinkle, 1.0, uSteady);
-  gl_FragColor = vec4(uBeaconCol * (0.9 + core * 1.4), core * tw * uLightK);
+  gl_FragColor = vec4(uBeaconCol * (0.9 + core * 1.4), clamp(core * tw * uLightK * uVehLight, 0.0, 1.0));
 }
 `;
 
@@ -2307,13 +2632,15 @@ void main() {
 
 export const TRAIL_FRAG = /* glsl */ `
 uniform float uLightK;
+uniform float uVehLight;
 varying vec3 vColor;
 varying vec2 vUv;
 void main() {
+  if (uVehLight <= 0.005) discard;
   float across = 1.0 - abs(vUv.y * 2.0 - 1.0);
   float along = pow(vUv.x, 1.6);
-  float a = across * along * (0.45 + 0.55 * uLightK);
-  gl_FragColor = vec4(vColor * (0.8 + along * 0.9), a);
+  float a = across * along * (0.45 + 0.55 * uLightK) * clamp(uVehLight, 0.0, 2.0);
+  gl_FragColor = vec4(vColor * (0.8 + along * 0.9 * max(uVehLight, 0.5)), clamp(a, 0.0, 1.0));
 }
 `;
 
@@ -2327,6 +2654,7 @@ attribute vec4 aCurveB; // ix (corner/ctrl x), iz (corner/ctrl z), y2 (flat deck
 attribute vec4 aCurveC; // x2, z2, scale, mode (>0.5 = sweeping corner fillet radius, <-0.5 = straight street + optional deck switch, 0 = closed ring arc)
 attribute vec3 aColor;
 uniform float uTime;
+uniform float uTrafficSpeed;
 uniform float uHeightScale;
 varying vec3 vColor;
 varying vec3 vLocalP;
@@ -2339,10 +2667,9 @@ vec3 evalSwarmPos(float tt) {
   float px;
   float pz;
   float py;
-  float hover = sin(uTime * 1.45 + aCurveB.w * 25.0) * 0.14;
+  float hover = sin(uTime * 1.46607657 + aCurveB.w * 25.0) * 0.14;
 
   if (mode > 0.5) {
-    // Street-grid route: flat Street 1 -> wide sweeping G1 fillet turn with natural turn-deceleration -> flat Street 2!
     vec2 pStart = aCurveA.xy;
     vec2 pCorner = aCurveB.xy;
     vec2 pEnd = aCurveC.xy;
@@ -2355,7 +2682,6 @@ vec3 evalSwarmPos(float tt) {
     vec2 cExit = pCorner + (v2 / L2) * turnR;
 
     float s1 = max(1.0, L1 - turnR);
-    // Stretch parameter dwell across the turn (2.35x vs 1.57x) so vehicles smoothly decelerate into curves!
     float sTurn = max(1.0, 2.35 * turnR);
     float s2 = max(1.0, L2 - turnR);
     float arcS = clamp(tt, 0.0, 1.0) * (s1 + sTurn + s2);
@@ -2368,7 +2694,6 @@ vec3 evalSwarmPos(float tt) {
       float uTurn = (arcS - s1) / sTurn;
       float omT = 1.0 - uTurn;
       xz = omT * omT * cEnter + 2.0 * omT * uTurn * pCorner + uTurn * uTurn * cExit;
-      // Smooth Hermite S-curve steps cleanly between N-S street elevation y1 and perpendicular E-W street elevation y2!
       float hRamp = uTurn * uTurn * (3.0 - 2.0 * uTurn);
       py = mix(aCurveA.z, aCurveB.z, hRamp);
     } else {
@@ -2378,14 +2703,12 @@ vec3 evalSwarmPos(float tt) {
     px = xz.x;
     pz = xz.y;
   } else if (mode < -0.5) {
-    // Straight horizontal street run (flat when y1 == y2, or occasional smooth S-curve elevation switch between decks!)
     vec2 xz = mix(aCurveA.xy, aCurveC.xy, tt);
     px = xz.x;
     pz = xz.y;
     float rampU = smoothstep(0.28, 0.72, tt);
     py = mix(aCurveA.z, aCurveB.z, rampU);
   } else {
-    // Horizontal orbital ring arc (flat constant deck height aCurveA.z)
     float om = 1.0 - tt;
     px = om * om * aCurveA.x + 2.0 * om * tt * aCurveB.x + tt * tt * aCurveC.x;
     pz = om * om * aCurveA.y + 2.0 * om * tt * aCurveB.y + tt * tt * aCurveC.y;
@@ -2401,8 +2724,14 @@ void main() {
   float mdl = fract(aCurveB.w * 13.73);
   vModel = mdl;
 
-  float rawT = aCurveB.w + uTime * aCurveA.w;
-  float tt = fract(rawT);
+  // Non-uniform platoon & driver-tempo traffic kinematics:
+  // monotone phase warp f(raw) = raw + amp * sin(2*pi*(n*raw - waveT)) (with 2*pi*n*amp < 0.72 < 1.0 so velocity stays positive, compressing platoons at red waves & accelerating on green waves!)
+  float sp = max(uTrafficSpeed, 0.0);
+  float driverMul = 0.76 + 0.52 * fract(aCurveB.w * 29.17);
+  float rawT = aCurveB.w + uTime * aCurveA.w * sp * driverMul;
+  float platoonAmp = (aCurveA.z < 55.0) ? 0.036 : 0.018;
+  float warpedT = rawT + platoonAmp * sin(6.2831853 * (3.0 * rawT - uTime * 0.08 * max(sp, 0.25)) + aCurveA.x * 0.008);
+  float tt = fract(warpedT);
   bool isRing = abs(aCurveC.w) <= 0.5;
   float portal = isRing ? 1.0 : smoothstep(0.0, 0.045, tt) * smoothstep(1.0, 0.955, tt);
   vFade = portal;
@@ -2457,6 +2786,7 @@ void main() {
 
 export const SWARM_FRAG = /* glsl */ `
 uniform float uLightK;
+uniform float uVehLight;
 uniform float uBillMono;
 uniform float uTint;
 varying vec3 vColor;
@@ -2465,9 +2795,6 @@ varying float vFade;
 varying float vModel;
 void main() {
   if (vFade < 0.02) discard;
-  // Distinct sci-fi vehicle lighting:
-  // +X Front = twin warm-white / ice-xenon headlights
-  // -X Rear  = vivid crimson-ruby taillight bar & twin brake pods
   float nose = smoothstep(0.26, 0.48, vLocalP.x);
   float tail = smoothstep(-0.24, -0.48, vLocalP.x);
   float twinLamp = smoothstep(0.14, 0.36, abs(vLocalP.z));
@@ -2476,7 +2803,6 @@ void main() {
     ? (step(abs(vLocalP.x - 0.06), 0.14) * smoothstep(0.32, 0.48, vLocalP.y) * step(abs(vLocalP.z), 0.24))
     : 0.0;
 
-  // Natural per-vehicle paint diversity blended with look tint uTint
   float coatId = fract(vModel * 7.91 + dot(vColor, vec3(5.3, 11.7, 3.1)));
   vec3 natCar = vec3(0.68, 0.73, 0.79);
   if (coatId > 0.20) natCar = vec3(0.92, 0.68, 0.12);
@@ -2485,18 +2811,19 @@ void main() {
   if (coatId > 0.78) natCar = vec3(0.72, 0.17, 0.21);
   vec3 carTint = mix(natCar, vColor, clamp(uTint, 0.0, 1.0));
 
-  // Brushed metallic / painted hull + dark tinted cockpit glass window band
   float canopy = step(-0.18, vLocalP.x) * step(vLocalP.x, 0.24) * smoothstep(0.08, 0.32, vLocalP.y);
   vec3 hullCol = mix(vec3(0.09, 0.11, 0.15) + carTint * 0.42, vec3(0.05, 0.08, 0.13), canopy * 0.75);
 
-  vec3 headRaw = mix(vec3(1.0, 0.96, 0.82), vec3(0.84, 0.96, 1.0), step(0.65, vModel)) * (1.05 + uLightK * 1.15);
-  vec3 tailRaw = vec3(1.0, 0.10, 0.15) * (1.08 + uLightK * 1.25);
-  vec3 taxiRaw = vec3(1.0, 0.76, 0.16) * (0.95 + uLightK * 0.95);
+  float vL = max(uVehLight, 0.0);
+  vec3 headRaw = mix(vec3(1.0, 0.96, 0.82), vec3(0.84, 0.96, 1.0), step(0.65, vModel)) * (1.05 + uLightK * 1.15) * vL;
+  vec3 tailRaw = vec3(1.0, 0.10, 0.15) * (1.08 + uLightK * 1.25) * vL;
+  vec3 taxiRaw = vec3(1.0, 0.76, 0.16) * (0.95 + uLightK * 0.95) * vL;
 
   vec3 col = hullCol;
-  col = mix(col, headRaw, nose * (0.35 + 0.65 * twinLamp) * (0.55 + 0.45 * lightBandY));
-  col = mix(col, tailRaw, tail * (0.55 + 0.45 * twinLamp) * (0.65 + 0.35 * lightBandY));
-  col = mix(col, taxiRaw, cabSign * 0.88);
+  float lampGate = clamp(vL, 0.0, 1.0);
+  col = mix(col, headRaw, nose * (0.35 + 0.65 * twinLamp) * (0.55 + 0.45 * lightBandY) * lampGate);
+  col = mix(col, tailRaw, tail * (0.55 + 0.45 * twinLamp) * (0.65 + 0.35 * lightBandY) * lampGate);
+  col = mix(col, taxiRaw, cabSign * 0.88 * lampGate);
 
   float lum = dot(col, vec3(0.299, 0.587, 0.114));
   col = mix(col, vec3(lum), clamp(uBillMono, 0.0, 1.0));
@@ -2533,11 +2860,13 @@ varying float vW;
 ${GLSL_NOISE}
 
 void main() {
+  if (uBeamK <= 0.002) discard;
   float core = sin(3.14159 * clamp(vW, 0.0, 1.0));
   float along = pow(max(1.0 - vT, 0.0), 1.35);
-  float wobble = 0.72 + 0.28 * vnoise(vec2(vT * 5.0, uTime * 0.18));
+  vec2 orbB = loopOrbit(uTime, 1.8, 3.0);
+  float wobble = 0.72 + 0.28 * vnoise(vec2(vT * 5.0 + orbB.x, orbB.y));
   float a = core * along * wobble * uBeamK * max(uLightK, 0.12);
-  gl_FragColor = vec4(uBeamCol * (0.6 + 0.8 * along), a);
+  gl_FragColor = vec4(uBeamCol * (0.6 + 0.8 * along), clamp(a, 0.0, 0.95));
 }
 `;
 
@@ -2562,12 +2891,14 @@ export const POOL_FRAG = /* glsl */ `
 uniform vec3 uPoolCol;
 uniform float uPoolK;
 uniform float uLightK;
+uniform float uVehLight;
 varying vec2 vUv;
 void main() {
+  if (uVehLight <= 0.005) discard;
   float r = length(vUv - 0.5) * 2.0;
   float a = 1.0 - smoothstep(0.15, 1.0, r);
-  a *= a * uPoolK * max(uLightK, 0.15);
-  gl_FragColor = vec4(uPoolCol * (0.5 + 0.5 * a), a);
+  a *= a * uPoolK * max(uLightK, 0.15) * clamp(uVehLight, 0.0, 2.2);
+  gl_FragColor = vec4(uPoolCol * (0.5 + 0.5 * a), clamp(a, 0.0, 0.95));
 }
 `;
 
@@ -2602,6 +2933,7 @@ uniform float uTime;
 uniform float uSat;
 uniform vec3 uPoolCol;
 uniform float uLightK;
+uniform vec4 uShipWakes[8];
 varying vec3 vFlat;
 varying vec3 vWorld;
 varying float vAnalytical;
@@ -2627,47 +2959,114 @@ void main() {
   vec3 vdir = normalize(vWorld - cameraPosition);
   float ca = cos(uCoastAngle);
   float sa = sin(uCoastAngle);
-  vec2 shoreDir = vec2(-ca, -sa); // inward from open sea toward shore!
-  vec2 p = xz * 0.012;
-  // Wind-driven swells drift shoreward (+shoreDir * uTime)
-  float w1 = fbm(p - shoreDir * (uTime * 0.065) + vec2(uTime * 0.018, -uTime * 0.014));
-  float w2 = fbm(p * 2.7 - shoreDir * (uTime * 0.095) - vec2(uTime * 0.024, uTime * 0.031));
-  float wave = clamp(w1 * 0.68 + w2 * 0.48, 0.0, 1.0);
-  vec3 col = mix(uWaterDeep, uWaterShallow, wave * 0.65);
+  vec2 shoreDir = vec2(-ca, -sa); // inward from open sea toward shore
+  vec2 longDir = vec2(-sa, ca);
 
-  // Shallow turquoise shoal + shoreward-propagating breaking surf foam along coastal & lake shores!
+  // Stylized Multi-Train Directional Trochoidal / Gerstner Swells (ZERO blotchy large-scale fractal clouds!)
+  // Integer-harmonic phase speeds over PC_LOOP = 120s guarantee seamless zero-jump wave looping!
+  float ph1 = loopPhase(uTime, 28.0) * 6.2831853;
+  float ph2 = loopPhase(uTime, 39.0) * 6.2831853;
+  float ph3 = loopPhase(uTime, 53.0) * 6.2831853;
+  float ph4 = loopPhase(uTime, 74.0) * 6.2831853;
+
+  vec2 d1 = normalize(shoreDir + longDir * 0.24);
+  vec2 d2 = normalize(shoreDir - longDir * 0.42);
+  vec2 d3 = normalize(shoreDir * 0.55 + longDir * 0.82);
+  vec2 d4 = normalize(-shoreDir * 0.25 + longDir * 0.96);
+
+  // Gently curve wave crests with local fine ripple phase so swells feel fluid rather than rigid rulers
+  float bendW = (vnoise(xz * 0.0065) - 0.5) * 1.8;
+  float th1 = dot(xz, d1) * 0.19 + bendW - ph1;
+  float th2 = dot(xz, d2) * 0.31 - bendW * 0.8 - ph2;
+  float th3 = dot(xz, d3) * 0.58 + ph3;
+  float th4 = dot(xz, d4) * 1.12 - ph4;
+
+  // Sharpened trochoidal crests: pow(0.5 + 0.5 * sin(th), 1.8) gives broad troughs and crisp stylized wave ridges!
+  float s1 = sin(th1); float c1 = cos(th1);
+  float s2 = sin(th2); float c2 = cos(th2);
+  float s3 = sin(th3); float c3 = cos(th3);
+  float s4 = sin(th4); float c4 = cos(th4);
+
+  float crest1 = pow(0.5 + 0.5 * s1, 1.85);
+  float crest2 = pow(0.5 + 0.5 * s2, 1.95);
+  float crest3 = pow(0.5 + 0.5 * s3, 2.10);
+  float crest4 = 0.5 + 0.5 * s4;
+  float waveH = crest1 * 0.42 + crest2 * 0.30 + crest3 * 0.18 + crest4 * 0.10;
+
+  vec2 gradH = d1 * (c1 * 0.14) + d2 * (c2 * 0.12) + d3 * (c3 * 0.09) + d4 * (c4 * 0.06);
+
+  // Stylized water body palette: deep sapphire/indigo troughs -> luminous turquoise crests + subtle crest whitecaps
+  vec3 col = mix(uWaterDeep, uWaterShallow * 1.12, smoothstep(0.18, 0.78, waveH));
+  float openWhitecap = smoothstep(0.76, 0.94, waveH) * 0.28;
+  vec3 foamTint = mix(vec3(0.88, 0.95, 1.0), uSkySunCol, 0.28);
+  col = mix(col, foamTint, openWhitecap);
+
+  // Analytical V-Shaped Kelvin Ship Wakes & Turbulent Stern Prop-Wash behind Harbor Vessels!
+  float wakeFoam = 0.0;
+  for (int i = 0; i < 8; i++) {
+    vec4 wk = uShipWakes[i];
+    float wLen2 = dot(wk.zw, wk.zw);
+    if (wLen2 > 0.05) {
+      vec2 fwd = wk.zw / sqrt(wLen2);
+      vec2 side = vec2(-fwd.y, fwd.x);
+      vec2 rel = xz - wk.xy;
+      float behind = -dot(rel, fwd); // metres behind bow
+      float lat = abs(dot(rel, side));
+      if (behind > -8.0 && behind < 260.0 && lat < 95.0) {
+        float trailFade = smoothstep(-6.0, 8.0, behind) * (1.0 - smoothstep(95.0, 255.0, behind));
+        // Classic ~19.5-deg Kelvin V-arm envelope + feathered wake harmonics
+        float vArm = behind * 0.35 + 4.5;
+        float armDist = abs(lat - vArm);
+        float kelvinArm = exp(-armDist * armDist / (12.0 + behind * 0.22)) * (0.55 + 0.45 * sin(armDist * 0.85 - ph2 * 2.0));
+        // Stern center prop-wash foam ribbon
+        float propWash = exp(-lat * lat / (9.0 + behind * 0.12)) * (1.0 - smoothstep(12.0, 145.0, behind))
+          * (0.62 + 0.38 * vnoise(xz * 0.22 + fwd * ph3));
+        float wkTotal = clamp(kelvinArm * 0.82 + propWash * 0.95, 0.0, 1.2) * trailFade;
+        wakeFoam = max(wakeFoam, wkTotal);
+        gradH += side * sign(dot(rel, side)) * kelvinArm * trailFade * 0.18;
+      }
+    }
+  }
+  col = mix(col, foamTint, clamp(wakeFoam * 0.78, 0.0, 0.88));
+
+  // Shallow turquoise shoal, underwater stylized caustic web + shoreward-propagating breaking surf foam!
   if (vAnalytical > 0.5 && uWaterMode > 0.5 && uWaterMode < 3.5) {
     float seaDist = max(0.0, -cDist);
-    float shoal = 1.0 - smoothstep(0.0, 155.0, seaDist);
-    col = mix(col, uWaterShallow * 1.26, shoal * 0.54);
-    // + uTime advances phase inward toward seaDist = 0 (waves roll ONTO shore, never backward out to sea!)
+    float shoal = 1.0 - smoothstep(0.0, 165.0, seaDist);
+    // Stylized intersecting caustic ribbons over shallow sandbars
+    float caustA = abs(sin(xz.x * 0.16 + xz.y * 0.11 + s1 * 1.6 - ph1));
+    float caustB = abs(sin(xz.x * 0.12 - xz.y * 0.17 + s2 * 1.6 + ph2));
+    float caustic = pow(1.0 - min(caustA, caustB), 4.0) * shoal;
+    col = mix(col, uWaterShallow * 1.28 + foamTint * caustic * 0.26, shoal * 0.58);
+
+    // Preserved shoreward surf-breaking band (+ uTime advances phase shoreward, integer-periodic over PC_LOOP = 120.0!)
     float shoalK = pow(seaDist, 0.86);
-    float surfWave = sin(shoalK * 0.23 + uTime * 2.15 + w1 * 3.8);
-    float surfWave2 = sin(shoalK * 0.42 + uTime * 3.05 - w2 * 3.1);
+    float surfWave = sin(shoalK * 0.23 + uTime * (6.2831853 * 36.0 / PC_LOOP) + s1 * 1.8);
+    float surfWave2 = sin(shoalK * 0.42 + ph4 * 1.0 - s2 * 1.5);
     float surfBand = (1.0 - smoothstep(4.0, 66.0, seaDist)) * smoothstep(0.0, 2.2, seaDist);
     float surfFoam = surfBand * smoothstep(0.40, 0.93, surfWave * 0.72 + surfWave2 * 0.28);
-    float shoreLip = (1.0 - smoothstep(0.0, 4.8, seaDist)) * (0.65 + 0.35 * sin(uTime * 2.15 + w1 * 5.0));
-    vec3 foamCol = mix(vec3(0.86, 0.93, 0.99), uSkySunCol, 0.32);
-    col = mix(col, foamCol, clamp(surfFoam * 0.62 + shoreLip * 0.52, 0.0, 0.86));
+    float shoreLip = (1.0 - smoothstep(0.0, 4.8, seaDist)) * (0.65 + 0.35 * sin(ph3 + s1 * 2.5));
+    col = mix(col, foamTint, clamp(surfFoam * 0.64 + shoreLip * 0.54, 0.0, 0.88));
   } else {
-    // Polygon harbors, winding rivers & park lagoons: gentle current ripples without ocean surf bands
-    float rip = smoothstep(0.62, 0.92, wave) * 0.18;
-    col += uWaterShallow * rip;
+    // Polygon harbors, meandering rivers & multi-lobed ponds: crisp stylized current ribbons & caustics
+    float caustR = pow(1.0 - min(abs(s2), abs(s3)), 3.5) * 0.22;
+    col += (uWaterShallow * 0.8 + foamTint * 0.25) * caustR;
   }
 
   vec3 sd = normalize(uSunDir);
-  vec3 waveN = bendNormal(xz, normalize(vec3((w1 - w2) * 2.0, 1.0, (w2 - w1) * 2.0)));
-  float facing = pow(max(dot(waveN, sd), 0.0), 24.0);
-  float glint = pow(smoothstep(0.55, 0.95, w2), 5.0);
-  col += uSkySunCol * (facing * 1.3 + glint * 0.55);
+  vec3 waveN = bendNormal(xz, normalize(vec3(-gradH.x * 2.4, 1.0, -gradH.y * 2.4)));
+  vec3 halfV = normalize(sd - vdir);
+  float spec = pow(max(dot(waveN, halfV), 0.0), 42.0);
+  float crestGlint = pow(smoothstep(0.58, 0.94, waveH), 3.5) * max(sd.y + 0.25, 0.15);
+  col += uSkySunCol * (spec * 1.45 + crestGlint * 0.42);
 
   // Subtle waterfront city-light shimmer near the urban core at night
   float nearCity = 1.0 - smoothstep(uCitySpan * 0.5, uCitySpan * 2.1, length(xz));
-  col += uPoolCol * nearCity * wave * max(uLightK, 0.0) * 0.22;
+  col += uPoolCol * nearCity * (0.35 + 0.65 * waveH) * max(uLightK, 0.0) * 0.24;
 
   vec3 upN = bendNormal(xz, vec3(0.0, 1.0, 0.0));
-  float fres = pow(1.0 - max(dot(-vdir, upN), 0.0), 3.0);
-  col = mix(col, uSunFogCol, fres * 0.55);
+  float fres = pow(1.0 - max(dot(-vdir, upN), 0.0), 3.2);
+  col = mix(col, uSunFogCol, fres * 0.50);
 
   float dist = length(vWorld - cameraPosition);
   vec3 fogCol = mix(uFogCol, uSunFogCol, pow(max(dot(vdir, sd), 0.0), 6.0) * uHazeSun);
@@ -2702,26 +3101,27 @@ uniform vec3 uLinkColB;
 uniform float uTreeCyber;
 uniform float uTime;
 uniform float uLightK;
+uniform float uVehLight;
 varying vec2 vUv;
 varying float vSeed;
+${GLSL_NOISE}
 void main() {
+  if (uVehLight <= 0.005) discard;
   float core = sin(3.14159 * clamp(vUv.y, 0.0, 1.0));
-  float brightness = max(uLightK, 0.28);
+  float brightness = max(uLightK, 0.28) * clamp(uVehLight, 0.0, 2.2);
   vec3 col;
   float alpha;
   if (uTreeCyber < 0.5) {
-    // Organic park mode: warm festoon string-light bulbs along a subtle cable
     float bulbs = pow(0.5 + 0.5 * cos(vUv.x * 44.0 + vSeed * 6.28), 8.0);
-    float twinkle = 0.85 + 0.15 * sin(uTime * 2.4 + vUv.x * 19.0 + vSeed * 40.0);
+    float twinkle = 0.85 + 0.15 * loopSin(uTime, 0.38, vUv.x * 19.0 + vSeed * 40.0);
     col = mix(uLinkColA * 0.45, uLinkColB * 1.45, bulbs) * twinkle * (0.55 + 0.75 * brightness);
-    alpha = core * (0.28 + 0.72 * bulbs);
+    alpha = core * (0.28 + 0.72 * bulbs) * clamp(uVehLight, 0.0, 1.4);
   } else {
-    // Cyber / Artificial mode: bioluminescent fiber-optic filament with traveling neural pulses
-    float pulse1 = pow(0.5 + 0.5 * sin(vUv.x * 12.56 - uTime * 2.8 + vSeed * 31.4), 5.0);
-    float pulse2 = pow(0.5 + 0.5 * sin(vUv.x * 18.84 + uTime * 1.9 - vSeed * 17.1), 6.0);
+    float pulse1 = pow(0.5 + 0.5 * loopSin(uTime, -0.45, vUv.x * 12.56 + vSeed * 31.4), 5.0);
+    float pulse2 = pow(0.5 + 0.5 * loopSin(uTime, 0.30, vUv.x * 18.84 - vSeed * 17.1), 6.0);
     float energy = clamp(0.32 + pulse1 * 0.85 + pulse2 * 0.55, 0.0, 1.5);
     col = mix(uLinkColA, uLinkColB, clamp(pulse1 + pulse2 * 0.5, 0.0, 1.0)) * energy * (0.65 + 0.85 * brightness);
-    alpha = core * clamp(0.38 + (pulse1 + pulse2) * 0.55, 0.0, 0.96);
+    alpha = core * clamp(0.38 + (pulse1 + pulse2) * 0.55, 0.0, 0.96) * clamp(uVehLight, 0.0, 1.4);
   }
   gl_FragColor = vec4(col, alpha);
 }
@@ -2775,60 +3175,47 @@ void main() {
   vec3 darkBg = mix(uBillB, uBillA, 0.22) * 0.08;
   vec3 col = darkBg;
 
-  if (layoutId < 0.18) {
-    // 1. Classic Shopfront / Rooftop Wordmark: Bold Linear-A/B + Synth Syllabogram Headline + scrolling sub-ticker
-    float heroLine = evalGlyphLine(vec2(vUv.x * 0.90 + 0.05, clamp((vUv.y - 0.30) / 0.56, 0.0, 1.0)), 6.0, floor(animT * 0.12) * 0.0, vSeed * 19.3, uGlyphStyle, animT) * step(0.30, vUv.y) * step(vUv.y, 0.86);
-    float subTick = evalGlyphLine(vec2(vUv.x, clamp((vUv.y - 0.08) / 0.16, 0.0, 1.0)), 13.0, animT * 0.95, vSeed * 41.1, uGlyphStyle, animT) * step(0.08, vUv.y) * step(vUv.y, 0.24);
+  if (layoutId < 0.56) {
+    // Simulated Diverse Commercial Advertisements (8 graphic product/brand archetypes:
+    // Synth-Beverage bottle + bubbles, Cyber-Coupe showroom, Ringed Off-World Travel,
+    // Fashion Visor Portrait, Steaming Noodle Bowl, Market Candlesticks, Club Equalizer, Chrono Dial)
+    vec4 simAd = evalSimulatedAd(vUv, vSeed * 31.7, uGlyphStyle, animT);
+    float palShift = fract(vSeed * 7.91);
+    vec3 adAccentA = mix(uBillA, vec3(1.0, 0.66, 0.16), step(0.35, palShift) * 0.48 * (1.0 - uBillMono));
+    if (palShift > 0.68) adAccentA = mix(uBillA, vec3(0.32, 0.96, 0.58), 0.45 * (1.0 - uBillMono));
+    vec3 adAccentB = mix(uBillB, vec3(0.98, 0.28, 0.58), (1.0 - step(0.5, palShift)) * 0.42 * (1.0 - uBillMono));
+    vec3 fgCol = mix(adAccentA, adAccentB, clamp(simAd.y, 0.0, 1.0)) + vec3(0.98, 0.95, 0.86) * simAd.z * 0.46;
+    vec3 bgGrad = mix(darkBg, mix(adAccentB, adAccentA, vUv.y) * 0.16, 0.65);
+    col = mix(bgGrad, fgCol, clamp(simAd.x, 0.0, 1.0));
+  } else if (layoutId < 0.72) {
+    // Classic Shopfront / Rooftop Wordmark: Bold Linear-A/B + Synth Syllabogram Headline + looped ticker
+    float heroLine = evalGlyphLine(vec2(vUv.x * 0.90 + 0.05, clamp((vUv.y - 0.30) / 0.56, 0.0, 1.0)), 6.0, 0.0, vSeed * 19.3, uGlyphStyle, animT) * step(0.30, vUv.y) * step(vUv.y, 0.86);
+    float subTick = evalGlyphLine(vec2(vUv.x, clamp((vUv.y - 0.08) / 0.16, 0.0, 1.0)), 13.0, loopPhase(animT, 9.0) * 13.0, vSeed * 41.1, uGlyphStyle, animT) * step(0.08, vUv.y) * step(vUv.y, 0.24);
     float rule = smoothstep(0.015, 0.0, abs(vUv.y - 0.27)) * step(0.06, vUv.x) * step(vUv.x, 0.94);
     col = mix(darkBg, uBillA * 1.12, heroLine);
     col = mix(col, uBillB, clamp(subTick * 0.92 + rule * 0.65, 0.0, 1.0));
-  } else if (layoutId < 0.34) {
-    // 2. Vertical Skyscraper Blade: Twin columns of streaming Minoan-Synth sigils
+  } else if (layoutId < 0.86) {
+    // Vertical Skyscraper Blade: Twin columns of streaming Minoan-Synth sigils (looped!)
     float cIdx = floor(vUv.x * 2.0);
-    vec2 cell = vec2(fract(vUv.x * 2.0) * 0.84 + 0.08, fract(vUv.y * 6.0 - animT * (0.24 - 0.48 * cIdx)));
-    float rowIdx = floor(vUv.y * 6.0 - animT * (0.24 - 0.48 * cIdx));
+    float vFlow = loopPhase(animT, 5.0) * 6.0 * (1.0 - 2.0 * cIdx);
+    vec2 cell = vec2(fract(vUv.x * 2.0) * 0.84 + 0.08, fract(vUv.y * 6.0 - vFlow));
+    float rowIdx = mod(floor(vUv.y * 6.0 - vFlow), 6.0);
     float chS = hash12(vec2(cIdx * 7.1 + vSeed * 31.0, rowIdx * 1.9));
     float g = evalSynthGlyph(cell, chS, uGlyphStyle, animT, 0.060) * step(0.16, chS);
     float divider = smoothstep(0.018, 0.0, abs(vUv.x - 0.5)) * 0.45;
     col = mix(darkBg, mix(uBillA, uBillB, cIdx), g * 0.96);
     col += mix(uBillA, uBillB, 0.5) * divider;
-  } else if (layoutId < 0.50) {
-    // 3. Cyber-Sun Horizon Emblem + Linear-B Calligraphic Overlays
-    vec2 dc = (vUv - vec2(0.34, 0.55)) * vec2(1.45, 1.0);
-    float sunDisc = (1.0 - smoothstep(0.22, 0.25, length(dc))) * step(0.22, fract(vUv.y * 11.0 - animT * 0.25));
-    float rightScript = evalGlyphLine(vec2(clamp((vUv.x - 0.52) / 0.42, 0.0, 1.0), clamp((vUv.y - 0.42) / 0.38, 0.0, 1.0)), 4.0, 0.0, vSeed * 23.0, uGlyphStyle, animT) * step(0.52, vUv.x) * step(0.42, vUv.y) * step(vUv.y, 0.80);
-    float botScript = evalGlyphLine(vec2(vUv.x, clamp((vUv.y - 0.10) / 0.18, 0.0, 1.0)), 11.0, -animT * 0.7, vSeed * 11.0, uGlyphStyle, animT) * step(0.10, vUv.y) * step(vUv.y, 0.28);
-    col = mix(darkBg, mix(uBillB, uBillA, clamp(vUv.y * 1.2, 0.0, 1.0)), sunDisc);
-    col = mix(col, uBillA * 1.08, rightScript);
-    col = mix(col, uBillB, botScript * 0.88);
-  } else if (layoutId < 0.68) {
-    // 4. Diagonal Kinetic Slash + Giant Morphing Hero Crest + Side Glyph Column
-    float sweep = fract(animT * 0.16 + vSeed);
-    float slash = smoothstep(0.09, 0.01, abs((vUv.x - 0.36) * 0.85 + (vUv.y - 0.5) * 0.55 - (sweep - 0.5) * 0.18));
-    float crest = evalSynthGlyph(vec2(clamp((vUv.x - 0.10) / 0.44, 0.0, 1.0), clamp((vUv.y - 0.18) / 0.64, 0.0, 1.0)), vSeed * 7.7, uGlyphStyle, animT, 0.050) * step(0.10, vUv.x) * step(vUv.x, 0.54);
-    float vCol = evalSynthGlyph(vec2(clamp((vUv.x - 0.68) / 0.22, 0.0, 1.0), fract(vUv.y * 5.0 - animT * 0.35)), hash12(vec2(floor(vUv.y * 5.0 - animT * 0.35), vSeed * 29.0)), uGlyphStyle, animT, 0.062) * step(0.68, vUv.x) * step(vUv.x, 0.90);
-    col = mix(darkBg, uBillB * 0.65, slash * 0.75);
-    col = mix(col, uBillA * 1.15, crest);
-    col = mix(col, uBillB * 1.08, vCol);
-  } else if (layoutId < 0.84) {
-    // 5. Harmonic Telemetry Ribbon + Dual Scrolling Linear-Synth Tickers
-    float wY = 0.56 + 0.18 * sin(vUv.x * 6.283 + animT * (1.1 + vSeed) + vSeed * 12.0);
-    float ribbon = smoothstep(0.075, 0.01, abs(vUv.y - wY));
-    float topLine = evalGlyphLine(vec2(vUv.x, clamp((vUv.y - 0.78) / 0.15, 0.0, 1.0)), 10.0, -animT * 0.6, vSeed * 13.0, uGlyphStyle, animT) * step(0.78, vUv.y) * step(vUv.y, 0.93);
-    float botLine = evalGlyphLine(vec2(vUv.x, clamp((vUv.y - 0.08) / 0.16, 0.0, 1.0)), 12.0, animT * 0.85, vSeed * 37.0, uGlyphStyle, animT) * step(0.08, vUv.y) * step(vUv.y, 0.24);
-    col = mix(darkBg, uBillB, ribbon * 0.92);
-    col = mix(col, uBillA, clamp(topLine + botLine, 0.0, 1.0));
   } else {
-    // 6. Full-Matrix Ancient-Futuristic Tablet: 3-row living Linear-A/B + Synth Proclamation
+    // Full-Matrix Ancient-Futuristic Tablet: 3-row living Linear-A/B + Synth Proclamation
     float row = floor(clamp((vUv.y - 0.10) / 0.80, 0.0, 0.999) * 3.0);
     float rowY = fract(clamp((vUv.y - 0.10) / 0.80, 0.0, 0.999) * 3.0);
     float dirSgn = (mod(row, 2.0) < 0.5) ? 1.0 : -1.0;
-    float tablet = evalGlyphLine(vec2(vUv.x * 0.90 + 0.05, rowY), 7.0 + row, animT * 0.32 * dirSgn, vSeed * 17.0 + row * 5.3, uGlyphStyle, animT) * step(0.10, vUv.y) * step(vUv.y, 0.90);
+    float nGl = 7.0 + row;
+    float tablet = evalGlyphLine(vec2(vUv.x * 0.90 + 0.05, rowY), nGl, loopPhase(animT, 4.0) * nGl * dirSgn, vSeed * 17.0 + row * 5.3, uGlyphStyle, animT) * step(0.10, vUv.y) * step(vUv.y, 0.90);
     vec3 rowTint = mix(uBillA, uBillB, row * 0.45);
     col = mix(darkBg, rowTint * 1.1, tablet);
   }
 
-  // Thin inner neon trim line
   float innerRim = smoothstep(0.022, 0.0, abs(max(abs(vUv.x - 0.5), abs(vUv.y - 0.5)) - 0.455));
   col += mix(uBillA, uBillB, 0.5) * innerRim * 0.35;
 
@@ -2837,8 +3224,8 @@ void main() {
   col = mix(col, mono, clamp(uBillMono, 0.0, 1.0));
   col = saturate3(col, uSat * (1.0 - 0.85 * clamp(uBillMono, 0.0, 1.0)));
 
-  col *= 0.88 + 0.12 * sin(vUv.y * 85.0 + animT * 2.5);
-  float k = clamp(uBillK * max(uLightK, 0.25) * min(uSignAmt, 1.65), 0.0, 1.45) * (0.70 + 0.16 * sin(animT * 1.3 + vSeed * 20.0));
+  col *= 0.88 + 0.12 * loopSin(animT, 0.40, vUv.y * 85.0);
+  float k = clamp(uBillK * max(uLightK, 0.25) * min(uSignAmt, 1.65), 0.0, 1.45) * (0.72 + 0.14 * loopSin(animT, 0.20, vSeed * 20.0));
   gl_FragColor = vec4(col * (0.28 + k * 0.74) * bezel, 1.0);
 }
 `;
@@ -2888,11 +3275,17 @@ uniform float uBoxSpan;
 varying float vTwinkle;
 void main() {
   vec3 p = position;
-  float t = uTime * (0.35 + aPhase * 0.45);
-  p.x = mod(p.x + aDrift.x * uTime * 5.5 + sin(t + aPhase * 9.0) * 14.0 + uBoxSpan * 0.5, uBoxSpan) - uBoxSpan * 0.5;
-  p.z = mod(p.z + aDrift.z * uTime * 5.5 + cos(t * 0.83 + aPhase * 7.0) * 14.0 + uBoxSpan * 0.5, uBoxSpan) - uBoxSpan * 0.5;
-  p.y = mod(p.y + aDrift.y * uTime * 2.6 + sin(t * 0.61 + aPhase * 13.0) * 7.5 + 180.0, 360.0) - 140.0;
-  vTwinkle = 0.45 + 0.55 * sin(uTime * (0.7 + aPhase * 2.6) + aPhase * 80.0);
+  float omega = 6.2831853 / 120.0;
+  float hOrbit = max(6.0, floor((0.35 + aPhase * 0.45) / omega + 0.5));
+  float t = uTime * omega * hOrbit;
+  float dxRate = floor(aDrift.x * 5.5 * 120.0 / max(uBoxSpan, 1.0) + 0.5) * (uBoxSpan / 120.0);
+  float dzRate = floor(aDrift.z * 5.5 * 120.0 / max(uBoxSpan, 1.0) + 0.5) * (uBoxSpan / 120.0);
+  float dyRate = floor(aDrift.y * 2.6 * 120.0 / 360.0 + 0.5) * (360.0 / 120.0);
+  p.x = mod(p.x + dxRate * uTime + sin(t + aPhase * 9.0) * 14.0 + uBoxSpan * 0.5, uBoxSpan) - uBoxSpan * 0.5;
+  p.z = mod(p.z + dzRate * uTime + cos(uTime * omega * max(5.0, floor(hOrbit * 0.83 + 0.5)) + aPhase * 7.0) * 14.0 + uBoxSpan * 0.5, uBoxSpan) - uBoxSpan * 0.5;
+  p.y = mod(p.y + dyRate * uTime + sin(uTime * omega * max(4.0, floor(hOrbit * 0.61 + 0.5)) + aPhase * 13.0) * 7.5 + 180.0, 360.0) - 140.0;
+  float hTwink = max(12.0, floor((0.7 + aPhase * 2.6) / omega + 0.5));
+  vTwinkle = 0.45 + 0.55 * sin(uTime * omega * hTwink + aPhase * 80.0);
   vec4 mv = modelViewMatrix * vec4(p, 1.0);
   gl_PointSize = clamp(aSize * (340.0 / max(-mv.z, 1.0)), 1.2, 11.0);
   gl_Position = projectionMatrix * mv;
@@ -2954,22 +3347,32 @@ void main() {
   float animT = uTime * max(uSignAnim, 0.0);
   vec2 cUv = vUv - 0.5;
   float r = length(cUv * vec2(1.35, 1.0));
-  // Crisp wireframe orbital rings + floating Linear-Synth holographic glyphs!
-  float rings = smoothstep(0.022, 0.0, abs(fract(r * 4.0 - animT * 0.24 + vSeed * 4.0) - 0.5)) * smoothstep(0.52, 0.12, r);
-  float centerSigil = evalSynthGlyph(clamp((vUv - vec2(0.32, 0.28)) / vec2(0.36, 0.44), 0.0, 1.0), vSeed * 9.3, uGlyphStyle, animT, 0.055)
-    * step(0.32, vUv.x) * step(vUv.x, 0.68) * step(0.28, vUv.y) * step(vUv.y, 0.72);
-  float scrollArc = evalGlyphLine(vec2(vUv.x, clamp((vUv.y - 0.12) / 0.16, 0.0, 1.0)), 10.0, animT * 0.55, vSeed * 17.0, uGlyphStyle, animT)
-    * step(0.12, vUv.y) * step(vUv.y, 0.28);
-  float motif = clamp(rings * 0.85 + centerSigil * 0.95 + scrollArc * 0.85, 0.0, 1.0);
+  float holoMode = fract(vSeed * 11.73);
+  float motif = 0.0;
+  float colorMix = 0.5;
+  if (holoMode < 0.48) {
+    vec4 simAd = evalSimulatedAd(vUv, vSeed * 23.1, uGlyphStyle, animT);
+    motif = clamp(simAd.x, 0.0, 1.0);
+    colorMix = clamp(simAd.y + simAd.z * 0.35, 0.0, 1.0);
+  } else {
+    float rFlow = loopPhase(animT, 29.0);
+    float rings = smoothstep(0.022, 0.0, abs(fract(r * 4.0 - rFlow + vSeed * 4.0) - 0.5)) * smoothstep(0.52, 0.12, r);
+    float centerSigil = evalSynthGlyph(clamp((vUv - vec2(0.32, 0.28)) / vec2(0.36, 0.44), 0.0, 1.0), vSeed * 9.3, uGlyphStyle, animT, 0.055)
+      * step(0.32, vUv.x) * step(vUv.x, 0.68) * step(0.28, vUv.y) * step(vUv.y, 0.72);
+    float scrollArc = evalGlyphLine(vec2(vUv.x, clamp((vUv.y - 0.12) / 0.16, 0.0, 1.0)), 10.0, loopPhase(animT, 7.0) * 10.0, vSeed * 17.0, uGlyphStyle, animT)
+      * step(0.12, vUv.y) * step(vUv.y, 0.28);
+    motif = clamp(rings * 0.85 + centerSigil * 0.95 + scrollArc * 0.85, 0.0, 1.0);
+    colorMix = clamp(rings * 0.55 + centerSigil * 0.65 + fract(vSeed * 5.3) * 0.35, 0.0, 1.0);
+  }
   if (motif < 0.03) discard;
 
-  vec3 col = mix(uBillB, uBillA, clamp(rings * 0.55 + centerSigil * 0.65 + fract(vSeed * 5.3) * 0.35, 0.0, 1.0));
+  vec3 col = mix(uBillB, uBillA, colorMix);
   float lum = dot(col, vec3(0.299, 0.587, 0.114));
   vec3 mono = mix(uBillB * 0.4, uBillA * 1.05, clamp(lum, 0.0, 1.2));
   col = mix(col, mono, clamp(uBillMono, 0.0, 1.0));
   col = saturate3(col, uSat * (1.0 - 0.85 * clamp(uBillMono, 0.0, 1.0)));
 
-  float scan = 0.68 + 0.32 * sin(vUv.y * 160.0 + animT * 8.0);
+  float scan = 0.68 + 0.32 * loopSin(animT, 1.25, vUv.y * 160.0);
   float edge = smoothstep(0.0, 0.08, vUv.x) * smoothstep(1.0, 0.92, vUv.x)
              * smoothstep(0.0, 0.14, vUv.y) * smoothstep(1.0, 0.86, vUv.y);
   float a = motif * scan * edge * clamp(uBillK * min(uSignAmt, 1.5), 0.0, 1.4) * max(uLightK, 0.3) * 0.38;
