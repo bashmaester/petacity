@@ -23,7 +23,7 @@ npm install
 npm test
 ```
 
-The suite (`69` tests across 4 files) validates:
+The suite (`83` tests across 4 files) validates:
 - `tests/city.test.mjs` — deterministic PRNG/noise, district layout, strict water-body exclusion (`isPointInWater` across all 4 wet shoreline/river/lake modes), feature amount dials (`0 = completely off` up to cranked: `waterAmount`, `shoreDist`, `vegCover`, `transitAmt`, `maritimeAmt`, `airAmt`, `signAmt`, `megaWrap`, `suburbReach`, `terrainRelief`), landmarks (`arch`, `spire`, `dome`, `mast`, `crown`, `needle`, `pyramid`, `cantilever`, `ziggurat`), public venues including the `2×2` superblock `'Grand Conservatory Park'` Showcase Park, 5 macro-water/shoreline modes (`WATER_MODE_NAMES`), River Bridges (`cable-stayed`, `tied-arch`, `suspension`), Deep-Water Harbor (`piers`, `cranes`, `cruise` liners, `container` ships, tugs/yachts), Orbital Air/Spaceport (`runway`, `controlTower`, `launchPad`, `hangars`, `vtolPads`), 3-line Cross-City Public Transit Network (`lines` + elevated `stations`), 5 distant 3D terrain modes (`TERRAIN_MODE_NAMES`), shared JS/GLSL curvilinear road-web trapezoid land subdivision (`evalRoadWeb` & `roadWebToWorld`), organic arterial ribbon growth, and grade-separated horizontal street-grid traffic lanes.
 - `tests/scene.test.mjs` — shader-to-uniform bidirectional parity, instanced attribute contracts, ESSL 3.00 (`#version 300 es`) reserved-keyword safety across all `40` GLSL shaders, `9` pluggable visual looks including `'realistic'` (`Unreal Cinema`) with controllable `uTint` (`0..1`) per-instance building & vehicle variation, non-flooding analytical water (`vAnalytical > 0.5 && cDist > 0.0` land discard + shoreward `+ uTime` surf), 4D volumetric clouds (`fbm4Cloud`, `uCloudSeed`, `uCloudEvol`, `uCloudLac`, `0 = crystal-clear`), animated synthetic Linear A/B + Cyber-Synth glyph language (`GLSL_GLYPHS` `evalSynthGlyph` / `evalGlyphLine` across billboards, holograms & mega-facade tower wraps), `applyLook` / `applyTime` 24-hour celestial orbits & circadian windows, full 8-phase lunar cycle (`0..2`), multi-branching Real Botanical & Artificial Cyber-Dendritic mega-trees (`vegScale` up to `4.5x`), `buildTransitInfrastructure`, `buildBridges`, `buildHarbor`, `buildSpaceport`, `FlyControls` smooth anticipatory steering, 6 artistic/X-ray post styles, 8 sci-fi vehicle silhouettes with sparse default train share & `setTransitAmt(0)`, sweeping blimp & skyscraper searchlights, `0..20,000` vehicles, spherical `bendWorld` curvature, exact-state tokens, and clean render/path capture.
 - `tests/ui-contract.test.mjs` — static/DOM contract ensuring every `$('#id')` selector in `src/main.js` resolves in `index.html`, collapsible HUD `<details class="subpanel">` sections + `#b-fold-all` work cleanly, zero external network URLs exist, and all glyph/icon buttons carry `aria-label` and `title`.
@@ -47,7 +47,8 @@ The suite (`69` tests across 4 files) validates:
 | `src/post.js` | Multi-pass HDR HalfFloat + hardware `DepthTexture` post-processor (`makePostProcessor`): bloom, chromatic lens dispersion/halation, color grading, StormyClouds old-film grain/specks, and 6 runtime-switchable render styles (`ART_STYLE_NAMES`: `Cinema`, `X-Ray Structural`, `Architectural Ink Sketch`, `Charcoal & Chalk`, `Painterly Impasto`, `Impressionist Nocturne`). |
 | `src/controls.js` | Smooth inertial Fly & Glide camera (`FlyControls`) with critically-damped look/velocity, aerodynamic turn banking, long-range (`115–380m`) 8-whisker shallow-angle anticipatory obstacle & terrain avoidance (`V`), autonomous scenic `Glide` cruise (`G`), building/terrain collision (`C`), and radial planetoid local-up frame. |
 | `src/presets.js` | Curated `WORLD_PRESETS`, `DEFAULT_BOOKMARKS`, and lossless `normalizeExactState` / `encodeExactState` / `decodeExactState` (`?s=` Base64URL token + JSON import/export). |
-| `src/recorder.js` | `CameraPathRecorder` (Catmull-Rom + squad quaternion keyframe/flight recorder, `R`/`K`/`P`) and `makeSceneExporter` (HUD-free `Viewport`/`1080p`/`2x`/`4K` PNG stills & `60fps` WebM/MP4 video). |
+| `src/recorder.js` | `CameraPathRecorder` (Catmull-Rom + squad quaternion keyframe/flight recorder, `R`/`K`/`P`) and `makeSceneExporter` (HUD-free `Viewport`/`720p`/`1080p`/`1440p`/`2x`/`4K` PNG stills & `24/30/60fps` `16..115 Mbps` WebM/MP4 video with muxed stereo WebAudio synth soundtrack). |
+| `src/demo-export.js` | `buildStandaloneDemoHTML` & `exportStandaloneDemoHTML` — bundles `index.html` + `vendor/three.module.js` + all `src/*.js` ES modules + baked `window.__PETACITY_DEMO_BOOT__` state into a single offline `.html` file booting in full-screen hidden-panel autoloop mode. |
 | `src/prng.js` | Seeded `mulberry32`, integer 2D hash `hash2i`, and 2D value noise / `fbm2D`. |
 
 ---
@@ -239,6 +240,19 @@ The suite (`69` tests across 4 files) validates:
     5. **`helix_arcology`** (*Double-Helix Bio-Arcology*): twin counter-spiraling terraced tower strands linked by illuminated horizontal skybridge rungs & biophilic garden decks.
     6. **`torus_ring`** (*Orbital Halo Sky-Ring*): 3 inclined tripod mega-legs suspending a giant levitated horizontal torus ring sky-city & central zero-G energy core.
     7. **`metabolism_tree`** (*Nakagin Metabolist Megatree*): central concrete mega-trunk with cantilevered sky-branches and 40 plug-in modular living capsules with porthole windows & rooftop garden pods.
+
+### Phase 17–18 — Glyph-Only Hover-Reveal HUD, Ultra-Slow Gap-Threading Camera, Editable Minimap Autopilot Loop, Playlist Auto-DJ, Muxed Audio+HQ Video & Single-File HTML Demo Export
+- **Glyph-Only Buttons & Hover-Only Minimized Startup**:
+  - Every `<button>` in `index.html` and dynamic JS state toggles renders pure Unicode glyphs with zero word labels while preserving accessible `aria-label` and `title` tooltips.
+  - Starts minimized (`<body class="ui-off">`, overridable via `?ui=1`), hiding `#b-ui` (`opacity: 0`) until hovering the top-left corner hit-zone (`.panel:hover #b-ui`), keyboard focus, or pressing `H`.
+- **Ultra-Slow (`0.02×`) & Long-Horizon Gap-Threading Camera + Editable Minimap Autopilot Loop**:
+  - Camera speed slider (`#sl-camspeed`) reaches `0.02×` (`1/10th` of previous `0.2×` minimum), paired with extended `smoothK` (`0..6.0`) / `turnK` (`0.2..6.0`) 2-stage cascaded rate filtering.
+  - Two-tier long-horizon 29-ray fan (`steerHorizon = 225..340m`, `gapHorizon = 280..540m`) + bilateral canyon-slot seeker (`passPad = rad + 0.75`) threads cleanly and centers inside passable building cracks instead of shying away or panic-climbing.
+  - Closed periodic Catmull-Rom `autopilotLoop` rendered and interactively edited directly on `#minimap` (drag nodes, click spline segment or `＋` to insert, right-click / Alt-click / double-click to remove down to `3` nodes, `↺` to reset) and persisted in compact `_v: 2` `#s=` delta share URLs.
+- **Playlist Auto-DJ, High-Bitrate Video + Synth Sound & Standalone Single-HTML Demo Export**:
+  - `ModularRadioEngine` taps a `MediaStreamAudioDestinationNode` (`getAudioStream()`) for stereo soundtrack muxing into video exports and provides Playlist Auto-DJ (`seq` / `shuffle` / `loop` at `20..240s` intervals with smooth 4.4s reverb/filter crossfades).
+  - `makeSceneExporter` supports `Viewport`/`720p`/`1080p`/`1440p`/`2x`/`4K` locked video capture at `24/30/60 fps`, `16/36/68/115 Mbps` quality presets (`VIDEO_QUALITY_PRESETS`), `Auto`/`VP9`/`MP4`/`VP8` codecs, and toggleable WebAudio soundtrack capture (`#b-vid-audio`).
+  - `src/demo-export.js` (`#b-demo-html` / `#b-demo-export`) bundles the entire engine + Three.js + live city/autoloop state into a standalone single `.html` file (`window.__PETACITY_DEMO_BOOT__`) that runs offline in full-screen hidden-panel autoloop mode.
 
 ---
 

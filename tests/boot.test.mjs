@@ -122,6 +122,18 @@ test('main.js boots end-to-end (jsdom + fake WebGL)', { skip: JSDOM ? false : 'j
   assert.equal(window.document.querySelector('#b-play').disabled, false, '2 keyframes enable path playback');
   assert.equal(window.document.querySelector('#sl-scrub').disabled, false, '2 keyframes enable timeline scrubber');
 
+  // Verify Phase-18 minimized startup (`body.ui-off`) + glyph-only buttons even after live JS toggles
+  assert.equal(window.document.body.classList.contains('ui-off'), true, 'page boots minimized (body.ui-off)');
+  window.document.querySelector('#b-ui').click();
+  assert.equal(window.document.body.classList.contains('ui-off'), false, '#b-ui opens panel');
+  window.document.querySelector('#b-fold-all').click();
+  window.document.querySelector('#b-glide').click();
+  window.document.querySelector('#b-collide').click();
+  for (const btn of window.document.querySelectorAll('button')) {
+    const txt = (btn.textContent || '').trim();
+    assert.equal(/[A-Za-z0-9]/.test(txt), false, `live button #${btn.id} stays pure glyph after JS toggle (got ${JSON.stringify(txt)})`);
+  }
+
   assert.deepEqual(pageErrors, [], 'no page errors');
   assert.deepEqual(uncaught.map((e) => e.stack || String(e)), [], 'no uncaught exceptions');
   window.close();

@@ -14,6 +14,7 @@ export function makeMinimap({
   canvas,
   labelEl = null,
   onSelectSpot = null,
+  onLoopEdited = null,
 }) {
   let city = null;
   let look = null;
@@ -21,6 +22,11 @@ export function makeMinimap({
   let zoom = 1.0;        // 0.35 (regional) .. 3.5 (downtown close-up)
   let followCam = false; // false = centered on city core, true = centered on camera
   let hoveredSite = null;
+  let hoveredLoopIdx = -1;
+  let hoveredSeg = null; // { afterIdx, wx, wz, y }
+  let dragLoopIdx = -1;
+  let didDragLoop = false;
+  let lastControls = null;
   let cachedBg = null;
   let cachedBgKey = '';
   let lastCx = 0;
@@ -237,6 +243,7 @@ export function makeMinimap({
     const camera = isBag ? arg0.camera : arg0;
     const controls = isBag ? arg0.controls : arg1;
     const recorder = isBag ? arg0.recorder : arg2;
+    if (controls) lastControls = controls;
 
     const w = canvas.width || 184;
     const h = canvas.height || 184;
@@ -335,6 +342,73 @@ export function makeMinimap({
       }
     }
 
+    // 2a. Editable Closed Autopilot Loop Spline + Draggable Waypoint Handles!
+    if (controls && Array.isArray(controls.autopilotLoop) && controls.autopilotLoop.length >= 3 && typeof controls.evaluateAutopilotLoop === 'function') {
+      const loopPts = controls.autopilotLoop;
+      const nL = loopPts.length;
+      const samples = Math.min(160, Math.max(48, nL * 14));
+      ctx.save();
+      ctx.beginPath();
+      for (let s = 0; s <= samples; s++) {
+        const u = (s / samples) * nL;
+        const q = controls.evaluateAutopilotLoop(u);
+        if (!q) continue;
+        const m = worldToMap(q.x, q.z, cx, cz, w, h, span);
+        if (s === 0) ctx.moveTo(m.px, m.py);
+        else ctx.lineTo(m.px, m.py);
+      }
+      ctx.closePath();
+      ctx.strokeStyle = controls.glide ? 'rgba(83, 243, 255, 0.85)' : 'rgba(120, 210, 255, 0.44)';
+      ctx.lineWidth = controls.glide ? 1.85 : 1.3;
+      ctx.stroke();
+
+      // Subtle directional flow chevrons along the loop
+      for (let i = 0; i < nL; i++) {
+        const qa = controls.evaluateAutopilotLoop(i + 0.46);
+        const qb = controls.evaluateAutopilotLoop(i + 0.54);
+        if (!qa || !qb) continue;
+        const ma = worldToMap(qa.x, qa.z, cx, cz, w, h, span);
+        const mb = worldToMap(qb.x, qb.z, cx, cz, w, h, span);
+        const ang = Math.atan2(mb.py - ma.py, mb.px - ma.px);
+        ctx.save();
+        ctx.translate(mb.px, mb.py);
+        ctx.rotate(ang);
+        ctx.strokeStyle = controls.glide ? 'rgba(160, 250, 255, 0.9)' : 'rgba(150, 220, 255, 0.55)';
+        ctx.lineWidth = 1.25;
+        ctx.beginPath();
+        ctx.moveTo(-3.6, -2.5);
+        ctx.lineTo(0.8, 0);
+        ctx.lineTo(-3.6, 2.5);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // Highlight hovered curve insertion point
+      if (hoveredSeg && hoveredLoopIdx < 0 && dragLoopIdx < 0) {
+        const mh = worldToMap(hoveredSeg.wx, hoveredSeg.wz, cx, cz, w, h, span);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(mh.px, mh.py, 3.6, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // Draggable loop control handles
+      for (let i = 0; i < nL; i++) {
+        const lp = loopPts[i];
+        const m = worldToMap(lp.x, lp.z, cx, cz, w, h, span);
+        const isActive = i === dragLoopIdx || i === hoveredLoopIdx;
+        ctx.fillStyle = isActive ? '#ffffff' : (controls.glide ? '#53f3ff' : '#8fd8ff');
+        ctx.beginPath();
+        ctx.arc(m.px, m.py, isActive ? 4.8 : 3.4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#071019';
+        ctx.lineWidth = 1.25;
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
     // 2b. Live Autopilot Waypoint Route Queue (smooth minimap click-to-fly course!)
     if (camera && controls && Array.isArray(controls.routeQueue) && controls.routeQueue.length > 0) {
       ctx.save();
@@ -426,13 +500,139 @@ export function makeMinimap({
     ctx.fillText('N', w * 0.5 - 3, 11);
   }
 
+  function hitTestLoop(px, py) {
+    if (!lastControls || !Array.isArray(lastControls.autopilotLoop) || lastControls.autopilotLoop.length < 3) {
+      return { nodeIdx: -1, seg: null };
+    }
+    const span = worldSpan();
+    const pts = lastControls.autopilotLoop;
+    let bestIdx = -1;
+    let bestD = 8.5;
+    for (let i = 0; i < pts.length; i++) {
+      const m = worldToMap(pts[i].x, pts[i].z, lastCx, lastCz, canvas.width, canvas.height, span);
+      const d = Math.hypot(m.px - px, m.py - py);
+      if (d < bestD) {
+        bestD = d;
+        bestIdx = i;
+      }
+    }
+    if (bestIdx >= 0) return { nodeIdx: bestIdx, seg: null };
+
+    // Check proximity to closed spline segments for click-to-insert
+    if (typeof lastControls.evaluateAutopilotLoop === 'function') {
+      const nL = pts.length;
+      const samples = nL * 12;
+      let bestSegD = 6.5;
+      let bestSeg = null;
+      for (let s = 0; s < samples; s++) {
+        const u = (s / samples) * nL;
+        const q = lastControls.evaluateAutopilotLoop(u);
+        if (!q) continue;
+        const m = worldToMap(q.x, q.z, lastCx, lastCz, canvas.width, canvas.height, span);
+        const d = Math.hypot(m.px - px, m.py - py);
+        if (d < bestSegD) {
+          bestSegD = d;
+          const { wx, wz } = mapToWorld(px, py, lastCx, lastCz, canvas.width, canvas.height, span);
+          bestSeg = { afterIdx: Math.floor(u) % nL, wx, wz, y: q.y };
+        }
+      }
+      if (bestSeg) return { nodeIdx: -1, seg: bestSeg };
+    }
+    return { nodeIdx: -1, seg: null };
+  }
+
+  function removeLoopNodeAt(idx) {
+    if (!lastControls || !Array.isArray(lastControls.autopilotLoop)) return false;
+    if (lastControls.autopilotLoop.length <= 3 || idx < 0 || idx >= lastControls.autopilotLoop.length) return false;
+    const next = lastControls.autopilotLoop.slice();
+    next.splice(idx, 1);
+    lastControls.setAutopilotLoop(next);
+    hoveredLoopIdx = -1;
+    if (typeof onLoopEdited === 'function') onLoopEdited(lastControls.autopilotLoop);
+    return true;
+  }
+
+  function insertLoopNodeAfter(afterIdx, wx, wz, wy = 135) {
+    if (!lastControls || !Array.isArray(lastControls.autopilotLoop)) return false;
+    const next = lastControls.autopilotLoop.slice();
+    const insAt = Math.max(0, Math.min(next.length, afterIdx + 1));
+    next.splice(insAt, 0, {
+      name: `Loop ${insAt + 1}`,
+      x: Math.round(wx * 10) / 10,
+      y: Math.round(wy * 10) / 10,
+      z: Math.round(wz * 10) / 10,
+    });
+    lastControls.setAutopilotLoop(next);
+    if (typeof onLoopEdited === 'function') onLoopEdited(lastControls.autopilotLoop);
+    return true;
+  }
+
   if (canvas && typeof canvas.addEventListener === 'function') {
+    const getCanvasXY = (ev) => {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        px: ((ev.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width,
+        py: ((ev.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height,
+      };
+    };
+
+    canvas.addEventListener('pointerdown', (ev) => {
+      if (!city) return;
+      const { px, py } = getCanvasXY(ev);
+      const hit = hitTestLoop(px, py);
+      if (hit.nodeIdx >= 0) {
+        if (ev.button === 2 || ev.altKey) {
+          ev.preventDefault();
+          removeLoopNodeAt(hit.nodeIdx);
+          return;
+        }
+        dragLoopIdx = hit.nodeIdx;
+        didDragLoop = false;
+        canvas.setPointerCapture?.(ev.pointerId);
+        ev.preventDefault();
+      }
+    });
+
     canvas.addEventListener('pointermove', (ev) => {
       if (!city) return;
-      const rect = canvas.getBoundingClientRect();
-      const px = ((ev.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width;
-      const py = ((ev.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height;
+      const { px, py } = getCanvasXY(ev);
       const span = worldSpan();
+
+      if (dragLoopIdx >= 0 && lastControls && Array.isArray(lastControls.autopilotLoop) && lastControls.autopilotLoop[dragLoopIdx]) {
+        const { wx, wz } = mapToWorld(px, py, lastCx, lastCz, canvas.width, canvas.height, span);
+        const next = lastControls.autopilotLoop.slice();
+        next[dragLoopIdx] = {
+          ...next[dragLoopIdx],
+          x: Math.round(wx * 10) / 10,
+          z: Math.round(wz * 10) / 10,
+        };
+        lastControls.setAutopilotLoop(next);
+        didDragLoop = true;
+        if (labelEl) labelEl.textContent = `Loop #${dragLoopIdx + 1} · (${Math.round(wx)}, ${Math.round(wz)})`;
+        return;
+      }
+
+      const loopHit = hitTestLoop(px, py);
+      hoveredLoopIdx = loopHit.nodeIdx;
+      hoveredSeg = loopHit.seg;
+      if (hoveredLoopIdx >= 0) {
+        hoveredSite = null;
+        canvas.style.cursor = 'grab';
+        if (labelEl) {
+          labelEl.textContent = `Drag Loop #${hoveredLoopIdx + 1} · Right/Alt-click delete`;
+        }
+        return;
+      }
+      if (hoveredSeg) {
+        hoveredSite = null;
+        canvas.style.cursor = 'copy';
+        if (labelEl) {
+          labelEl.textContent = 'Click loop line to insert waypoint';
+        }
+        return;
+      }
+
+      canvas.style.cursor = 'crosshair';
       const sites = collectSites();
       let best = null;
       let bestD = 9.5;
@@ -443,20 +643,64 @@ export function makeMinimap({
       }
       hoveredSite = best;
       if (labelEl) {
-        labelEl.textContent = best ? `Fly to · ${best.name}` : (followCam ? 'Radar · Follow' : 'City Map');
+        labelEl.textContent = best ? `Fly to · ${best.name}` : (followCam ? 'Radar · Drag loop' : 'Drag loop · Click line +pt');
+      }
+    });
+
+    const endLoopDrag = (ev) => {
+      if (dragLoopIdx >= 0) {
+        dragLoopIdx = -1;
+        canvas.releasePointerCapture?.(ev.pointerId);
+        if (didDragLoop && typeof onLoopEdited === 'function' && lastControls) {
+          onLoopEdited(lastControls.autopilotLoop);
+        }
+      }
+    };
+    canvas.addEventListener('pointerup', endLoopDrag);
+    canvas.addEventListener('pointercancel', endLoopDrag);
+
+    canvas.addEventListener('contextmenu', (ev) => {
+      const { px, py } = getCanvasXY(ev);
+      const hit = hitTestLoop(px, py);
+      if (hit.nodeIdx >= 0) {
+        ev.preventDefault();
+        removeLoopNodeAt(hit.nodeIdx);
+      }
+    });
+
+    canvas.addEventListener('dblclick', (ev) => {
+      const { px, py } = getCanvasXY(ev);
+      const hit = hitTestLoop(px, py);
+      if (hit.nodeIdx >= 0) {
+        ev.preventDefault();
+        removeLoopNodeAt(hit.nodeIdx);
       }
     });
 
     canvas.addEventListener('pointerleave', () => {
       hoveredSite = null;
-      if (labelEl) labelEl.textContent = followCam ? 'Radar · Follow' : 'City Map';
+      hoveredLoopIdx = -1;
+      hoveredSeg = null;
+      if (labelEl) labelEl.textContent = followCam ? 'Radar · Drag loop' : 'Drag loop · Click line +pt';
     });
 
     canvas.addEventListener('click', (ev) => {
-      if (!city || typeof onSelectSpot !== 'function') return;
-      const rect = canvas.getBoundingClientRect();
-      const px = ((ev.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width;
-      const py = ((ev.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height;
+      if (didDragLoop) {
+        didDragLoop = false;
+        return;
+      }
+      if (!city) return;
+      const { px, py } = getCanvasXY(ev);
+      const loopHit = hitTestLoop(px, py);
+      if (loopHit.nodeIdx >= 0) {
+        if (ev.altKey) removeLoopNodeAt(loopHit.nodeIdx);
+        return;
+      }
+      if (loopHit.seg) {
+        insertLoopNodeAfter(loopHit.seg.afterIdx, loopHit.seg.wx, loopHit.seg.wz, loopHit.seg.y);
+        return;
+      }
+      if (typeof onSelectSpot !== 'function') return;
       const span = worldSpan();
       const routeMeta = { append: !!ev.shiftKey, fromMinimap: true };
       if (hoveredSite) {
@@ -512,6 +756,11 @@ export function makeMinimap({
     get follow() {
       return followCam;
     },
+    setControls(ctl) {
+      lastControls = ctl;
+    },
+    insertLoopNodeAfter,
+    removeLoopNodeAt,
     render,
   };
 }

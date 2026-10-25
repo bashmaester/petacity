@@ -250,6 +250,8 @@ export class ModularRadioEngine {
     warmth = 0.80,
     pulse = 0.55,
     cityReactivity = 0.65,
+    playlistMode = 'loop',
+    playlistInterval = 75,
     AudioContextClass = null,
   } = {}) {
     this.seed = seed >>> 0;
@@ -266,6 +268,17 @@ export class ModularRadioEngine {
     this.pulse = Math.max(0, Math.min(1.5, Number(pulse)));     // 0 .. 1.5 sequencer & micro-percussion density (0 = beatless ambient!)
     this.cityReact = Math.max(0, Math.min(1.0, Number(cityReactivity)));
 
+    // Playlist Auto-DJ state ('loop' = hold station, 'seq' = sequential crossfade, 'shuffle' = non-repeating shuffle crossfade)
+    this.playlistMode = ['loop', 'seq', 'shuffle'].includes(playlistMode) ? playlistMode : 'seq';
+    this.playlistInterval = Math.max(15, Math.min(300, Number(playlistInterval) || 75));
+    this._playlistElapsed = 0;
+    this._shuffleBag = [];
+    this._xfadeActive = false;
+    this._xfadeProgress = 0;
+    this._xfadeSwitched = false;
+    this._xfadeTargetIdx = -1;
+    this.onStationAutoSwitch = null;
+
     // City telemetry state (fed live from main loop)
     this._cityAlt01 = 0.25;
     this._cityNight01 = 0.75;
@@ -275,6 +288,7 @@ export class ModularRadioEngine {
     this.ctx = null;
     this.masterGain = null;
     this.analyser = null;
+    this._streamDest = null;
     this._dryBus = null;
     this._reverbSend = null;
     this._delaySend = null;
@@ -368,6 +382,10 @@ export class ModularRadioEngine {
     comp.connect(masterGain);
     masterGain.connect(analyser);
     analyser.connect(ctx.destination);
+    if (typeof ctx.createMediaStreamDestination === 'function') {
+      this._streamDest = ctx.createMediaStreamDestination();
+      masterGain.connect(this._streamDest);
+    }
 
     // 2. Dry Voice Bus
     const dryBus = ctx.createGain();
@@ -503,14 +521,20 @@ export class ModularRadioEngine {
     const targetVol = this.playing ? Math.max(0, Math.min(1.2, this.volume)) * 0.82 : 0.0001;
     this.masterGain.gain.setTargetAtTime(targetVol, now, 0.08);
 
-    const spaceEff = Math.max(0, Math.min(1.65, this.space + altBoost * 0.28 + (mov.index === 3 ? 0.14 : 0)));
+    // Smooth 4.4s ambient crossfade veil (`0 -> 1 -> 0`) during playlist track transitions
+    const veil = this._xfadeActive ? Math.sin(Math.max(0, Math.min(1, this._xfadeProgress)) * Math.PI) : 0;
+    if (this._dryBus) {
+      this._dryBus.gain.setTargetAtTime(0.78 * (1 - 0.74 * veil), now, 0.10);
+    }
+
+    const spaceEff = Math.max(0, Math.min(1.65, this.space + altBoost * 0.28 + (mov.index === 3 ? 0.14 : 0) + veil * 0.42));
     this._reverbSend.gain.setTargetAtTime(0.18 + spaceEff * 0.62, now, 0.12);
     this._delaySend.gain.setTargetAtTime(0.12 + spaceEff * 0.30, now, 0.12);
     this._delayFeedback.gain.setTargetAtTime(Math.min(0.68, 0.20 + spaceEff * 0.28), now, 0.12);
 
     const warmEff = Math.max(0.08, Math.min(1.65, (this.warmth * mov.brightness) + slowTimbreLfo + altBoost * 0.24 - nightWarm * 0.18));
-    const cutoff = 680 * Math.pow(14.5, warmEff * 0.78);
-    this._masterFilter.frequency.setTargetAtTime(Math.min(16500, cutoff), now, 0.14);
+    const cutoff = 680 * Math.pow(14.5, warmEff * 0.78) * (1 - 0.56 * veil);
+    this._masterFilter.frequency.setTargetAtTime(Math.max(260, Math.min(16500, cutoff)), now, 0.14);
     if (this._revLP) {
       this._revLP.frequency.setTargetAtTime(Math.min(9500, 1800 + warmEff * 3600 + altBoost * 1800), now, 0.2);
     }
@@ -1423,8 +1447,70 @@ export class ModularRadioEngine {
     return st;
   }
 
-  nextStation() {
-    return this.setStation(this.stationIndex + 1, { applyDefaults: false });
+  nextStation({ smooth = false } = {}) {
+    const nextIdx = (this.stationIndex + 1) % RADIO_STATIONS.length;
+    if (smooth && this.playing) {
+      this.transitionToStation(nextIdx);
+      return RADIO_STATIONS[nextIdx];
+    }
+    this._playlistElapsed = 0;
+    return this.setStation(nextIdx, { applyDefaults: false });
+  }
+
+  _pickNextPlaylistIndex() {
+    const n = RADIO_STATIONS.length;
+    if (this.playlistMode === 'shuffle') {
+      if (!this._shuffleBag.length) {
+        for (let i = 0; i < n; i++) {
+          if (i !== this.stationIndex) this._shuffleBag.push(i);
+        }
+        for (let i = this._shuffleBag.length - 1; i > 0; i--) {
+          const j = Math.floor(this.rnd() * (i + 1));
+          const tmp = this._shuffleBag[i];
+          this._shuffleBag[i] = this._shuffleBag[j];
+          this._shuffleBag[j] = tmp;
+        }
+      }
+      const picked = this._shuffleBag.pop();
+      return picked !== undefined ? picked : ((this.stationIndex + 1) % n);
+    }
+    return (this.stationIndex + 1) % n;
+  }
+
+  /** Smooth 4.4s ambient reverb/filter crossfade into target station index. */
+  transitionToStation(targetIdx) {
+    const n = RADIO_STATIONS.length;
+    const normIdx = ((Math.round(targetIdx) % n) + n) % n;
+    if (normIdx === this.stationIndex) return this.station;
+    this._xfadeActive = true;
+    this._xfadeProgress = 0;
+    this._xfadeSwitched = false;
+    this._xfadeTargetIdx = normIdx;
+    this._playlistElapsed = 0;
+    return RADIO_STATIONS[normIdx];
+  }
+
+  setPlaylist({ mode, interval } = {}) {
+    if (mode !== undefined && ['loop', 'seq', 'shuffle'].includes(mode)) {
+      this.playlistMode = mode;
+      this._playlistElapsed = 0;
+    }
+    if (interval !== undefined) {
+      this.playlistInterval = Math.max(15, Math.min(300, Number(interval) || 75));
+    }
+  }
+
+  /** Return live stereo WebAudio MediaStream for muxing synth soundtrack into video exports. */
+  getAudioStream({ autoStart = false } = {}) {
+    if (autoStart && !this.playing) {
+      this.start();
+    } else if (!this.ctx) {
+      this._initGraph();
+    }
+    if (this.ctx && this.ctx.state === 'suspended' && typeof this.ctx.resume === 'function') {
+      try { this.ctx.resume(); } catch { /* ignore */ }
+    }
+    return this._streamDest ? this._streamDest.stream : null;
   }
 
   reseed(newSeed) {
@@ -1472,6 +1558,28 @@ export class ModularRadioEngine {
 
     this._simPhase += dt;
     if (!this.playing) return;
+
+    // Advance Playlist Auto-DJ timer & smooth 4.4s crossfade envelope
+    if (this._xfadeActive) {
+      this._xfadeProgress += dt / 4.4;
+      if (!this._xfadeSwitched && this._xfadeProgress >= 0.5) {
+        this._xfadeSwitched = true;
+        const st = this.setStation(this._xfadeTargetIdx, { applyDefaults: false });
+        if (typeof this.onStationAutoSwitch === 'function') {
+          this.onStationAutoSwitch(st, this.stationIndex);
+        }
+      }
+      if (this._xfadeProgress >= 1.0) {
+        this._xfadeActive = false;
+        this._xfadeProgress = 0;
+      }
+    } else if (this.playlistMode !== 'loop') {
+      this._playlistElapsed += dt;
+      if (this._playlistElapsed >= this.playlistInterval) {
+        this._playlistElapsed = 0;
+        this.transitionToStation(this._pickNextPlaylistIndex());
+      }
+    }
 
     if (!this.ctx) {
       const stepSec = 60 / this.station.bpm / 4;

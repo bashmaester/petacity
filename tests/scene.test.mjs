@@ -27,13 +27,15 @@ import {
   WORLD_PRESETS, DEFAULT_BOOKMARKS, normalizeExactState, encodeExactState, decodeExactState,
 } from '../src/presets.js';
 import { FlyControls, CAMERA_STYLE_NAMES } from '../src/controls.js';
-import { CameraPathRecorder, makeSceneExporter } from '../src/recorder.js';
+import { CameraPathRecorder, makeSceneExporter, VIDEO_QUALITY_PRESETS } from '../src/recorder.js';
 import { makeMinimap } from '../src/minimap.js';
 import {
   RADIO_STATIONS, RADIO_MOVEMENTS, midiToHz, buildSpaceImpulseData, evalStationHarmony, ModularRadioEngine,
 } from '../src/audio.js';
 import { MovieSetDirector, buildGlyphMatrixTexture } from '../src/director.js';
 import { registerPetacityWebMCP } from '../src/webmcp.js';
+import { buildStandaloneDemoHTML, DEMO_MODULE_ORDER } from '../src/demo-export.js';
+import { readFileSync } from 'node:fs';
 import { isPointInWater, makeCityCollider } from '../src/city.js';
 
 test('every look preset has a complete schema', () => {
@@ -2216,6 +2218,261 @@ test('Phase-16 scene: camera lens distortion, Panini wide, 6-face 360/Fisheye/Li
       assert.ok(c.g <= c.r + 0.03 && c.b <= c.g + 0.03, `Metropolis keeps landmark role=${o.material.uniforms.uRole?.value} sepia-silver monochrome (rgb=${c.r.toFixed(2)},${c.g.toFixed(2)},${c.b.toFixed(2)})`);
     }
   });
+});
+
+test('Phase-18 ultra-slow gap-seeking camera, editable minimap autopilot loop, playlist Auto-DJ, muxed audio+HQ video export & standalone HTML demo export', async () => {
+  // 1) Ultra-slow 0.02x speed + smart building-crack gap-seeking & centering
+  const cam = new THREE.PerspectiveCamera(58, 16 / 9, 2, 34000);
+  const mockDom = { addEventListener() {}, setPointerCapture() {}, releasePointerCapture() {} };
+  const prevWin = globalThis.window;
+  globalThis.window = { addEventListener() {} };
+  let ctl;
+  try {
+    ctl = new FlyControls(cam, mockDom);
+  } finally {
+    globalThis.window = prevWin;
+  }
+
+  // Build a synthetic narrow canyon crack (width = 7.8m centered at x = 0, between two 180m tall towers)
+  const crackCity = {
+    count: 2,
+    x: new Float32Array([-23.9, 23.9]),
+    y: new Float32Array([90, 90]),
+    z: new Float32Array([-120, -120]),
+    w: new Float32Array([40, 40]), // inner faces at x = -3.9 and x = +3.9 -> 7.8m crack!
+    h: new Float32Array([180, 180]),
+    d: new Float32Array([90, 90]),
+    rot: new Float32Array([0, 0]),
+    landmarks: [],
+    waterMode: 4,
+    waterAmt: 0,
+    terrainMode: 4,
+    terrainScale: 0,
+  };
+  ctl.collider = makeCityCollider(crackCity);
+  ctl.collision = true;
+  ctl.avoidance = true;
+  ctl.colliderRadius = 2.2;
+
+  // Verify ultra-slow 0.02x speed multiplier works cleanly without clamping up to 0.2x
+  ctl.speedMul = 0.02;
+  ctl.setPose({ x: 0, y: 50, z: 40, yaw: 0, pitch: 0 });
+  ctl.setGlide(true);
+  for (let i = 0; i < 60; i++) ctl.update(1 / 60);
+  const slowDist = Math.hypot(cam.position.x, cam.position.z - 40);
+  assert.ok(slowDist > 1.2 && slowDist < 6.5, `0.02x speed glides ultra-slowly (${slowDist.toFixed(2)}m in 1s)`);
+
+  // Verify smart gap-seeker threads cleanly through the 7.8m crack when starting slightly off-center (x = 1.9m)
+  ctl.speedMul = 0.65;
+  ctl.setPose({ x: 1.9, y: 55, z: 95, yaw: 0, pitch: 0 });
+  ctl.setGlide(true);
+  for (let i = 0; i < 240; i++) ctl.update(1 / 60);
+  assert.ok(cam.position.z < -145, `camera threaded all the way through the 7.8m building crack (z=${cam.position.z.toFixed(1)})`);
+  assert.ok(Math.abs(cam.position.x) < 3.6, `gap-centering kept camera cleanly aligned inside canyon gap (x=${cam.position.x.toFixed(2)})`);
+  assert.ok(cam.position.y < 95, `camera threaded through gap instead ofpanic-climbing over 180m towers (y=${cam.position.y.toFixed(1)})`);
+
+  // 2) Closed Catmull-Rom Autopilot Loop + interactive Minimap loop editing
+  const loopWaypoints = [
+    { name: 'North', x: 0, y: 125, z: -420 },
+    { name: 'East', x: 420, y: 135, z: 0 },
+    { name: 'South', x: 0, y: 120, z: 420 },
+    { name: 'West', x: -420, y: 140, z: 0 },
+  ];
+  assert.equal(ctl.setAutopilotLoop(loopWaypoints).length, 4);
+  const p0 = ctl.evaluateAutopilotLoop(0);
+  const pWrap = ctl.evaluateAutopilotLoop(4);
+  assert.ok(Math.hypot(p0.x - pWrap.x, p0.y - pWrap.y, p0.z - pWrap.z) < 1e-4, 'closed Catmull-Rom loop wraps seamlessly C1-periodic');
+
+  let editedCount = 0;
+  const miniCtx = {
+    save() {}, restore() {}, beginPath() {}, closePath() {}, moveTo() {}, lineTo() {},
+    arc() {}, stroke() {}, fill() {}, fillRect() {}, strokeRect() {}, translate() {}, rotate() {},
+    drawImage() {}, setLineDash() {}, fillText() {},
+  };
+  const miniCanvas = {
+    width: 276, height: 176, style: {},
+    getContext: () => miniCtx,
+    addEventListener() {},
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 276, height: 176 }),
+  };
+  const minimap = makeMinimap({
+    canvas: miniCanvas,
+    onLoopEdited: (lp) => { editedCount = lp.length; },
+  });
+  minimap.setControls(ctl);
+  minimap.render(cam, ctl, null);
+  assert.equal(minimap.insertLoopNodeAfter(1, 310, 290, 130), true);
+  assert.equal(ctl.autopilotLoop.length, 5);
+  assert.equal(editedCount, 5);
+  assert.equal(minimap.removeLoopNodeAt(2), true);
+  assert.equal(ctl.autopilotLoop.length, 4);
+  // Cannot delete below 3 loop nodes
+  assert.equal(minimap.removeLoopNodeAt(0), true);
+  assert.equal(ctl.autopilotLoop.length, 3);
+  assert.equal(minimap.removeLoopNodeAt(0), false, 'closed loop preserves >= 3 minimum waypoints');
+
+  // 3) Compact v2 state roundtrip preserves `autoLoop`, `0.02x` speed, and `playlistMode`/`playlistInterval`
+  const encTok = encodeExactState({
+    seed: 4417,
+    camSpeed: 0.02,
+    autoLoop: loopWaypoints,
+    radio: { station: 1, playlistMode: 'shuffle', playlistInterval: 45 },
+  });
+  const decSt = decodeExactState(encTok);
+  assert.equal(decSt.camSpeed, 0.02);
+  assert.equal(decSt.autoLoop.length, 4);
+  assert.equal(decSt.radio.playlistMode, 'shuffle');
+  assert.equal(decSt.radio.playlistInterval, 45);
+
+  // 4) ModularRadioEngine MediaStreamAudioDestination tap + Playlist Auto-DJ smooth crossfade
+  const mockAudioTrack = { kind: 'audio', id: 'synth-stereo-0' };
+  const mockParam = (v = 0) => ({
+    value: v,
+    setValueAtTime() {},
+    linearRampToValueAtTime() {},
+    exponentialRampToValueAtTime() {},
+    setTargetAtTime() {},
+    cancelScheduledValues() {},
+  });
+  const mockNode = () => ({
+    gain: mockParam(1),
+    frequency: mockParam(440),
+    detune: mockParam(0),
+    Q: mockParam(1),
+    pan: mockParam(0),
+    delayTime: mockParam(0.3),
+    threshold: mockParam(-14), knee: mockParam(16), ratio: mockParam(3), attack: mockParam(0.01), release: mockParam(0.2),
+    fftSize: 256, frequencyBinCount: 128, buffer: null, curve: null, oversample: 'none', loop: false, type: 'sine',
+    connect() { return this; }, start() {}, stop() {},
+    getByteFrequencyData(a) { a.fill(90); }, getByteTimeDomainData(a) { a.fill(128); },
+  });
+  class StreamAudioContext {
+    constructor() { this.currentTime = 0; this.sampleRate = 22050; this.state = 'running'; this.destination = {}; }
+    resume() {}
+    createGain() { return mockNode(); }
+    createOscillator() { return mockNode(); }
+    createBiquadFilter() { return mockNode(); }
+    createStereoPanner() { return mockNode(); }
+    createDelay() { return mockNode(); }
+    createConvolver() { return mockNode(); }
+    createDynamicsCompressor() { return mockNode(); }
+    createWaveShaper() { return mockNode(); }
+    createAnalyser() { return mockNode(); }
+    createChannelMerger() { return mockNode(); }
+    createChannelSplitter() { return mockNode(); }
+    createBuffer(ch, len) {
+      const chans = Array.from({ length: ch }, () => new Float32Array(len));
+      return { getChannelData: (c) => chans[c] };
+    }
+    createBufferSource() { return mockNode(); }
+    createMediaStreamDestination() {
+      return { stream: { getAudioTracks: () => [mockAudioTrack] } };
+    }
+  }
+  const djRadio = new ModularRadioEngine({
+    AudioContextClass: StreamAudioContext,
+    station: 0,
+    playlistMode: 'shuffle',
+    playlistInterval: 20,
+  });
+  const aStream = djRadio.getAudioStream({ autoStart: true });
+  assert.ok(aStream && aStream.getAudioTracks().length === 1, 'getAudioStream taps live stereo synth bus');
+  assert.equal(djRadio.playing, true);
+  let autoSwitchedTo = -1;
+  djRadio.onStationAutoSwitch = (_st, idx) => { autoSwitchedTo = idx; };
+  // Advance past 20s interval + 2.5s midpoint of 4.4s crossfade
+  for (let i = 0; i < 46; i++) {
+    djRadio.ctx.currentTime += 0.5;
+    djRadio.update(0.5);
+  }
+  assert.ok(autoSwitchedTo > 0 && autoSwitchedTo < RADIO_STATIONS.length, `shuffle Auto-DJ crossfaded smoothly to non-repeating station #${autoSwitchedTo}`);
+
+  // 5) High-bitrate Video Exporter muxes WebAudio track + locks & restores target resolution
+  let recordedStream = null;
+  let recordedOpts = null;
+  const prevMR = globalThis.MediaRecorder;
+  const prevMS = globalThis.MediaStream;
+  globalThis.MediaStream = class MockMediaStream {
+    constructor(tracks = []) { this._tracks = tracks; }
+    getTracks() { return this._tracks; }
+    getVideoTracks() { return this._tracks.filter((t) => t.kind === 'video'); }
+    getAudioTracks() { return this._tracks.filter((t) => t.kind === 'audio'); }
+  };
+  globalThis.MediaRecorder = class MockMediaRecorder {
+    static isTypeSupported(m) { return m === 'video/webm;codecs=vp9,opus'; }
+    constructor(stream, opts) {
+      recordedStream = stream;
+      recordedOpts = opts;
+      this.state = 'inactive';
+      this.ondataavailable = null;
+      this.onstop = null;
+    }
+    start() { this.state = 'recording'; }
+    stop() { this.state = 'inactive'; if (this.onstop) this.onstop(); }
+  };
+  try {
+    let curW = 960;
+    let curH = 540;
+    const mockRenderer = {
+      domElement: {
+        clientWidth: 960,
+        clientHeight: 540,
+        captureStream: () => new globalThis.MediaStream([{ kind: 'video', id: 'vid-0' }]),
+      },
+      getPixelRatio: () => 1,
+      setPixelRatio() {},
+      getSize(v) { v.set(curW, curH); return v; },
+      setSize(w, h) { curW = w; curH = h; },
+      render() {},
+    };
+    const exporter = makeSceneExporter({
+      renderer: mockRenderer,
+      post: null,
+      scene: new THREE.Scene(),
+      camera: cam,
+      getTime: () => 0,
+    });
+    const started = exporter.startVideoCapture({
+      fps: 60,
+      resolution: '1440p',
+      quality: 'master',
+      codec: 'vp9',
+      audioStream: aStream,
+      filename: 'test-hq.webm',
+    });
+    assert.equal(curW, 2560, 'video exporter locked renderbuffer width to 1440p (2560x1440)');
+    assert.equal(curH, 1440, 'video exporter locked renderbuffer height to 1440p');
+    assert.equal(started.hasAudio, true, 'video exporter detected and attached synth audio stream');
+    assert.equal(recordedOpts.videoBitsPerSecond, VIDEO_QUALITY_PRESETS.master.bps, '115 Mbps Master bitrate applied');
+    assert.equal(recordedOpts.mimeType, 'video/webm;codecs=vp9,opus', 'VP9 + Opus stereo codec selected');
+    assert.equal(recordedStream.getVideoTracks().length, 1);
+    assert.equal(recordedStream.getAudioTracks().length, 1);
+    await exporter.stopVideoCapture();
+    assert.equal(curW, 960, 'viewport width restored cleanly after video capture stop');
+    assert.equal(curH, 540, 'viewport height restored cleanly after video capture stop');
+  } finally {
+    globalThis.MediaRecorder = prevMR;
+    globalThis.MediaStream = prevMS;
+  }
+
+  // 6) Single-File Standalone HTML Demo Exporter bundles all 16 ES modules offline with hidden UI & autoloop
+  const indexHtml = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  const moduleSources = {};
+  for (const modPath of DEMO_MODULE_ORDER) {
+    moduleSources[modPath] = readFileSync(new URL(`../${modPath}`, import.meta.url), 'utf8');
+  }
+  const standaloneHtml = buildStandaloneDemoHTML({
+    indexHtml,
+    moduleSources,
+    demoState: { seed: 4417, lookId: 'bladerunner', autoLoop: loopWaypoints },
+  });
+  assert.ok(standaloneHtml.length > 500_000, 'standalone HTML bundles Three.js + all Petacity ES modules inline');
+  assert.match(standaloneHtml, /<body[^>]*class="[^"]*ui-off[^"]*demo-autoloop[^"]*"/, 'standalone demo starts minimized in demo-autoloop mode');
+  assert.ok(standaloneHtml.includes('window.__PETACITY_DEMO_BOOT__'), 'standalone demo embeds baked autoloop state');
+  const htmlWithoutPayloads = standaloneHtml.replace(/<script type="text\/plain"[\s\S]*?<\/script>/g, '');
+  assert.equal(/src=["']\.?\/?src\/main\.js["']/.test(htmlWithoutPayloads), false, 'external ./src/main.js script tag replaced by self-contained Blob loader');
+  const extRefs = [...standaloneHtml.matchAll(/(?:src|href)="(https?:)?\/\/[^"]+"/g)];
+  assert.equal(extRefs.length, 0, 'standalone demo HTML has zero external network dependencies');
 });
 
 

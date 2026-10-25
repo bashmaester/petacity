@@ -22,6 +22,7 @@ export function buildPetacityTools(ctx) {
     radio,
     recorder,
     exporter,
+    exportDemoHTML,
     enqueueSpotRoute,
   } = ctx;
 
@@ -47,9 +48,11 @@ export function buildPetacityTools(ctx) {
           autopilot: controls ? {
             glide: controls.glide,
             glideSpeed: controls.glideSpeed,
+            speedMul: controls.speedMul,
             autoLook: controls.autoLook,
             freelook: controls.freelook,
             turnSmooth: controls.turnSmooth,
+            autopilotLoopCount: Array.isArray(controls.autopilotLoop) ? controls.autopilotLoop.length : 0,
             routeWaypointsRemaining: controls.routeQueue.length,
           } : null,
           citySummary: city ? {
@@ -490,6 +493,8 @@ export function buildPetacityTools(ctx) {
           warmth: { type: 'number', description: '0..1.5 analog filter warmth/brilliance' },
           pulse: { type: 'number', description: '0..1.5 rhythmic density (0 = beatless ambient)' },
           cityReact: { type: 'number', description: '0..1.0 live altitude/speed/night coupling' },
+          playlistMode: { type: 'string', enum: ['seq', 'shuffle', 'loop'], description: 'Playlist Auto-DJ crossfade mode' },
+          playlistInterval: { type: 'number', description: 'Playlist track switch interval in seconds (15..300)' },
         },
       },
       execute: async (args = {}) => {
@@ -507,6 +512,8 @@ export function buildPetacityTools(ctx) {
         if (args.warmth !== undefined) patch.radioWarmth = Number(args.warmth);
         if (args.pulse !== undefined) patch.radioPulse = Number(args.pulse);
         if (args.cityReact !== undefined) patch.radioReact = Number(args.cityReact);
+        if (args.playlistMode !== undefined) patch.playlistMode = args.playlistMode;
+        if (args.playlistInterval !== undefined) patch.playlistInterval = Number(args.playlistInterval);
         if (Object.keys(patch).length > 0) applyPartialState(patch);
         if (args.playing === true && !radio.playing) radio.start();
         else if (args.playing === false && radio.playing) radio.stop();
@@ -515,6 +522,8 @@ export function buildPetacityTools(ctx) {
           playing: radio.playing,
           stationId: radio.station.id,
           stationName: radio.station.name,
+          playlistMode: radio.playlistMode,
+          playlistInterval: radio.playlistInterval,
           chord: radio.currentChordName,
           movement: radio.movementName,
           evolutionPhase: radio.evolutionPhase,
@@ -524,22 +533,51 @@ export function buildPetacityTools(ctx) {
 
     {
       name: 'petacity_capture_media',
-      description: 'Manage the CameraPathRecorder (addKeyframe, smoothPath, playPath, stopPath, clearPath, exportPath, importPath) or trigger a PNG frame capture.',
+      description: 'Manage CameraPathRecorder, trigger a PNG still render, start/stop high-bitrate video capture with pure-code synth sound, or export a standalone single-file HTML autoloop demo.',
       inputSchema: {
         type: 'object',
         properties: {
           action: {
             type: 'string',
-            enum: ['screenshot', 'addKeyframe', 'smoothPath', 'playPath', 'stopPath', 'clearPath', 'exportPath', 'importPath'],
+            enum: ['screenshot', 'startVideo', 'stopVideo', 'exportDemoHTML', 'addKeyframe', 'smoothPath', 'playPath', 'stopPath', 'clearPath', 'exportPath', 'importPath'],
           },
+          resolution: { type: 'string', enum: ['view', '720p', '1080p', '1440p', '2x', '4k'], default: '1080p' },
+          fps: { type: 'number', default: 60 },
+          quality: { type: 'string', enum: ['standard', 'high', 'ultra', 'master'], default: 'ultra' },
+          codec: { type: 'string', enum: ['auto', 'vp9', 'mp4', 'vp8'], default: 'auto' },
+          includeAudio: { type: 'boolean', default: true },
           smoothStrength: { type: 'number', default: 0.65 },
           pathData: { description: 'JSON camera path payload when action === "importPath"' },
         },
       },
-      execute: async ({ action = 'exportPath', smoothStrength = 0.65, pathData = null } = {}) => {
+      execute: async ({
+        action = 'exportPath',
+        resolution = '1080p',
+        fps = 60,
+        quality = 'ultra',
+        codec = 'auto',
+        includeAudio = true,
+        smoothStrength = 0.65,
+        pathData = null,
+      } = {}) => {
         if (action === 'screenshot') {
-          const info = await exporter?.captureStillPNG?.('1080p', 'petacity-webmcp.png');
+          const info = await exporter?.captureStillPNG?.(resolution, `petacity-webmcp-${resolution}.png`);
           return { ok: true, action, info: info || null };
+        }
+        if (action === 'startVideo') {
+          const audioStream = includeAudio ? radio?.getAudioStream?.({ autoStart: true }) : null;
+          const started = exporter?.startVideoCapture?.({
+            fps, resolution, quality, codec, audioStream, filename: `petacity-webmcp-${resolution}.webm`,
+          });
+          return { ok: true, action, started: started || null };
+        }
+        if (action === 'stopVideo') {
+          const stopped = await exporter?.stopVideoCapture?.();
+          return { ok: true, action, stopped: stopped ? { filename: stopped.filename } : null };
+        }
+        if (action === 'exportDemoHTML') {
+          await exportDemoHTML?.();
+          return { ok: true, action };
         }
         if (!recorder) return { ok: false, reason: 'no-recorder' };
         if (action === 'addKeyframe') {

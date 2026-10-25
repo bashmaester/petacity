@@ -11,7 +11,36 @@
 import * as THREE from '../vendor/three.module.js';
 
 const PITCH_LIMIT = 1.553; // ~89.0 deg for extreme skyscraper worm's-eye & nadir angles
-const WHISKER_ANGLES = [-0.20, 0.20, -0.44, 0.44, -0.76, 0.76, -1.16, 1.16];
+// 25-ray high-angular-resolution fan (-80 deg .. +80 deg, ~3.1 deg spacing near center)
+// so narrow passable cracks between buildings (>= 2 * colliderRadius + margin) are detected & threaded!
+const FAN_ANGLES = [
+  0.0,
+  -0.012, 0.012,
+  -0.028, 0.028,
+  -0.055, 0.055,
+  -0.115, 0.115,
+  -0.180, 0.180,
+  -0.255, 0.255,
+  -0.340, 0.340,
+  -0.440, 0.440,
+  -0.560, 0.560,
+  -0.700, 0.700,
+  -0.860, 0.860,
+  -1.040, 1.040,
+  -1.220, 1.220,
+  -1.400, 1.400,
+];
+
+function catmullRomScalar(p0, p1, p2, p3, t) {
+  const t2 = t * t;
+  const t3 = t2 * t;
+  return 0.5 * (
+    (2 * p1) +
+    (-p0 + p2) * t +
+    (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
+    (-p0 + 3 * p1 - 3 * p2 + p3) * t3
+  );
+}
 
 export const CAMERA_STYLE_NAMES = [
   'Cinema Drone (Balanced)',
@@ -22,11 +51,11 @@ export const CAMERA_STYLE_NAMES = [
 ];
 
 const STYLE_PRESETS = [
-  { lookRate: 14.0, velRate: 6.4, maxTurnRate: 1.35, glideTurnRate: 0.42, turnAccel: 4.2, maxBank: 0.14, glideBank: 0.32, bankGain: 0.075, glideBankGain: 0.20, avoidRate: 3.8 },
-  { lookRate: 26.0, velRate: 13.0, maxTurnRate: 2.60, glideTurnRate: 0.78, turnAccel: 9.0, maxBank: 0.24, glideBank: 0.46, bankGain: 0.11,  glideBankGain: 0.26, avoidRate: 6.2 },
-  { lookRate: 7.2,  velRate: 2.9, maxTurnRate: 0.72, glideTurnRate: 0.24, turnAccel: 2.1, maxBank: 0.04, glideBank: 0.12, bankGain: 0.03,  glideBankGain: 0.09, avoidRate: 2.4 },
-  { lookRate: 10.5, velRate: 4.2, maxTurnRate: 1.05, glideTurnRate: 0.34, turnAccel: 3.0, maxBank: 0.22, glideBank: 0.48, bankGain: 0.10,  glideBankGain: 0.28, avoidRate: 3.2 },
-  { lookRate: 4.8,  velRate: 2.1, maxTurnRate: 0.44, glideTurnRate: 0.16, turnAccel: 1.25, maxBank: 0.06, glideBank: 0.16, bankGain: 0.04, glideBankGain: 0.12, avoidRate: 1.8 },
+  { lookRate: 10.5, velRate: 3.8, maxTurnRate: 1.05, glideTurnRate: 0.30, turnAccel: 2.6, maxBank: 0.12, glideBank: 0.26, bankGain: 0.065, glideBankGain: 0.16, avoidRate: 2.65 },
+  { lookRate: 22.0, velRate: 9.5, maxTurnRate: 2.20, glideTurnRate: 0.62, turnAccel: 6.8, maxBank: 0.22, glideBank: 0.40, bankGain: 0.10,  glideBankGain: 0.22, avoidRate: 4.20 },
+  { lookRate: 5.2,  velRate: 1.7, maxTurnRate: 0.54, glideTurnRate: 0.17, turnAccel: 1.2, maxBank: 0.04, glideBank: 0.10, bankGain: 0.025, glideBankGain: 0.07, avoidRate: 1.45 },
+  { lookRate: 7.8,  velRate: 2.6, maxTurnRate: 0.82, glideTurnRate: 0.25, turnAccel: 1.9, maxBank: 0.20, glideBank: 0.42, bankGain: 0.09,  glideBankGain: 0.24, avoidRate: 1.95 },
+  { lookRate: 3.4,  velRate: 1.15, maxTurnRate: 0.32, glideTurnRate: 0.11, turnAccel: 0.72, maxBank: 0.05, glideBank: 0.13, bankGain: 0.032, glideBankGain: 0.09, avoidRate: 1.10 },
 ];
 
 function wrapAngleDelta(a) {
@@ -53,10 +82,13 @@ export class FlyControls {
     this.glideTarget = null;
     this.onCourseReorient = null; // optional hook `(pos, moveYaw) => nextGlideTarget` after manual course steer
 
-    // Minimap / Director smooth multi-waypoint autopilot route queue
+    // Minimap / Director smooth multi-waypoint autopilot route queue & editable closed loop
     this.routeQueue = [];
     this._routeStopOnArrive = false;
     this.onRouteArrive = null;
+    this.autopilotLoop = [];    // closed periodic Catmull-Rom control nodes [{ x, y, z, name }]
+    this._loopU = 0;            // continuous parameter in [0, autopilotLoop.length)
+    this._loopInitialized = false;
 
     // Autopilot POI Auto-Look gimbal mode (gazes smoothly at nearby landmarks/POIs while slowly moving or hovering!)
     this.autoLook = false;
@@ -99,8 +131,10 @@ export class FlyControls {
     this._vel = new THREE.Vector3();
     this._avoidSide = 0;
     this._avoidActive = 0;
-    this._avoidYawRate = 0;     // low-pass filtered avoidance yaw rate (rad/s)
-    this._avoidPitchRate = 0;   // low-pass filtered avoidance climb rate (rad/s)
+    this._avoidYawRate = 0;     // 2nd-order filtered avoidance yaw rate (rad/s)
+    this._avoidYawTarget = 0;   // intermediate low-pass stage for C2 smoothness
+    this._avoidPitchRate = 0;   // 2nd-order filtered avoidance climb rate (rad/s)
+    this._avoidPitchTarget = 0;
     this._avoidLiftVel = 0;     // low-pass filtered vertical cushion velocity
 
     const e = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
@@ -150,11 +184,12 @@ export class FlyControls {
       if (!this.enabled) return;
       ev.preventDefault();
       if (this.glide) {
-        // Allow glideSpeed down to 0 so Autopilot + Auto-Look can smoothly slow to a stationary scenic hover!
-        this.glideSpeed = Math.max(0, Math.min(640, this.glideSpeed - Math.sign(ev.deltaY) * 20));
+        // Fine proportional step near slow speeds + down to 0 stationary scenic hover!
+        const step = Math.max(2.5, Math.min(22, this.glideSpeed * 0.14 + 2.5));
+        this.glideSpeed = Math.max(0, Math.min(640, this.glideSpeed - Math.sign(ev.deltaY) * step));
       } else {
         const fwd = this._travelForward();
-        this._vel.addScaledVector(fwd, -Math.sign(ev.deltaY) * 220 * this.speedMul);
+        this._vel.addScaledVector(fwd, -Math.sign(ev.deltaY) * 220 * Math.max(0.02, this.speedMul));
       }
     };
     this._onContext = (ev) => ev.preventDefault();
@@ -305,6 +340,107 @@ export class FlyControls {
     this._routeStopOnArrive = false;
   }
 
+  /** Set or replace the closed editable Autopilot spline loop waypoints (`N >= 3`). */
+  setAutopilotLoop(points, { snapParam = false } = {}) {
+    if (!Array.isArray(points) || points.length < 3) {
+      this.autopilotLoop = [];
+      this._loopInitialized = false;
+      return this.autopilotLoop;
+    }
+    this.autopilotLoop = points.map((pt, i) => ({
+      name: pt.name || `Loop ${i + 1}`,
+      x: Number(pt.x) || 0,
+      y: Number.isFinite(pt.y) ? Number(pt.y) : 135,
+      z: Number(pt.z) || 0,
+    }));
+    const n = this.autopilotLoop.length;
+    this._loopU = ((this._loopU % n) + n) % n;
+    if (snapParam || !this._loopInitialized) {
+      this._syncNearestLoopParam(true);
+      this._loopInitialized = true;
+    }
+    return this.autopilotLoop;
+  }
+
+  /** Evaluate closed periodic Catmull-Rom 3D point `{ x, y, z }` at loop parameter `u` in `[0, N)`. */
+  evaluateAutopilotLoop(u) {
+    const pts = this.autopilotLoop;
+    const n = pts ? pts.length : 0;
+    if (n < 3) return null;
+    const uWrap = ((u % n) + n) % n;
+    const i1 = Math.floor(uWrap) % n;
+    const frac = uWrap - Math.floor(uWrap);
+    const i0 = (i1 - 1 + n) % n;
+    const i2 = (i1 + 1) % n;
+    const i3 = (i1 + 2) % n;
+    const p0 = pts[i0];
+    const p1 = pts[i1];
+    const p2 = pts[i2];
+    const p3 = pts[i3];
+    return {
+      x: catmullRomScalar(p0.x, p1.x, p2.x, p3.x, frac),
+      y: catmullRomScalar(p0.y, p1.y, p2.y, p3.y, frac),
+      z: catmullRomScalar(p0.z, p1.z, p2.z, p3.z, frac),
+    };
+  }
+
+  _syncNearestLoopParam(globalSearch = false) {
+    const n = this.autopilotLoop.length;
+    if (n < 3) return 0;
+    const p = this.camera.position;
+    let bestU = this._loopU;
+    let bestD2 = Infinity;
+    if (globalSearch) {
+      const samples = n * 16;
+      for (let s = 0; s < samples; s++) {
+        const u = (s / samples) * n;
+        const q = this.evaluateAutopilotLoop(u);
+        const dx = q.x - p.x;
+        const dz = q.z - p.z;
+        const d2 = dx * dx + dz * dz;
+        if (d2 < bestD2) { bestD2 = d2; bestU = u; }
+      }
+    } else {
+      // Smooth forward-biased local window around current `_loopU` so self-crossings never jump!
+      for (let s = -10; s <= 26; s++) {
+        const u = (((this._loopU + s * 0.045) % n) + n) % n;
+        const q = this.evaluateAutopilotLoop(u);
+        const dx = q.x - p.x;
+        const dz = q.z - p.z;
+        const d2 = dx * dx + dz * dz;
+        if (d2 < bestD2) { bestD2 = d2; bestU = u; }
+      }
+    }
+    this._loopU = bestU;
+    return bestU;
+  }
+
+  _advanceAutopilotLoopCarrot(dt, effSpeed) {
+    const n = this.autopilotLoop.length;
+    if (n < 3) return null;
+    if (!this._loopInitialized) {
+      this._syncNearestLoopParam(true);
+      this._loopInitialized = true;
+    } else {
+      this._syncNearestLoopParam(false);
+    }
+    // Estimate local spline tangent length (meters per 1.0 parameter unit)
+    const q0 = this.evaluateAutopilotLoop(this._loopU);
+    const q1 = this.evaluateAutopilotLoop(this._loopU + 0.05);
+    const dPerUnit = Math.max(40, Math.hypot(q1.x - q0.x, q1.z - q0.z) / 0.05);
+    // Advance parameter gently with speed + project a long smooth pursuit carrot 220m..380m ahead!
+    this._loopU = (this._loopU + (Math.max(effSpeed, 4) * dt) / dPerUnit) % n;
+    const carrotDist = Math.max(210, Math.min(420, 195 + effSpeed * 1.4));
+    const uCarrot = (this._loopU + Math.min(0.85, carrotDist / dPerUnit)) % n;
+    const goal = this.evaluateAutopilotLoop(uCarrot);
+    if (goal && this.collider) {
+      // Ensure loop altitude gently clears underlying terrain while allowing canyon threading!
+      const terr = this.collider.groundHeightAt ? this.collider.groundHeightAt(goal.x, goal.z) : 0;
+      goal.y = Math.max(terr + 18, goal.y);
+    }
+    return goal;
+  }
+
   setFreelook(on) {
     const next = !!on;
     if (next && !this.freelook) {
@@ -452,7 +588,9 @@ export class FlyControls {
     this._avoidSide = 0;
     this._avoidActive = 0;
     this._avoidYawRate = 0;
+    this._avoidYawTarget = 0;
     this._avoidPitchRate = 0;
+    this._avoidPitchTarget = 0;
     this._avoidLiftVel = 0;
     this.camera.quaternion.setFromEuler(new THREE.Euler(this.pitch, this.yaw, this.cameraRoll || 0, 'YXZ'));
   }
@@ -465,18 +603,21 @@ export class FlyControls {
       this._avoidSide = 0;
       this._avoidActive = 0;
       this._avoidYawRate = 0;
+      this._avoidYawTarget = 0;
       this._avoidPitchRate = 0;
+      this._avoidPitchTarget = 0;
       this._avoidLiftVel = 0;
       this._manualCourseSteered = false;
     } else {
       this._idle = 2.5;
+      if (this.autopilotLoop.length >= 3) this._syncNearestLoopParam(true);
       if (!this.freelook) {
         this.moveYaw = this.yaw;
         this.movePitch = this.pitch;
         this._targetMoveYaw = this.yaw;
         this._targetMovePitch = this.pitch;
       }
-      this._vel.copy(this._travelForward()).multiplyScalar(this.glideSpeed * this.speedMul);
+      this._vel.copy(this._travelForward()).multiplyScalar(this.glideSpeed * Math.max(0.02, this.speedMul || 1.0));
     }
   }
 
@@ -553,8 +694,8 @@ export class FlyControls {
   _probeRayClearance(ox, oy, oz, dx, dy, dz, maxDist, pad) {
     const col = this.collider;
     if (!col) return 1.0;
-    const steps = 18;
-    const floorClear = Math.max(4.0, pad * 0.65);
+    const steps = 28;
+    const floorClear = Math.max(3.5, pad * 0.65);
     const hitsAt = (f) => {
       const dist = f * maxDist;
       const qx = ox + dx * dist;
@@ -567,10 +708,10 @@ export class FlyControls {
     for (let s = 1; s <= steps; s++) {
       const fHi = s / steps;
       if (hitsAt(fHi)) {
-        // 4-step binary refinement between clear `(s-1)/steps` and hit `s/steps`
+        // 5-step binary refinement between clear `(s-1)/steps` and hit `s/steps`
         let lo = (s - 1) / steps;
         let hi = fHi;
-        for (let b = 0; b < 4; b++) {
+        for (let b = 0; b < 5; b++) {
           const mid = (lo + hi) * 0.5;
           if (hitsAt(mid)) hi = mid;
           else lo = mid;
@@ -582,130 +723,256 @@ export class FlyControls {
   }
 
   /**
-   * C2-smooth weighted-whisker anticipatory course adjustment:
-   * - Scales comfort buffer with `colliderRadius` so narrow canyon cracks stay open
-   *   when collider is small, yet towers directly ahead are gracefully skirted.
-   * - Filters yaw/pitch steering rates exponentially so course bends never twitch.
+   * Long-Horizon C2-Smooth Anticipatory Avoidance & Smart Building-Crack Gap Threading:
+   * - Probes 260m..760m ahead (3x farther than before) so trajectories curve smoothly
+   *   long before reaching any tower, with a quintic C2 envelope & 2nd-order rate filter.
+   * - Distinguishes TRUE passable clearance (`passPad = colliderRadius + 0.75m`) from
+   *   outer horizon awareness (`comfortPad`), scanning 25 dense fan angles (`~3.1 deg`
+   *   resolution near center) so whenever a canyon or crack between buildings is wide
+   *   enough for the camera (`>= 2 * passPad`), the camera aims cleanly BETWEEN the
+   *   buildings and centers itself down the slot midline instead of shying away!
    */
-  _applyAnticipatoryAvoidance(moveDir, speed, dt, preset) {
+  _applyAnticipatoryAvoidance(moveDir, speed, dt, preset, desiredGoal = null) {
     const smoothK = Math.max(0.25, this.smoothness || 1.0);
-    const rateAlpha = 1 - Math.exp(-dt * (preset.avoidRate / Math.sqrt(smoothK)));
+    const turnK = Math.max(0.20, this.turnSmooth || 1.0);
+    // Two-stage cascaded low-pass (2nd-order critically smooth response -> zero curvature snap!)
+    const alpha1 = 1 - Math.exp(-dt * ((preset.avoidRate * 1.35) / Math.pow(smoothK, 0.72)));
+    const alpha2 = 1 - Math.exp(-dt * ((preset.avoidRate * 0.85) / Math.pow(smoothK * turnK, 0.48)));
 
     if (!this.avoidance || !this.collision || !this.collider || this.worldCurve >= 0.05) {
-      this._avoidSide *= Math.exp(-dt * 2.5);
-      this._avoidActive *= Math.exp(-dt * 3.5);
-      this._avoidYawRate += (0 - this._avoidYawRate) * rateAlpha;
-      this._avoidPitchRate += (0 - this._avoidPitchRate) * rateAlpha;
-      this._avoidLiftVel += (0 - this._avoidLiftVel) * rateAlpha;
+      this._avoidSide *= Math.exp(-dt * 1.8);
+      this._avoidActive *= Math.exp(-dt * 2.4);
+      this._avoidYawTarget += (0 - this._avoidYawTarget) * alpha1;
+      this._avoidYawRate += (this._avoidYawTarget - this._avoidYawRate) * alpha2;
+      this._avoidPitchTarget += (0 - this._avoidPitchTarget) * alpha1;
+      this._avoidPitchRate += (this._avoidPitchTarget - this._avoidPitchRate) * alpha2;
+      this._avoidLiftVel += (0 - this._avoidLiftVel) * alpha2;
       return;
     }
 
     const p = this.camera.position;
     const rad = Math.max(0.4, this.colliderRadius || 2.2);
-    const lookAhead = Math.max(85, Math.min(340, speed * 1.45));
-    // Comfort pad adapts to colliderRadius: small collider slips cleanly through wider alleys!
-    const comfortPad = Math.max(rad + 2.2, Math.min(22, rad * 3.4));
+    // Two-tier horizon:
+    //  - `steerHorizon` (225m..340m): triggers smooth course adjustment well in advance without
+    //    falsely reacting to buildings half a kilometer away down a clear avenue!
+    //  - `gapHorizon` (280m..540m): scores candidate cracks/avenues by deep downrange openness!
+    const steerHorizon = Math.max(225, Math.min(340, 185 + speed * 1.15));
+    const lookAhead = Math.max(280, Math.min(540, 240 + speed * 1.75));
+    // Exact passable radius (`2.95m` -> any >=6m crack is passable!) vs outer comfort sensor
+    const passPad = rad + 0.75;
+    const comfortPad = Math.max(rad + 3.0, Math.min(18, rad * 3.5));
 
-    const fwdFree = this._probeRayClearance(
-      p.x, p.y, p.z,
-      moveDir.x, moveDir.y, moveDir.z,
-      lookAhead, comfortPad
+    const hLen = Math.hypot(moveDir.x, moveDir.z) || 1;
+    const hx = moveDir.x / hLen;
+    const hz = moveDir.z / hLen;
+    // Right perpendicular vector in XZ
+    const rx = -hz;
+    const rz = hx;
+
+    const fwdComfort = this._probeRayClearance(
+      p.x, p.y, p.z, moveDir.x, moveDir.y, moveDir.z, steerHorizon, comfortPad
     );
+    const fwdPass = fwdComfort >= 0.995
+      ? 1.0
+      : this._probeRayClearance(p.x, p.y, p.z, moveDir.x, moveDir.y, moveDir.z, steerHorizon, passPad);
 
     let wantYawRate = 0;
     let wantPitchRate = 0;
     let wantLift = 0;
+    let parallelSlotOffset = 0;
+    let foundParallelSlot = false;
 
-    if (fwdFree < 0.995) {
-      const hitDist = Math.max(12, fwdFree * lookAhead);
-      const earlyT = 1.0 - fwdFree;
-      // Smooth cubic urgency ramp (zero slope at horizon entry -> zero entry jerk!)
-      const smoothUrg = earlyT * earlyT * (3 - 2 * earlyT);
-      const urgency = 0.14 + 0.86 * smoothUrg;
-      this._avoidActive += (urgency - this._avoidActive) * Math.min(1, dt * 4.5);
-
-      const sampleD = Math.min(lookAhead, hitDist + 18);
-      const hitX = p.x + moveDir.x * sampleD;
-      const hitZ = p.z + moveDir.z * sampleD;
-      const terrY = this.collider.groundHeightAt ? this.collider.groundHeightAt(hitX, hitZ) : 0;
-      const rawTop = this.collider.maxHeightNear(hitX, hitZ, comfortPad + 6);
-      const obsTop = rawTop > terrY + 0.5 ? rawTop * this.heightScale : terrY;
-
-      // Smooth blend weight between climbing over low roofs/hills vs banking around tall towers
-      const overDelta = obsTop - p.y;
-      const climbBlend = obsTop <= terrY + 10 ? 1.0 : Math.max(0, Math.min(1, 1 - (overDelta - 18) / 36));
-
-      if (climbBlend > 0.02) {
-        const clearY = obsTop + Math.max(10, rad * 3.5);
-        const climbNeed = Math.max(0, clearY - p.y);
-        const curTravelPitch = this.freelook ? this.movePitch : this._targetPitch;
-        const shallowPitch = Math.min(0.44, Math.atan2(climbNeed, Math.max(55, hitDist * 0.9)));
-        if (curTravelPitch < shallowPitch) {
-          wantPitchRate += (shallowPitch - curTravelPitch) * 1.85 * urgency * climbBlend;
+    // Parallel Canyon-Slot Seeker: if direct ray (`fwdPass <= 0.80`) grazes one wall of a narrow
+    // two-sided building crack right ahead, check parallel laterally-shifted rays (`±1.8m, ±3.6m, ±5.6m`).
+    // Only triggers when BOTH left and right canyon walls flank the slot (`wallL < 0.85 && wallR < 0.85`).
+    if (fwdPass <= 0.80) {
+      const slotShifts = [-1.8, 1.8, -3.6, 3.6, -5.6, 5.6];
+      for (let k = 0; k < slotShifts.length; k++) {
+        const s = slotShifts[k];
+        const sx = p.x + rx * s;
+        const sz = p.z + rz * s;
+        if (this.collider.hitsPoint(sx, p.y, sz, passPad, this.heightScale)) continue;
+        const slotClear = this._probeRayClearance(
+          sx, p.y, sz, moveDir.x, moveDir.y, moveDir.z, steerHorizon, passPad
+        );
+        if (slotClear > 0.88) {
+          const wallR = this._probeRayClearance(
+            sx + rx * 12, p.y, sz + rz * 12, moveDir.x, moveDir.y, moveDir.z, steerHorizon, passPad
+          );
+          const wallL = this._probeRayClearance(
+            sx - rx * 12, p.y, sz - rz * 12, moveDir.x, moveDir.y, moveDir.z, steerHorizon, passPad
+          );
+          if (wallR < 0.85 && wallL < 0.85) {
+            foundParallelSlot = true;
+            parallelSlotOffset = s;
+            break;
+          }
         }
-        wantLift += climbNeed * 0.85 * urgency * climbBlend;
       }
+    }
 
-      const latBlend = 1.0 - climbBlend * 0.85;
-      if (latBlend > 0.05) {
-        const hLen = Math.hypot(moveDir.x, moveDir.z) || 1;
-        const hx = moveDir.x / hLen;
-        const hz = moveDir.z / hLen;
+    if (fwdComfort < 0.996) {
+      if (foundParallelSlot) {
+        // Smoothly glide laterally onto the open canyon centerline & align yaw (`-s` in rx -> `+yaw`)!
+        const slideRate = Math.max(-14, Math.min(14, parallelSlotOffset * 1.65)) / Math.sqrt(smoothK);
+        p.x += rx * slideRate * dt;
+        p.z += rz * slideRate * dt;
+        wantYawRate = Math.max(-0.22, Math.min(0.22, (-parallelSlotOffset * 0.025) / Math.sqrt(turnK)));
+        this._avoidActive += (0.35 - this._avoidActive) * Math.min(1, dt * 2.5);
+      } else if (fwdPass > 0.80) {
+        // CASE A: Ahead is within outer comfort aura (`fwdComfort < 1`), AND the center crack
+        // IS wide enough for the camera (`fwdPass > 0.80`)! Thread straight through & center in the crack!
+        const flankOff = Math.max(rad + 2.4, comfortPad * 0.72);
+        const probeD = Math.min(lookAhead * 0.75, 220);
+        const clearR = this._probeRayClearance(
+          p.x + rx * flankOff, p.y, p.z + rz * flankOff,
+          moveDir.x, moveDir.y * 0.5, moveDir.z, probeD, passPad
+        );
+        const clearL = this._probeRayClearance(
+          p.x - rx * flankOff, p.y, p.z - rz * flankOff,
+          moveDir.x, moveDir.y * 0.5, moveDir.z, probeD, passPad
+        );
+        // Positive `dYaw` rotates velocity left (`-rx`), negative `dYaw` rotates velocity right (`+rx`)
+        const balance = clearL - clearR;
+        const env = 1.0 - fwdComfort;
+        const c2Env = env * env * env * (10 - 15 * env + 6 * env * env);
+        wantYawRate = Math.max(-0.28, Math.min(0.28, balance * 0.42)) * (0.25 + 0.75 * c2Env) / Math.pow(turnK, 0.5);
+        this._avoidActive += (c2Env * 0.35 - this._avoidActive) * Math.min(1, dt * 2.5);
+      } else {
+        // CASE B: Direct line will hit a building (`fwdPass <= 0.80`).
+        // Scan all 29 high-density fan angles to find the cleanest passable crack/gap between buildings!
+        const hitDist = Math.max(14, fwdPass * steerHorizon);
+        const u = Math.max(0, Math.min(1, 1.0 - fwdPass));
+        // Long-horizon smooth urgency: begins gentle deflection immediately at 260..760m out!
+        const urgency = 0.24 + 0.76 * u * (0.45 + 0.55 * u * (3 - 2 * u));
+        this._avoidActive += (urgency - this._avoidActive) * Math.min(1, dt * 2.8);
 
-        let goalCross = 0;
-        if (this.glide && this.glideTarget) {
-          const gx = this.glideTarget.x - p.x;
-          const gz = this.glideTarget.z - p.z;
-          const gl = Math.hypot(gx, gz) || 1;
-          goalCross = hx * (gz / gl) - hz * (gx / gl);
+        let goalDeltaYaw = 0;
+        const goalRef = desiredGoal || (this.glide ? this.glideTarget : null);
+        if (goalRef) {
+          const gx = goalRef.x - p.x;
+          const gz = goalRef.z - p.z;
+          if (gx * gx + gz * gz > 64) {
+            const curYaw = Math.atan2(-hx, -hz);
+            const gYaw = Math.atan2(-gx, -gz);
+            goalDeltaYaw = wrapAngleDelta(gYaw - curYaw);
+          }
         }
 
-        // Continuous weighted centroid across all 8 whiskers (never snaps between discrete angles!)
-        let weightedTurn = 0;
-        let weightTotal = 0;
-        let maxFree = fwdFree;
-        const whiskerPad = Math.max(rad + 1.4, comfortPad * 0.78);
+        let bestAng = 0;
+        let bestScore = -1;
+        let maxPassFree = fwdPass;
+        const rayWeights = new Float64Array(FAN_ANGLES.length);
 
-        for (let i = 0; i < WHISKER_ANGLES.length; i++) {
-          const ang = WHISKER_ANGLES[i];
+        for (let i = 0; i < FAN_ANGLES.length; i++) {
+          const ang = FAN_ANGLES[i];
           const ca = Math.cos(ang);
           const sa = Math.sin(ang);
+          // Positive `ang` rotates left (+yaw): wx = hx*ca + hz*sa, wz = -hx*sa + hz*ca
           const wx = hx * ca + hz * sa;
           const wz = -hx * sa + hz * ca;
-          const free = this._probeRayClearance(
-            p.x, p.y, p.z,
-            wx, moveDir.y * 0.45, wz,
-            lookAhead, whiskerPad
-          );
-          if (free > maxFree) maxFree = free;
+          const free = i === 0
+            ? fwdPass
+            : this._probeRayClearance(p.x, p.y, p.z, wx, moveDir.y * 0.4, wz, lookAhead, passPad);
+          if (free > maxPassFree) maxPassFree = free;
+          if (free <= 0.14) continue;
+
+          // Score favors genuinely open/passable cracks aligned with forward motion & goal!
+          const openScore = Math.pow(free, 2.8);
+          const fwdAlign = 1.0 / (0.28 + Math.abs(ang) * 0.85);
+          const goalAlign = 1.0 + 0.35 * Math.cos(wrapAngleDelta(ang - goalDeltaYaw));
           const side = Math.sign(ang);
-          let w = Math.pow(Math.max(0.02, free), 2.2) / (0.35 + Math.abs(ang) * 0.55);
-          if (this._avoidSide !== 0 && side === Math.sign(this._avoidSide)) w *= 1.38;
-          if (goalCross !== 0 && side === Math.sign(-goalCross)) w *= 1.15;
-          weightedTurn += Math.sign(ang) * (0.42 + Math.abs(ang) * 0.65) * w;
-          weightTotal += w;
+          const commitBias = (this._avoidSide !== 0 && side === Math.sign(this._avoidSide)) ? 1.24 : 1.0;
+
+          let gapBonus = 1.0;
+          if (free > 0.82 && Math.abs(ang) < 0.72) {
+            gapBonus = 1.28;
+          }
+
+          const w = openScore * fwdAlign * goalAlign * commitBias * gapBonus;
+          rayWeights[i] = w;
+          if (w > bestScore) {
+            bestScore = w;
+            bestAng = ang;
+          }
         }
 
-        const normTurn = weightTotal > 1e-5 ? (weightedTurn / weightTotal) : (this._avoidSide >= 0 ? 0.6 : -0.6);
-        const turnSign = Math.abs(normTurn) > 0.06 ? Math.sign(normTurn) : (this._avoidSide >= 0 ? 1 : -1);
-        this._avoidSide = turnSign;
+        // Compute smooth local centroid strictly within the chosen gap lobe (`|ang - bestAng| <= 0.38`)
+        // so symmetric left/right gaps around a central tower never cancel each other to 0!
+        let lobeWeighted = 0;
+        let lobeSum = 0;
+        for (let i = 0; i < FAN_ANGLES.length; i++) {
+          const w = rayWeights[i];
+          if (w > 0 && Math.abs(FAN_ANGLES[i] - bestAng) <= 0.38) {
+            lobeWeighted += FAN_ANGLES[i] * w;
+            lobeSum += w;
+          }
+        }
+        let chosenAng = lobeSum > 1e-5
+          ? (bestAng * 0.45 + (lobeWeighted / lobeSum) * 0.55)
+          : (this._avoidSide >= 0 ? 0.38 : -0.38);
 
-        const mag = Math.max(0.22, Math.min(0.85, Math.abs(normTurn) * 1.15)) / Math.pow(Math.max(0.35, this.turnSmooth || 1.0), 0.55);
-        wantYawRate = turnSign * mag * urgency * latBlend;
+        // Once aimed near the chosen gap, refine lateral centering inside that crack
+        if (maxPassFree > 0.75 && Math.abs(chosenAng) < 0.85) {
+          const ca = Math.cos(chosenAng);
+          const sa = Math.sin(chosenAng);
+          const gx = hx * ca + hz * sa;
+          const gz = -hx * sa + hz * ca;
+          const grx = -gz;
+          const grz = gx;
+          const fOff = rad + 2.2;
+          const cR = this._probeRayClearance(p.x + grx * fOff, p.y, p.z + grz * fOff, gx, 0, gz, lookAhead * 0.55, passPad);
+          const cL = this._probeRayClearance(p.x - grx * fOff, p.y, p.z - grz * fOff, gx, 0, gz, lookAhead * 0.55, passPad);
+          chosenAng += (cL - cR) * 0.08;
+        }
 
-        if (maxFree < 0.38) {
-          wantLift += speed * 0.26 * urgency;
+        const sampleD = Math.min(lookAhead, hitDist + 22);
+        const hitX = p.x + moveDir.x * sampleD;
+        const hitZ = p.z + moveDir.z * sampleD;
+        const terrY = this.collider.groundHeightAt ? this.collider.groundHeightAt(hitX, hitZ) : 0;
+        const rawTop = this.collider.maxHeightNear(hitX, hitZ, passPad + 5);
+        const obsTop = rawTop > terrY + 0.5 ? rawTop * this.heightScale : terrY;
+        const overDelta = obsTop - p.y;
+
+        // Only climb over if terrain/low roof OR if no horizontal crack is passable (`maxPassFree < 0.52`)!
+        const noHorizGap = Math.max(0, Math.min(1, (0.58 - maxPassFree) / 0.35));
+        const lowRoofBlend = obsTop <= terrY + 12 ? 1.0 : Math.max(0, Math.min(1, 1 - (overDelta - 14) / 30));
+        const climbBlend = Math.max(lowRoofBlend * (maxPassFree > 0.82 ? 0.25 : 1.0), noHorizGap);
+
+        if (climbBlend > 0.02) {
+          const clearY = obsTop + Math.max(10, rad * 3.2);
+          const climbNeed = Math.max(0, clearY - p.y);
+          const curTravelPitch = this.freelook ? this.movePitch : this._targetPitch;
+          const shallowPitch = Math.min(0.36, Math.atan2(climbNeed, Math.max(95, hitDist * 1.15)));
+          if (curTravelPitch < shallowPitch) {
+            wantPitchRate += (shallowPitch - curTravelPitch) * 1.15 * urgency * climbBlend;
+          }
+          wantLift += climbNeed * 0.45 * urgency * climbBlend;
+        }
+
+        const latBlend = 1.0 - lowRoofBlend * (maxPassFree > 0.82 ? 0.15 : 0.78);
+        if (latBlend > 0.04) {
+          if (Math.abs(chosenAng) > 0.04) {
+            this._avoidSide = Math.sign(chosenAng);
+          } else if (this._avoidSide === 0) {
+            this._avoidSide = 1;
+          }
+          const desiredRate = (Math.sign(chosenAng) * 0.16 + chosenAng * 1.25) / Math.pow(turnK, 0.58);
+          const maxAvoidTurn = 0.48 / Math.pow(turnK, 0.52);
+          wantYawRate = Math.max(-maxAvoidTurn, Math.min(maxAvoidTurn, desiredRate)) * urgency * latBlend;
         }
       }
     } else {
-      this._avoidSide *= Math.exp(-dt * 2.2);
-      this._avoidActive *= Math.exp(-dt * 3.4);
+      this._avoidSide *= Math.exp(-dt * 1.6);
+      this._avoidActive *= Math.exp(-dt * 2.4);
     }
 
-    // Low-pass filter angular & vertical avoidance rates so velocity/heading are C2 smooth!
-    this._avoidYawRate += (wantYawRate - this._avoidYawRate) * rateAlpha;
-    this._avoidPitchRate += (wantPitchRate - this._avoidPitchRate) * rateAlpha;
-    this._avoidLiftVel += (wantLift - this._avoidLiftVel) * rateAlpha;
+    // 2nd-order cascaded low-pass filter on angular & vertical avoidance rates (ultra-cinematic C2 arc!)
+    this._avoidYawTarget += (wantYawRate - this._avoidYawTarget) * alpha1;
+    this._avoidYawRate += (this._avoidYawTarget - this._avoidYawRate) * alpha2;
+    this._avoidPitchTarget += (wantPitchRate - this._avoidPitchTarget) * alpha1;
+    this._avoidPitchRate += (this._avoidPitchTarget - this._avoidPitchRate) * alpha2;
+    this._avoidLiftVel += (wantLift - this._avoidLiftVel) * alpha2;
 
     const decoupled = this.freelook || (this.glide && this.autoLook);
     if (Math.abs(this._avoidYawRate) > 1e-4) {
@@ -743,9 +1010,10 @@ export class FlyControls {
     if (!this.enabled) return;
     const clampedDt = Math.min(Math.max(dt, 1e-4), 0.1);
     const preset = STYLE_PRESETS[Math.max(0, Math.min(STYLE_PRESETS.length - 1, this.motionStyle | 0))];
-    const smoothK = Math.max(0.15, Math.min(3.5, this.smoothness || 1.0));
-    const turnK = Math.max(0.20, Math.min(3.5, this.turnSmooth || 1.0));
-    const spdMul = Math.max(0.1, Math.min(5.0, this.speedMul || 1.0));
+    const smoothK = Math.max(0.15, Math.min(6.0, this.smoothness || 1.0));
+    const turnK = Math.max(0.20, Math.min(6.0, this.turnSmooth || 1.0));
+    // Support speed down to 0.02x (1/10th of previous 0.2x min) for ultra-slow architectural drift!
+    const spdMul = Math.max(0.02, Math.min(5.0, this.speedMul ?? 1.0));
     const decoupled = this.freelook || (this.glide && this.autoLook);
 
     const prevMoveYaw = decoupled ? this.moveYaw : this.yaw;
@@ -761,6 +1029,7 @@ export class FlyControls {
 
     const desiredVel = new THREE.Vector3();
     let routeArrivalSlowdown = 1.0;
+    let activeAutopilotGoal = null;
 
     if (this.glide) {
       const manualSteeringKeys = aDown || dDown || upDown || dnDown;
@@ -793,28 +1062,29 @@ export class FlyControls {
         this._manualCourseSteered = true;
       }
 
-      // If user manually steered course while touring (no explicit minimap routeQueue),
-      // re-orient the scenic tour target ahead of the user's new chosen heading!
       if (this._manualCourseSteered && this._idle > 1.2 && this.routeQueue.length === 0) {
         this._manualCourseSteered = false;
-        if (typeof this.onCourseReorient === 'function') {
+        if (this.autopilotLoop.length >= 3) {
+          this._syncNearestLoopParam(true);
+        } else if (typeof this.onCourseReorient === 'function') {
           const nextNode = this.onCourseReorient(p, this.moveYaw);
           if (nextNode) this.glideTarget = nextNode;
         }
       }
 
-      // Determine active autopilot destination: Minimap/Director routeQueue takes priority over tour glideTarget!
-      let activeGoal = this.routeQueue.length > 0 ? this.routeQueue[0] : (this._idle > 1.6 ? this.glideTarget : null);
+      // Priority: 1) one-shot routeQueue -> 2) closed editable `autopilotLoop` -> 3) fallback `glideTarget`
+      let activeGoal = null;
       if (this.routeQueue.length > 0) {
+        activeGoal = this.routeQueue[0];
         const wp = this.routeQueue[0];
         const distWp = Math.hypot(wp.x - p.x, (wp.y - p.y) * 0.6, wp.z - p.z);
         const acceptR = wp.via ? 155 : 92;
         if (distWp < acceptR) {
           const arrived = this.routeQueue.shift();
           if (this.routeQueue.length === 0) {
+            if (this.autopilotLoop.length >= 3) this._syncNearestLoopParam(true);
             if (typeof this.onRouteArrive === 'function') this.onRouteArrive(arrived);
             if (this._routeStopOnArrive) {
-              // Smoothly transition into stationary hover or gentle drift looking at the destination!
               this.glideSpeed = this.autoLook ? 18 : 0;
               this._routeStopOnArrive = false;
             }
@@ -823,7 +1093,14 @@ export class FlyControls {
         } else if (!wp.via && this.routeQueue.length === 1 && this._routeStopOnArrive && distWp < 320) {
           routeArrivalSlowdown = Math.max(0.18, distWp / 320);
         }
+      } else if (this._idle > 1.4) {
+        if (this.autopilotLoop.length >= 3) {
+          activeGoal = this._advanceAutopilotLoopCarrot(clampedDt, this.glideSpeed * spdMul);
+        } else {
+          activeGoal = this.glideTarget;
+        }
       }
+      activeAutopilotGoal = activeGoal;
 
       if (activeGoal && (!manualSteeringKeys && (!this._drag || decoupled))) {
         const dx = activeGoal.x - p.x;
@@ -918,17 +1195,17 @@ export class FlyControls {
     }
 
     // Smooth inertial velocity response scaled by Motion Style & Smoothness slider
-    const effVelRate = (preset.velRate * (this.damping / 7.5)) / smoothK;
-    const velAlpha = 1 - Math.exp(-clampedDt * Math.max(0.8, effVelRate));
+    const effVelRate = (preset.velRate * (this.damping / 7.5)) / Math.pow(smoothK, 1.15);
+    const velAlpha = 1 - Math.exp(-clampedDt * Math.max(0.28, effVelRate));
     this._vel.lerp(desiredVel, velAlpha);
 
-    // Long-range C2-smooth anticipatory obstacle & terrain avoidance
+    // Long-range C2-smooth anticipatory obstacle avoidance & smart building-crack gap threading
     const spd = this._vel.length();
-    if (spd > 1.5) {
+    if (spd > 0.25) {
       const moveDir = this._vel.clone().divideScalar(spd);
-      this._applyAnticipatoryAvoidance(moveDir, spd, clampedDt, preset);
+      this._applyAnticipatoryAvoidance(moveDir, spd, clampedDt, preset, activeAutopilotGoal);
     } else {
-      this._applyAnticipatoryAvoidance(this._travelForward(), 0, clampedDt, preset);
+      this._applyAnticipatoryAvoidance(this._travelForward(), 0, clampedDt, preset, activeAutopilotGoal);
     }
 
     // Soft wall cushion + multi-substep swept sphere resolution (prevents tunneling even at 0.5m radius!)

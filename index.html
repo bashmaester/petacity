@@ -75,9 +75,9 @@ body {
   display: flex; align-items: center; gap: 5px; width: 100%;
 }
 .head-actions .head-pill {
-  flex: 1; min-width: 0; width: auto; height: 29px; padding: 0 5px;
-  display: inline-flex; align-items: center; justify-content: center; gap: 3.5px;
-  font-size: 10.5px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap;
+  flex: 1; min-width: 0; width: auto; height: 29px; padding: 0;
+  display: inline-grid; place-items: center;
+  font-size: 14px; font-weight: 600;
 }
 .head-actions #b-ui {
   width: 29px; height: 29px; flex: none;
@@ -86,9 +86,9 @@ body {
   display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin: 2px 0 6px;
 }
 .cam-toggles .icon-btn {
-  width: 100%; height: 27px; padding: 0 4px;
-  display: inline-flex; align-items: center; justify-content: center; gap: 3px;
-  font-size: 10px; font-weight: 600; white-space: nowrap;
+  width: 100%; height: 27px; padding: 0;
+  display: inline-grid; place-items: center;
+  font-size: 13.5px;
 }
 .subsec-sep {
   margin: 8px 2px 5px; padding-top: 6px;
@@ -114,10 +114,14 @@ body {
   color: #ffffff;
 }
 
-/* Collapse panel down to just the corner #b-ui glyph button when hidden */
+/* Collapse panel down to an invisible corner hover zone when minimized;
+   only reveal #b-ui on hover over its corner area (or keyboard focus / H key) */
 body.ui-off .panel {
-  width: auto;
-  padding: 0;
+  left: 10px;
+  top: 10px;
+  width: 46px;
+  height: 46px;
+  padding: 8px;
   background: transparent;
   border-color: transparent;
   box-shadow: none;
@@ -140,9 +144,16 @@ body.ui-off #b-ui {
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   color: var(--text);
-  opacity: 0.62;
+  opacity: 0;
+  transform: scale(0.92);
+  transition: opacity 0.18s ease, transform 0.18s ease, background 0.15s, border-color 0.15s;
 }
-body.ui-off #b-ui:hover { opacity: 1; }
+body.ui-off .panel:hover #b-ui,
+body.ui-off #b-ui:hover,
+body.ui-off #b-ui:focus-visible {
+  opacity: 1;
+  transform: scale(1);
+}
 body.ui-off #keys {
   opacity: 0;
   pointer-events: none;
@@ -373,15 +384,22 @@ button.icon-btn.rec-on, button.action.rec-on {
   text-overflow: ellipsis;
 }
 .minimap-bar .mini-btn {
-  height: 20px;
-  min-width: 30px;
-  padding: 0 5px;
+  display: inline-grid;
+  place-items: center;
+  height: 21px;
+  min-width: 24px;
+  padding: 0 4px;
   border-radius: 6px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.07);
   color: var(--text);
-  font-size: 10px;
+  font-size: 11.5px;
+  line-height: 1;
+  font-variant-emoji: text;
   cursor: pointer;
+}
+.minimap-bar .mini-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
 }
 
 #radio-wrap {
@@ -489,7 +507,7 @@ button.icon-btn.rec-on, button.action.rec-on {
 }
 </style>
 </head>
-<body>
+<body class="ui-off">
 
 <canvas id="stage" aria-label="Fly-through of a procedural city"></canvas>
 <div id="vig"></div>
@@ -499,11 +517,11 @@ button.icon-btn.rec-on, button.action.rec-on {
 <aside class="panel">
   <div class="panel-head">
     <div class="head-actions">
-      <button id="b-glide" class="icon-btn head-pill" type="button" aria-pressed="false" aria-label="Autopilot glide mode" title="Start Autopilot Glide — drag or A/D to steer course smoothly, wheel for speed (G)">&#x2708;&#xFE0E; Auto</button>
-      <button id="b-radio" class="icon-btn head-pill" type="button" aria-pressed="false" aria-label="Toggle synth radio" title="Play / mute pure-code evolving generative synth radio (M)">&#x266B; Music</button>
-      <button id="b-fold-all" class="icon-btn head-pill" type="button" aria-label="Collapse or expand all subpanels" title="Collapse / expand all control subpanels">&#x229F; Fold</button>
-      <button id="b-export" class="icon-btn head-pill" type="button" aria-pressed="false" aria-label="Export or share exact state" title="Share compact URL or export JSON state">&#x2912; Share</button>
-      <button id="b-ui" class="icon-btn" type="button" aria-pressed="true" aria-label="Minimize interface" title="Minimize interface (H)">&#x25E7;</button>
+      <button id="b-glide" class="icon-btn head-pill" type="button" aria-pressed="false" aria-label="Autopilot glide mode" title="Start Autopilot Loop Glide — drag or A/D to steer smoothly, wheel for speed (G)">&#x2708;&#xFE0E;</button>
+      <button id="b-radio" class="icon-btn head-pill" type="button" aria-pressed="false" aria-label="Toggle synth radio" title="Play / mute pure-code evolving generative synth radio (M)">&#x266B;</button>
+      <button id="b-fold-all" class="icon-btn head-pill" type="button" aria-label="Collapse or expand all subpanels" title="Collapse / expand all control subpanels">&#x229F;</button>
+      <button id="b-export" class="icon-btn head-pill" type="button" aria-pressed="false" aria-label="Export or share exact state" title="Share compact URL, export JSON state, or export standalone HTML demo">&#x2912;</button>
+      <button id="b-ui" class="icon-btn" type="button" aria-pressed="false" aria-label="Show or minimize interface" title="Show interface (H)">&#x2630;</button>
     </div>
   </div>
 
@@ -511,9 +529,10 @@ button.icon-btn.rec-on, button.action.rec-on {
     <div id="export-box" aria-label="Exact state export and import">
       <input id="export-text" type="text" spellcheck="false" aria-label="Exact state share link or JSON" placeholder="Exact state URL or JSON…">
       <div class="export-actions">
-        <button id="b-copy-exact" type="button" class="action" aria-label="Copy exact state share URL" title="Copy exact state share URL">&#x2398; URL</button>
-        <button id="b-dl-json" type="button" class="action ghost" aria-label="Download exact state JSON" title="Download exact state JSON file">&#x2913; JSON</button>
-        <button id="b-apply-state" type="button" class="action ghost" aria-label="Import state from text field" title="Load pasted URL or JSON state">&#x21B5; Load</button>
+        <button id="b-copy-exact" type="button" class="action" aria-label="Copy exact state share URL" title="Copy exact state share URL">&#x2398;</button>
+        <button id="b-dl-json" type="button" class="action ghost" aria-label="Download exact state JSON" title="Download exact state JSON file">&#x2913;</button>
+        <button id="b-apply-state" type="button" class="action ghost" aria-label="Import state from text field" title="Load pasted URL or JSON state">&#x21B5;</button>
+        <button id="b-demo-html" type="button" class="action ghost" aria-label="Export standalone single-file HTML autoloop demo" title="Export standalone single-file HTML full-screen autoloop demo (panel hidden)">&#x29C9;</button>
       </div>
     </div>
 
@@ -593,17 +612,19 @@ button.icon-btn.rec-on, button.action.rec-on {
       <summary>Camera, Collider, Optics &amp; Minimap</summary>
       <div class="subpanel-body">
         <div id="minimap-wrap">
-          <canvas id="minimap" width="276" height="176" aria-label="Interactive city minimap showing sites and recorded camera path"></canvas>
+          <canvas id="minimap" width="276" height="176" aria-label="Interactive city minimap showing editable autopilot loop, sites, and recorded camera path"></canvas>
           <div class="minimap-bar">
-            <span id="minimap-label">Click a site to fly · Path &amp; keys live</span>
-            <button id="b-minimap-zoom" type="button" class="mini-btn" aria-label="Cycle minimap zoom" title="Cycle minimap zoom (1× / 2× / 3.5×)">1×</button>
+            <span id="minimap-label">Drag loop · Click line +pt · Right-click del</span>
+            <button id="b-loop-add" type="button" class="mini-btn" aria-label="Insert autopilot loop waypoint ahead of camera" title="Insert autopilot loop waypoint at current camera position">&#xFF0B;</button>
+            <button id="b-loop-reset" type="button" class="mini-btn" aria-label="Reset editable autopilot loop" title="Reset editable autopilot loop around city landmarks">&#x21BA;</button>
+            <button id="b-minimap-zoom" type="button" class="mini-btn" aria-label="Cycle minimap zoom" title="Cycle minimap zoom (1× / 2× / 3.5×)">&#x2315;</button>
           </div>
         </div>
         <div class="cam-toggles" role="group" aria-label="Camera gaze and collision toggles">
-          <button id="b-autolook" class="icon-btn" type="button" aria-pressed="false" aria-label="Autopilot POI auto-look" title="Autopilot POI Auto-Look — automatically gaze at nearby landmarks &amp; vistas while cruising slowly or hovering (O)">&#x29BF; Gaze</button>
-          <button id="b-freelook" class="icon-btn" type="button" aria-pressed="false" aria-label="Free look-around mode" title="Free look-around mode — decouple head gaze from flight travel direction (L)">&#x25CE; Free</button>
-          <button id="b-avoid" class="icon-btn on" type="button" aria-pressed="true" aria-label="Anticipatory obstacle avoidance" title="Anticipatory shallow-angle obstacle &amp; terrain avoidance: on (V)">&#x2934; Avoid</button>
-          <button id="b-collide" class="icon-btn on" type="button" aria-pressed="true" aria-label="Toggle collision detection" title="Collision: on — toggle noclip (C)">&#x2B21; Solid</button>
+          <button id="b-autolook" class="icon-btn" type="button" aria-pressed="false" aria-label="Autopilot POI auto-look" title="Autopilot POI Auto-Look — automatically gaze at nearby landmarks &amp; vistas while cruising slowly or hovering (O)">&#x29BF;</button>
+          <button id="b-freelook" class="icon-btn" type="button" aria-pressed="false" aria-label="Free look-around mode" title="Free look-around mode — decouple head gaze from flight travel direction (L)">&#x25CE;</button>
+          <button id="b-avoid" class="icon-btn on" type="button" aria-pressed="true" aria-label="Anticipatory obstacle and gap-seeking avoidance" title="Long-horizon gap-threading &amp; building-crack obstacle avoidance: on (V)">&#x2934;</button>
+          <button id="b-collide" class="icon-btn on" type="button" aria-pressed="true" aria-label="Toggle collision detection" title="Collision: on — toggle noclip (C)">&#x2B21;</button>
         </div>
         <div class="slider-grid">
           <div class="slider-row wide" title="Camera flight physics &amp; motion style">
@@ -616,25 +637,25 @@ button.icon-btn.rec-on, button.action.rec-on {
               <option value="4">Motion · Silk Airship (Slow Turns)</option>
             </select>
           </div>
-          <div class="slider-row wide" title="Camera flight &amp; cruise speed multiplier">
+          <div class="slider-row wide" title="Camera flight &amp; cruise speed multiplier (down to ultra-slow 0.02× micro-drift)">
             <span>&#x00BB;</span>
-            <input id="sl-camspeed" type="range" min="0.2" max="3.5" step="0.05" value="1" aria-label="Camera speed">
-            <em id="camspeed-label">1.0×</em>
+            <input id="sl-camspeed" type="range" min="0.02" max="3.5" step="0.01" value="1" aria-label="Camera speed">
+            <em id="camspeed-label">1.00×</em>
           </div>
-          <div class="slider-row wide" title="Camera collider radius (default 2.2m slips through narrow building cracks with zero wall clipping)">
+          <div class="slider-row wide" title="Camera collider radius (default 2.2m threads cleanly through narrow building gaps)">
             <span>&#x25EF;</span>
             <input id="sl-camrad" type="range" min="0.5" max="12" step="0.1" value="2.2" aria-label="Camera collider size">
             <em id="camrad-label">2.2m</em>
           </div>
-          <div class="slider-row wide" title="Camera inertia &amp; collision avoidance smoothness">
+          <div class="slider-row wide" title="Camera inertia &amp; long-range avoidance smoothness">
             <span>&#x223F;</span>
-            <input id="sl-camsmooth" type="range" min="0" max="1" step="0.02" value="0.72" aria-label="Camera motion smoothness">
-            <em id="camsmooth-label">72%</em>
+            <input id="sl-camsmooth" type="range" min="0" max="1.5" step="0.02" value="0.88" aria-label="Camera motion smoothness">
+            <em id="camsmooth-label">88%</em>
           </div>
-          <div class="slider-row wide" title="2nd-Order Angular Turn-Rate Damping (higher eliminates fast turns &amp; whip-pans)">
+          <div class="slider-row wide" title="Cascaded Angular Turn-Rate Damping (higher eliminates fast turns &amp; whip-pans)">
             <span>&#x21BA;</span>
-            <input id="sl-turnsmooth" type="range" min="0.2" max="3.5" step="0.05" value="1.25" aria-label="Turn rate damping">
-            <em id="turnsmooth-label">1.25×</em>
+            <input id="sl-turnsmooth" type="range" min="0.2" max="5" step="0.05" value="1.65" aria-label="Turn rate damping">
+            <em id="turnsmooth-label">1.65×</em>
           </div>
         </div>
 
@@ -1023,10 +1044,22 @@ button.icon-btn.rec-on, button.action.rec-on {
             <option value="5">93.1 FM · Hanging Sky-Gardens</option>
           </select>
           <button id="b-radio-play" type="button" class="icon-btn" aria-pressed="false" aria-label="Play or pause modular synth radio" title="Play / stop pure-code modular synth radio (M)">&#x25B6;</button>
-          <button id="b-radio-next" type="button" class="icon-btn" aria-label="Next radio station" title="Switch to next generative synth station">&#x23ED;</button>
+          <button id="b-radio-next" type="button" class="icon-btn" aria-label="Next radio station" title="Crossfade to next generative synth station">&#x23ED;</button>
           <button id="b-radio-seed" type="button" class="icon-btn" aria-label="New generative music variation" title="Reseed generative melody &amp; harmonic variation">&#x21BB;</button>
         </div>
+        <div class="drop-row" style="margin-bottom: 6px;" title="Playlist Auto-Play / Auto-DJ mode (smooth reverb &amp; filter crossfades at set intervals)">
+          <select id="sel-radio-playlist" aria-label="Radio playlist auto-play mode" title="Playlist Auto-DJ mode">
+            <option value="seq" selected>Playlist · Auto-Advance (Crossfade)</option>
+            <option value="shuffle">Playlist · Shuffle All (Crossfade)</option>
+            <option value="loop">Playlist · Hold Single Station</option>
+          </select>
+        </div>
         <div class="slider-grid">
+          <div class="slider-row wide" title="Playlist Auto-DJ track crossfade interval (seconds per station)">
+            <span>&#x29D6;</span>
+            <input id="sl-radio-interval" type="range" min="20" max="240" step="5" value="75" aria-label="Playlist auto-switch interval">
+            <em id="radio-interval-label">1m 15s</em>
+          </div>
           <div class="slider-row wide" title="Modular Radio Master Volume">
             <span>&#x266B;</span>
             <input id="sl-radio-vol" type="range" min="0" max="1" step="0.02" value="0.68" aria-label="Radio master volume">
@@ -1175,16 +1208,39 @@ button.icon-btn.rec-on, button.action.rec-on {
           <div class="slider-row wide" title="Old-film grain, specks &amp; scratches"><span>&#x2338;</span><input id="sl-film" type="range" min="0" max="1.5" step="0.02" value="0.16" aria-label="Old film grain, dust specks and scratches"></div>
         </div>
 
-        <div class="cap-row" style="margin-top: 7px;" title="Clean HUD-free scene render export (PNG still or WebM/MP4 video)">
-          <select id="sel-res" aria-label="Render export resolution" title="Still PNG render resolution">
+        <div class="cap-row" style="margin-top: 7px;" title="Clean HUD-free scene render export (PNG still, WebM/MP4 video with synth soundtrack, or standalone HTML autoloop demo)">
+          <select id="sel-res" aria-label="Render export resolution" title="Still PNG &amp; Video render resolution">
             <option value="view">Viewport</option>
+            <option value="720p">720p HD</option>
             <option value="1080p" selected>1080p HD</option>
+            <option value="1440p">1440p QHD</option>
             <option value="2x">2× Super</option>
             <option value="4k">4K UHD</option>
           </select>
-          <button id="b-snap" type="button" class="action" aria-label="Export clean PNG render" title="Export clean PNG still render">&#x2316; PNG</button>
-          <button id="b-vid" type="button" class="action ghost" aria-pressed="false" aria-label="Record live scene video" title="Start / stop live WebM video capture">&#x25CF; Vid</button>
-          <button id="b-path-render" type="button" class="icon-btn" aria-label="Render camera path to video" title="Play recorded camera path &amp; export video" disabled>&#x23FA;</button>
+          <button id="b-snap" type="button" class="action" aria-label="Export clean PNG render" title="Export clean PNG still render">&#x2316;</button>
+          <button id="b-vid" type="button" class="action ghost" aria-pressed="false" aria-label="Record live scene video" title="Start / stop high-bitrate scene video capture">&#x23FA;</button>
+          <button id="b-vid-audio" type="button" class="icon-btn on" aria-pressed="true" aria-label="Include synth soundtrack in video export" title="Record pure-code synth soundtrack in video export: on">&#x266B;</button>
+          <button id="b-path-render" type="button" class="icon-btn" aria-label="Render camera path to video" title="Play recorded camera path &amp; export high-bitrate video" disabled>&#x25B9;</button>
+          <button id="b-demo-export" type="button" class="icon-btn" aria-label="Export standalone single-file HTML autoloop demo" title="Export standalone single-file HTML full-screen autoloop demo (panel hidden)">&#x29C9;</button>
+        </div>
+        <div class="cap-row" title="Video export quality, frame rate &amp; codec settings">
+          <select id="sel-vid-fps" aria-label="Video export frame rate" title="Video export frame rate">
+            <option value="24">24 fps</option>
+            <option value="30">30 fps</option>
+            <option value="60" selected>60 fps</option>
+          </select>
+          <select id="sel-vid-quality" aria-label="Video export bitrate quality" title="Video export bitrate / quality preset">
+            <option value="standard">Std · 16 Mbps</option>
+            <option value="high">High · 36 Mbps</option>
+            <option value="ultra" selected>Ultra · 68 Mbps</option>
+            <option value="master">Master · 115 Mbps</option>
+          </select>
+          <select id="sel-vid-codec" aria-label="Video export format and codec" title="Video export container &amp; codec">
+            <option value="auto" selected>Auto Codec</option>
+            <option value="vp9">WebM VP9</option>
+            <option value="mp4">MP4 H.264</option>
+            <option value="vp8">WebM VP8</option>
+          </select>
         </div>
         <div class="cap-row" title="Camera path recorder — record live flight (R), add keyframe (K), replay smoothly (P)">
           <button id="b-rec" type="button" class="icon-btn" aria-pressed="false" aria-label="Record camera path" title="Record live camera flight path (R)">&#x25CF;</button>

@@ -26,6 +26,7 @@ import { makeMinimap } from './minimap.js';
 import { ModularRadioEngine, RADIO_STATIONS } from './audio.js';
 import { MovieSetDirector } from './director.js';
 import { registerPetacityWebMCP } from './webmcp.js';
+import { exportStandaloneDemoHTML } from './demo-export.js';
 
 // Colours are authored as plain sRGB and written straight out — keep THREE's
 // colour management out of the way.
@@ -108,10 +109,13 @@ function fatal(err) {
 window.addEventListener('error', (e) => fatal(e.error || e.message));
 window.addEventListener('unhandledrejection', (e) => fatal(e.reason));
 
+const demoBoot = (typeof window !== 'undefined' && window.__PETACITY_DEMO_BOOT__) ? window.__PETACITY_DEMO_BOOT__ : null;
 const params = new URLSearchParams(location.search);
 const hashParams = new URLSearchParams((location.hash || '').replace(/^#/, ''));
 const initialStateToken = hashParams.get('s') || params.get('s');
-const initialExact = initialStateToken ? decodeExactState(initialStateToken) : null;
+const initialExact = initialStateToken
+  ? decodeExactState(initialStateToken)
+  : (demoBoot && demoBoot.state ? normalizeExactState(demoBoot.state) : null);
 
 if (initialExact && initialExact.custom) {
   syncCustomLook(initialExact.custom);
@@ -196,19 +200,19 @@ let trafficSpeed = initialExact
   : (params.get('tsp') !== null ? clampFloat(params.get('tsp'), 0, 3, 1) : 1);
 let camSpeed = initialExact
   ? (initialExact.camSpeed ?? 1)
-  : (params.get('csp') !== null ? clampFloat(params.get('csp'), 0.2, 3.5, 1) : 1);
+  : (params.get('csp') !== null ? clampFloat(params.get('csp'), 0.02, 5.0, 1) : 1);
 let camRadius = initialExact
   ? (initialExact.camRadius ?? 2.2)
   : (params.get('crad') !== null ? clampFloat(params.get('crad'), 0.5, 12, 2.2) : 2.2);
 let camSmooth = initialExact
-  ? (initialExact.camSmooth ?? 0.72)
-  : (params.get('csm') !== null ? clampFloat(params.get('csm'), 0, 1, 0.72) : 0.72);
+  ? (initialExact.camSmooth ?? 0.88)
+  : (params.get('csm') !== null ? clampFloat(params.get('csm'), 0, 1.5, 0.88) : 0.88);
 let camStyle = initialExact
   ? (initialExact.camStyle ?? 0)
   : clampInt(params.get('cst'), 0, 4, 0);
 let turnSmooth = initialExact
-  ? (initialExact.turnSmooth ?? 1.25)
-  : (params.get('tsm') !== null ? clampFloat(params.get('tsm'), 0.2, 3.5, 1.25) : 1.25);
+  ? (initialExact.turnSmooth ?? 1.65)
+  : (params.get('tsm') !== null ? clampFloat(params.get('tsm'), 0.2, 5.0, 1.65) : 1.65);
 let pathSmooth = initialExact ? (initialExact.pathSmooth ?? 0.65) : 0.65;
 let heightScale = initialExact ? initialExact.heightScale : 1;
 
@@ -265,8 +269,8 @@ const tune = initialExact
     };
 let cloudEditLayer = 1;
 const radioState = initialExact && initialExact.radio
-  ? { station: 0, volume: 0.68, space: 0.9, warmth: 0.8, pulse: 0.55, react: 0.65, ...initialExact.radio }
-  : { station: 0, volume: 0.68, space: 0.9, warmth: 0.8, pulse: 0.55, react: 0.65 };
+  ? { station: 0, volume: 0.68, space: 0.9, warmth: 0.8, pulse: 0.55, react: 0.65, playlistMode: 'seq', playlistInterval: 75, ...initialExact.radio }
+  : { station: 0, volume: 0.68, space: 0.9, warmth: 0.8, pulse: 0.55, react: 0.65, playlistMode: 'seq', playlistInterval: 75 };
 let weatherMode = initialExact ? initialExact.weatherMode : clampInt(params.get('w'), 0, 6, 0);
 let dustLevel = initialExact ? initialExact.dustLevel : 0.6;
 const initGrade = LOOK_BY_ID[lookId].grade || { bloom: 0.85, lens: 0.45, contrast: 1.06, temp: 0, film: 0.16 };
@@ -365,8 +369,15 @@ function boot() {
     warmth: radioState.warmth,
     pulse: radioState.pulse,
     cityReactivity: radioState.react,
+    playlistMode: radioState.playlistMode || 'seq',
+    playlistInterval: radioState.playlistInterval || 75,
     seed: (seed % 997) + 1,
   });
+  radioEngine.onStationAutoSwitch = (st, idx) => {
+    radioState.station = idx;
+    syncRadioUI();
+    flash(`\u266B ${st.name}`);
+  };
   const radioVizCanvas = $('#radio-viz');
   const exporter = makeSceneExporter({
     renderer,
@@ -418,12 +429,16 @@ function boot() {
   let city = null;
   let cityCollider = null;
   let poiList = [];
-  let glideOn = initialExact ? !!initialExact.glide : false;
+  let glideOn = (demoBoot && demoBoot.forceAutoloop) ? true : (initialExact ? !!initialExact.glide : false);
   let autoLookOn = initialExact ? !!initialExact.autoLook : false;
   let freelookOn = initialExact ? !!initialExact.freelook : false;
   let collideOn = initialExact ? initialExact.collide !== false : true;
   let avoidOn = initialExact ? initialExact.avoidance !== false : true;
   let timeCycleOn = initialExact ? !!initialExact.dayCycle : false;
+  let vidAudioOn = true;
+  let userLoopOverride = (initialExact && Array.isArray(initialExact.autoLoop) && initialExact.autoLoop.length >= 3)
+    ? initialExact.autoLoop.map((p) => ({ ...p }))
+    : null;
   let activePresetId = '';
 
   controls.speedMul = camSpeed;
@@ -490,20 +505,124 @@ function boot() {
     return nodes[bestIdx];
   };
 
+  function buildDefaultAutopilotLoop() {
+    if (!city) return [];
+    const span = Math.max(460, cityRadius * CELL * 0.78);
+    const candidates = [];
+    if (city.mediaZone) {
+      candidates.push({ name: city.mediaZone.name, x: city.mediaZone.x, z: city.mediaZone.z, baseY: 118 });
+    }
+    for (const lm of (city.landmarks || []).slice(0, 6)) {
+      candidates.push({
+        name: lm.name,
+        x: lm.x + (lm.r || 36) * 1.4,
+        z: lm.z + (lm.r || 36) * 1.1,
+        baseY: Math.max(92, Math.min(205, (lm.h || 110) * 0.62)),
+      });
+    }
+    for (const pl of (city.places || []).slice(0, 4)) {
+      candidates.push({
+        name: pl.name,
+        x: pl.x,
+        z: pl.z,
+        baseY: 108,
+      });
+    }
+    if (city.harbor) {
+      candidates.push({ name: city.harbor.name || 'Harbor', x: city.harbor.x * 0.85, z: city.harbor.z * 0.85, baseY: 112 });
+    }
+    if (city.spaceport) {
+      candidates.push({ name: city.spaceport.name || 'Spaceport', x: city.spaceport.x * 0.72, z: city.spaceport.z * 0.72, baseY: 138 });
+    }
+
+    // Build 8 angular sectors around city core so the closed loop is smooth and non-self-intersecting
+    const loop = [];
+    const nSectors = 8;
+    for (let s = 0; s < nSectors; s++) {
+      const targetAng = -Math.PI + (s / nSectors) * Math.PI * 2;
+      let best = null;
+      let bestDiff = 0.52;
+      for (const c of candidates) {
+        const r = Math.hypot(c.x, c.z);
+        if (r < 140 || r > span * 1.65) continue;
+        let diff = Math.atan2(c.z, c.x) - targetAng;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        if (Math.abs(diff) < bestDiff) {
+          bestDiff = Math.abs(diff);
+          best = c;
+        }
+      }
+      const rad = span * (0.72 + 0.18 * Math.sin(s * 1.7));
+      const wx = best ? best.x : Math.cos(targetAng) * rad;
+      const wz = best ? best.z : Math.sin(targetAng) * rad;
+      const terrY = cityCollider && cityCollider.groundHeightAt ? cityCollider.groundHeightAt(wx, wz) : 0;
+      const wy = Math.max(terrY + 58, (best ? best.baseY : 122) * heightScale);
+      const curved = bendWorldPoint(wx, wy, wz, worldCurve, U.uPlanetR.value);
+      loop.push({
+        name: best ? best.name : `Loop ${s + 1}`,
+        x: Math.round(curved.x * 10) / 10,
+        y: Math.round(curved.y * 10) / 10,
+        z: Math.round(curved.z * 10) / 10,
+      });
+    }
+    return loop;
+  }
+
+  function syncAutopilotLoop() {
+    const loop = (userLoopOverride && userLoopOverride.length >= 3)
+      ? userLoopOverride
+      : buildDefaultAutopilotLoop();
+    controls.setAutopilotLoop(loop);
+    return loop;
+  }
+
   const minimap = makeMinimap({
     canvas: $('#minimap'),
     labelEl: $('#minimap-label'),
     onSelectSpot: (spot, opts) => {
       enqueueSpotRoute(spot, opts || {});
     },
+    onLoopEdited: (updatedLoop) => {
+      userLoopOverride = updatedLoop.map((p) => ({ ...p }));
+      syncURL();
+    },
   });
+  minimap.setControls(controls);
+
   const minimapZooms = [1.0, 2.0, 3.5];
   let minimapZoomIdx = 0;
   $('#b-minimap-zoom').onclick = () => {
     minimapZoomIdx = (minimapZoomIdx + 1) % minimapZooms.length;
     const z = minimapZooms[minimapZoomIdx];
     minimap.setZoom(z);
-    $('#b-minimap-zoom').textContent = `${z}\u00D7`;
+    $('#b-minimap-zoom').title = `Cycle minimap zoom (current: ${z}\u00D7)`;
+    flash(`Minimap zoom \u00B7 ${z}\u00D7`);
+  };
+  $('#b-loop-add').onclick = () => {
+    const loop = controls.autopilotLoop;
+    if (!Array.isArray(loop) || loop.length < 3) return;
+    // Insert a new waypoint 160m ahead of camera onto the nearest loop segment
+    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+    const wx = camera.position.x + fwd.x * 140;
+    const wy = Math.max(36, camera.position.y + fwd.y * 40);
+    const wz = camera.position.z + fwd.z * 140;
+    let bestIdx = 0;
+    let bestD2 = Infinity;
+    for (let i = 0; i < loop.length; i++) {
+      const dx = loop[i].x - wx;
+      const dz = loop[i].z - wz;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < bestD2) { bestD2 = d2; bestIdx = i; }
+    }
+    minimap.insertLoopNodeAfter(bestIdx, wx, wz, wy);
+    flash(`Added loop waypoint #${controls.autopilotLoop.length}`);
+  };
+  $('#b-loop-reset').onclick = () => {
+    userLoopOverride = null;
+    const loop = syncAutopilotLoop();
+    syncURL();
+    flash(`Reset autopilot loop (${loop.length} waypoints)`);
   };
 
   function computePlanetRadius() {
@@ -630,6 +749,7 @@ function boot() {
     U.uWindStrength.value = tune.windStrength ?? 1.0;
     buildPois();
     minimap.setCity(city, LOOK_BY_ID[lookId]);
+    syncAutopilotLoop();
     syncGlideNode();
     syncURL();
   }
@@ -751,6 +871,12 @@ function boot() {
     $('#b-radio-play').setAttribute('aria-pressed', String(on));
     $('#b-radio-play').textContent = on ? '\u23F8' : '\u25B6';
     $('#sel-radio-station').value = String(radioEngine.stationIndex);
+    $('#sel-radio-playlist').value = String(radioState.playlistMode || 'seq');
+    $('#sl-radio-interval').value = String(radioState.playlistInterval || 75);
+    const intSec = Math.round(radioState.playlistInterval || 75);
+    $('#radio-interval-label').textContent = (radioState.playlistMode === 'loop')
+      ? 'Hold'
+      : (intSec >= 60 ? `${Math.floor(intSec / 60)}m ${String(intSec % 60).padStart(2, '0')}s` : `${intSec}s`);
     $('#sl-radio-vol').value = String(radioState.volume);
     $('#sl-radio-space').value = String(radioState.space);
     $('#sl-radio-warmth').value = String(radioState.warmth);
@@ -1087,6 +1213,7 @@ function boot() {
       custom: LOOK_BY_ID.custom.customConfig ? { ...LOOK_BY_ID.custom.customConfig } : { ...DEFAULT_CUSTOM },
       camera: { ...controls.getPose(), fov: camFov },
       bookmarks,
+      autoLoop: userLoopOverride && userLoopOverride.length >= 3 ? userLoopOverride : undefined,
       path: pathRecorder.hasPath ? pathRecorder.toJSON() : undefined,
     });
   }
@@ -1162,6 +1289,15 @@ function boot() {
       radioEngine.setWarmth(radioState.warmth);
       radioEngine.setPulse(radioState.pulse);
       radioEngine.setCityReactivity(radioState.react);
+      radioEngine.setPlaylist({
+        mode: radioState.playlistMode || 'seq',
+        interval: radioState.playlistInterval || 75,
+      });
+    }
+    if (Array.isArray(st.autoLoop) && st.autoLoop.length >= 3) {
+      userLoopOverride = st.autoLoop.map((p) => ({ ...p }));
+    } else {
+      userLoopOverride = null;
     }
     Object.assign(postState, st.post);
     if (st.custom) {
@@ -1176,6 +1312,7 @@ function boot() {
     else {
       syncWorldGeometry();
       applyHeight();
+      syncAutopilotLoop();
       if (vehicles && vehicles.setTrafficSpeed) vehicles.setTrafficSpeed(trafficSpeed);
     }
     refreshLook(false);
@@ -1396,6 +1533,7 @@ function boot() {
       const minimal = { ...st };
       delete minimal.path;
       delete minimal.bookmarks;
+      delete minimal.autoLoop;
       token = encodeExactState(minimal);
     }
     return token;
@@ -1511,12 +1649,32 @@ function boot() {
     b.setAttribute('aria-pressed', String(!off));
     b.title = (off ? 'Show' : 'Hide') + ' interface (H)';
   };
+  async function triggerStandaloneDemoExport() {
+    flash('Bundling single-file HTML autoloop demo…');
+    try {
+      const demoState = {
+        ...captureExactState(),
+        glide: true,
+        autoLoop: Array.isArray(controls.autopilotLoop) && controls.autopilotLoop.length >= 3
+          ? controls.autopilotLoop
+          : undefined,
+      };
+      const fname = `petacity-demo-${seed}-${lookId}.html`;
+      const res = await exportStandaloneDemoHTML({ demoState, filename: fname });
+      flash(`Exported standalone demo · ${(res.byteLength / (1024 * 1024)).toFixed(2)} MB HTML`);
+    } catch (err) {
+      flash('HTML demo export failed: ' + ((err && err.message) || err));
+    }
+  }
+  $('#b-demo-html').onclick = triggerStandaloneDemoExport;
+  $('#b-demo-export').onclick = triggerStandaloneDemoExport;
+
   $('#b-ui').onclick = toggleUI;
   $('#b-fold-all').onclick = () => {
     const panels = Array.from(document.querySelectorAll('details.subpanel'));
     const anyOpen = panels.some((d) => d.open);
     panels.forEach((d) => { d.open = !anyOpen; });
-    $('#b-fold-all').textContent = anyOpen ? '\u229E Open' : '\u229F Fold';
+    $('#b-fold-all').textContent = anyOpen ? '\u229E' : '\u229F';
     flash(anyOpen ? 'Collapsed subpanels' : 'Expanded all subpanels');
   };
   const toggleTimeCycle = () => {
@@ -1537,11 +1695,14 @@ function boot() {
   $('#b-radio').onclick = toggleRadio;
   $('#b-radio-play').onclick = toggleRadio;
   $('#b-radio-next').onclick = () => {
-    const st = radioEngine.nextStation();
-    radioState.station = radioEngine.stationIndex;
-    if (!radioEngine.playing) radioEngine.start();
+    const wasPlaying = radioEngine.playing;
+    const st = radioEngine.nextStation({ smooth: wasPlaying });
+    if (!wasPlaying) {
+      radioState.station = radioEngine.stationIndex;
+      radioEngine.start();
+    }
     syncRadioUI();
-    flash(`\u266B ${st.name}`);
+    flash(wasPlaying ? `\u266B Crossfading \u2192 ${st.name}` : `\u266B ${st.name}`);
   };
   $('#b-radio-seed').onclick = () => {
     radioEngine.reseed();
@@ -1555,6 +1716,21 @@ function boot() {
     syncRadioUI();
     flash(`\u266B ${st.name}`);
   };
+  $('#sel-radio-playlist').onchange = (ev) => {
+    const mode = ['loop', 'seq', 'shuffle'].includes(ev.target.value) ? ev.target.value : 'seq';
+    radioState.playlistMode = mode;
+    radioEngine.setPlaylist({ mode });
+    syncRadioUI();
+    flash(mode === 'shuffle'
+      ? '\u266B Playlist · Shuffle Crossfade'
+      : (mode === 'seq' ? '\u266B Playlist · Sequential Crossfade' : '\u266B Playlist · Hold Current Station'));
+  };
+  bindSlider($('#sl-radio-interval'), (v) => {
+    const sec = clampInt(v, 20, 240, 75);
+    radioState.playlistInterval = sec;
+    radioEngine.setPlaylist({ interval: sec });
+    syncRadioUI();
+  });
 
   window.addEventListener('keydown', (e) => {
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) return;
@@ -1600,7 +1776,7 @@ function boot() {
     flash(`Camera · ${CAMERA_STYLE_NAMES[camStyle] || 'Cinema Drone'}`);
   };
   bindSlider($('#sl-camspeed'), (v) => {
-    camSpeed = clampFloat(v, 0.2, 3.5, 1);
+    camSpeed = clampFloat(v, 0.02, 5.0, 1);
     controls.speedMul = camSpeed;
     syncFeatureLabels();
   });
@@ -1610,12 +1786,12 @@ function boot() {
     syncFeatureLabels();
   });
   bindSlider($('#sl-camsmooth'), (v) => {
-    camSmooth = clampFloat(v, 0, 1, 0.72);
+    camSmooth = clampFloat(v, 0, 1.5, 0.88);
     controls.smoothness = camSmooth;
     syncFeatureLabels();
   });
   bindSlider($('#sl-turnsmooth'), (v) => {
-    turnSmooth = clampFloat(v, 0.2, 3.5, 1.25);
+    turnSmooth = clampFloat(v, 0.2, 5.0, 1.65);
     controls.turnSmooth = turnSmooth;
     syncFeatureLabels();
   });
@@ -2081,8 +2257,39 @@ function boot() {
     const b = $('#b-vid');
     b.classList.toggle('rec-on', on);
     b.setAttribute('aria-pressed', String(on));
-    b.textContent = on ? '\u25A0 Stop' : '\u25CF Vid';
+    b.textContent = on ? '\u25A0' : '\u23FA';
+    b.title = on ? 'Stop scene video recording' : 'Start high-bitrate scene video capture';
+    const ba = $('#b-vid-audio');
+    ba.classList.toggle('on', vidAudioOn);
+    ba.setAttribute('aria-pressed', String(vidAudioOn));
+    ba.title = `Record pure-code synth soundtrack in video export: ${vidAudioOn ? 'on' : 'off'}`;
   }
+
+  function buildVideoCaptureOpts(filename) {
+    const resPreset = $('#sel-res').value || '1080p';
+    const fps = clampInt($('#sel-vid-fps').value, 24, 60, 60);
+    const quality = $('#sel-vid-quality').value || 'ultra';
+    const codec = $('#sel-vid-codec').value || 'auto';
+    let audioStream = null;
+    if (vidAudioOn) {
+      audioStream = radioEngine.getAudioStream({ autoStart: true });
+      syncRadioUI();
+    }
+    return {
+      fps,
+      resolution: resPreset,
+      quality,
+      codec,
+      audioStream,
+      filename,
+    };
+  }
+
+  $('#b-vid-audio').onclick = () => {
+    vidAudioOn = !vidAudioOn;
+    syncVidBtn();
+    flash(vidAudioOn ? '\u266B Video export sound: ON' : 'Video export sound: muted');
+  };
 
   function togglePathRecord() {
     if (renderingPathVideo) return;
@@ -2202,12 +2409,13 @@ function boot() {
       const res = await exporter.stopVideoCapture();
       syncVidBtn();
       syncPathUI();
-      flash(res ? 'Saved scene video capture' : 'Video capture stopped');
+      flash(res ? `Saved ${res.filename}` : 'Video capture stopped');
     } else {
-      const fname = `petacity-${seed}-${lookId}.webm`;
-      const started = exporter.startVideoCapture({ fps: 60, filename: fname });
+      const resTag = $('#sel-res').value || '1080p';
+      const fname = `petacity-${seed}-${lookId}-${resTag}.webm`;
+      const started = exporter.startVideoCapture(buildVideoCaptureOpts(fname));
       syncVidBtn();
-      flash(`Recording ${started.ext.toUpperCase()} scene video…`);
+      flash(`Recording ${started.ext.toUpperCase()} (${resTag}${started.hasAudio ? ' + Sound' : ''})…`);
     }
   };
 
@@ -2219,12 +2427,13 @@ function boot() {
     pathRecorder.loop = false;
     renderingPathVideo = true;
     pathRecorder.applyAt(0, camera, controls);
-    const fname = `petacity-path-${seed}-${lookId}.webm`;
-    exporter.startVideoCapture({ fps: 60, filename: fname });
+    const resTag = $('#sel-res').value || '1080p';
+    const fname = `petacity-path-${seed}-${lookId}-${resTag}.webm`;
+    const started = exporter.startVideoCapture(buildVideoCaptureOpts(fname));
     pathRecorder.play(true);
     syncVidBtn();
     syncPathUI();
-    flash(`Rendering ${pathRecorder.duration.toFixed(1)}s camera path to video…`);
+    flash(`Rendering ${pathRecorder.duration.toFixed(1)}s path (${resTag}${started.hasAudio ? ' + Sound' : ''})…`);
   };
   syncPathUI();
   syncVidBtn();
@@ -2283,14 +2492,16 @@ function boot() {
     controls.syncFromCamera();
     controls.setGlide(glideOn);
     const b = $('#b-glide');
-    b.textContent = '\u2708\uFE0E Auto';
+    b.textContent = '\u2708\uFE0E';
     b.classList.toggle('on', glideOn);
     b.setAttribute('aria-pressed', String(glideOn));
-    b.title = (glideOn ? 'Stop' : 'Start') + ' Glide mode — drag to steer, wheel for speed (G)';
+    b.title = (glideOn ? 'Stop' : 'Start') + ' Autopilot Loop Glide — drag to steer, wheel for speed (G)';
     if (announce) {
       if (glideOn) {
         const n = syncGlideNode();
-        flash(n ? `\u2708\uFE0E Glide · ${n.name}` : '\u2708\uFE0E Glide on');
+        flash(controls.autopilotLoop.length >= 3
+          ? `\u2708\uFE0E Autopilot Loop (${controls.autopilotLoop.length} pts)`
+          : (n ? `\u2708\uFE0E Glide · ${n.name}` : '\u2708\uFE0E Glide on'));
       } else {
         flash('Glide off');
       }
@@ -2314,7 +2525,7 @@ function boot() {
     controls.collision = collideOn;
     if (vehicles) vehicles.setCollision(collideOn);
     const b = $('#b-collide');
-    b.textContent = collideOn ? '\u2B21 Solid' : '\u25CC Noclip';
+    b.textContent = collideOn ? '\u2B21' : '\u25CC';
     b.classList.toggle('on', collideOn);
     b.setAttribute('aria-pressed', String(collideOn));
     b.title = (collideOn ? 'Collision: on — toggle noclip' : 'Collision: off (noclip) — enable collision') + ' (C)';
@@ -2607,6 +2818,7 @@ function boot() {
   /* ------------------------------------------------------------- loop */
 
   function resize() {
+    if (exporter && exporter.lockedResolution) return;
     const w = window.innerWidth;
     const h = window.innerHeight;
     renderer.setSize(w, h, false);
@@ -2669,7 +2881,7 @@ function boot() {
       } else {
         const directorDriving = Boolean(director._activeShot || director._followSpec || director._orbitSpec);
         if (!directorDriving) {
-          if (glideOn && controls.glideTarget && controls.routeQueue.length === 0) {
+          if (glideOn && controls.autopilotLoop.length < 3 && controls.glideTarget && controls.routeQueue.length === 0) {
             const dx = camera.position.x - controls.glideTarget.x;
             const dy = camera.position.y - controls.glideTarget.y;
             const dz = camera.position.z - controls.glideTarget.z;
@@ -2813,20 +3025,38 @@ function boot() {
       camStyle = clampInt(patch.motionStyle, 0, 4, 0);
       controls.motionStyle = camStyle;
     }
+    if (patch.camSpeed !== undefined) {
+      camSpeed = clampFloat(patch.camSpeed, 0.02, 5.0, 1);
+      controls.speedMul = camSpeed;
+    }
     if (patch.camSmooth !== undefined) {
-      camSmooth = clampFloat(patch.camSmooth, 0, 3, 0.72);
+      camSmooth = clampFloat(patch.camSmooth, 0, 6.0, 0.88);
       controls.smoothness = camSmooth;
     }
     if (patch.turnSmooth !== undefined) {
-      turnSmooth = clampFloat(patch.turnSmooth, 0.2, 3.5, 1.25);
+      turnSmooth = clampFloat(patch.turnSmooth, 0.2, 6.0, 1.65);
       controls.turnSmooth = turnSmooth;
     }
     if (patch.glide !== undefined) setGlideState(!!patch.glide, false);
     if (patch.autoLook !== undefined) setAutoLookState(!!patch.autoLook, false);
     if (patch.freelook !== undefined) setFreelookState(!!patch.freelook, false);
+    if (Array.isArray(patch.autoLoop) && patch.autoLoop.length >= 3) {
+      userLoopOverride = patch.autoLoop.map((p) => ({ ...p }));
+      syncAutopilotLoop();
+    }
     if (patch.radioStation !== undefined) {
       radioEngine.setStation(clampInt(patch.radioStation, 0, RADIO_STATIONS.length - 1, 0));
       radioState.station = radioEngine.stationIndex;
+    }
+    if (patch.playlistMode !== undefined) {
+      if (['loop', 'seq', 'shuffle'].includes(patch.playlistMode)) {
+        radioState.playlistMode = patch.playlistMode;
+        radioEngine.setPlaylist({ mode: patch.playlistMode });
+      }
+    }
+    if (patch.playlistInterval !== undefined) {
+      radioState.playlistInterval = clampInt(patch.playlistInterval, 15, 300, 75);
+      radioEngine.setPlaylist({ interval: radioState.playlistInterval });
     }
     if (patch.radioVol !== undefined) { radioState.volume = clampFloat(patch.radioVol, 0, 1.2, 0.68); radioEngine.setVolume(radioState.volume); }
     if (patch.radioSpace !== undefined) { radioState.space = clampFloat(patch.radioSpace, 0, 1.5, 0.9); radioEngine.setSpace(radioState.space); }
@@ -2839,6 +3069,18 @@ function boot() {
     syncAllSliders();
   }
 
+  // Start minimized (`ui-off`) by default; allow `?ui=1` query override if explicitly requested
+  if (params.get('ui') === '1' && !(demoBoot && demoBoot.uiHidden)) {
+    document.body.classList.remove('ui-off');
+  } else {
+    document.body.classList.add('ui-off');
+  }
+  const bUiInit = $('#b-ui');
+  const uiInitiallyOff = document.body.classList.contains('ui-off');
+  bUiInit.textContent = uiInitiallyOff ? '\u2630' : '\u25E7';
+  bUiInit.setAttribute('aria-pressed', String(!uiInitiallyOff));
+  bUiInit.title = (uiInitiallyOff ? 'Show' : 'Hide') + ' interface (H)';
+
   syncAllSliders();
   rebuild();
   refreshLook(!initialExact);
@@ -2846,9 +3088,29 @@ function boot() {
   setCollisionState(collideOn, false);
   setFreelookState(freelookOn, false);
   setAutoLookState(autoLookOn, false);
-  if (glideOn) setGlideState(true, false);
   if (initialExact && initialExact.camera) {
     controls.setPose(initialExact.camera);
+  }
+  if (demoBoot && demoBoot.forceAutoloop) {
+    if (pathRecorder.hasPath) {
+      pathRecorder.loop = true;
+      pathRecorder.play(true);
+      syncPathUI();
+    } else {
+      setGlideState(true, false);
+    }
+    const startDemoAudioOnce = () => {
+      if (!radioEngine.playing) {
+        radioEngine.start();
+        syncRadioUI();
+      }
+      window.removeEventListener('pointerdown', startDemoAudioOnce);
+      window.removeEventListener('keydown', startDemoAudioOnce);
+    };
+    window.addEventListener('pointerdown', startDemoAudioOnce, { once: true });
+    window.addEventListener('keydown', startDemoAudioOnce, { once: true });
+  } else if (glideOn) {
+    setGlideState(true, false);
   }
   registerPetacityWebMCP({
     director,
@@ -2861,6 +3123,7 @@ function boot() {
     radio: radioEngine,
     recorder: pathRecorder,
     exporter,
+    exportDemoHTML: triggerStandaloneDemoExport,
     enqueueSpotRoute,
   });
   $('#loading').classList.add('out');

@@ -526,13 +526,20 @@ export class CameraPathRecorder {
   }
 }
 
+export const VIDEO_QUALITY_PRESETS = {
+  standard: { label: 'Standard (16 Mbps)', bps: 16_000_000 },
+  high: { label: 'High HD (36 Mbps)', bps: 36_000_000 },
+  ultra: { label: 'Ultra Studio (68 Mbps)', bps: 68_000_000 },
+  master: { label: '4K Master (115 Mbps)', bps: 115_000_000 },
+};
+
 /**
  * Scene Render Exporter:
  *  - `captureStillPNG`: renders a clean HUD-free frame at target resolution
- *    (Viewport, 1080p, 2x Super, or 4K 3840x2160), awaits PNG blob BEFORE
+ *    (Viewport, 720p, 1080p, 1440p, 2x Super, or 4K 3840x2160), awaits PNG blob BEFORE
  *    restoring viewport dimensions, and triggers download.
- *  - `startVideoCapture` / `stopVideoCapture`: records WebGL canvas stream via
- *    MediaRecorder (WebM VP9/VP8 or MP4) and downloads on stop.
+ *  - `startVideoCapture` / `stopVideoCapture`: records high-bitrate WebGL canvas stream
+ *    at configurable resolution/FPS/codec/bitrate + synchronized stereo WebAudio stream!
  */
 export function makeSceneExporter({ canvas: explicitCanvas, renderer, post, scene, camera, getTime }) {
   const canvas = explicitCanvas || (renderer && renderer.domElement);
@@ -540,6 +547,7 @@ export function makeSceneExporter({ canvas: explicitCanvas, renderer, post, scen
   let chunks = [];
   let activeFilename = 'petacity-capture.webm';
   let activeMime = '';
+  let savedViewportBeforeVid = null;
   const tmpSize = new THREE.Vector2();
 
   function triggerDownload(blobOrUrl, filename) {
@@ -558,8 +566,10 @@ export function makeSceneExporter({ canvas: explicitCanvas, renderer, post, scen
     const curW = Math.max(320, Math.round(tmpSize.x) || (canvas && canvas.clientWidth) || 1280);
     const curH = Math.max(240, Math.round(tmpSize.y) || (canvas && canvas.clientHeight) || 720);
     if (mode === '4k') return { width: 3840, height: 2160, dpr: 1 };
+    if (mode === '1440p') return { width: 2560, height: 1440, dpr: 1 };
     if (mode === '2x') return { width: curW * 2, height: curH * 2, dpr: 1 };
     if (mode === '1080p') return { width: 1920, height: 1080, dpr: 1 };
+    if (mode === '720p') return { width: 1280, height: 720, dpr: 1 };
     return { width: curW, height: curH, dpr: renderer.getPixelRatio() };
   }
 
@@ -599,17 +609,32 @@ export function makeSceneExporter({ canvas: explicitCanvas, renderer, post, scen
     return { width: target.width, height: target.height, blob };
   }
 
-  function pickMimeType() {
+  function pickMimeType(codecPref = 'auto', hasAudio = false) {
     if (typeof MediaRecorder === 'undefined' || !MediaRecorder.isTypeSupported) return '';
-    for (const m of [
-      'video/webm;codecs=vp9',
-      'video/webm;codecs=vp8',
-      'video/webm',
-      'video/mp4',
-    ]) {
+    const vp9 = hasAudio ? ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp9'] : ['video/webm;codecs=vp9'];
+    const vp8 = hasAudio ? ['video/webm;codecs=vp8,opus', 'video/webm;codecs=vp8'] : ['video/webm;codecs=vp8'];
+    const mp4 = hasAudio
+      ? ['video/mp4;codecs=avc1.640028,mp4a.40.2', 'video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4']
+      : ['video/mp4;codecs=avc1.640028', 'video/mp4;codecs=avc1.42E01E', 'video/mp4'];
+    let candidates;
+    if (codecPref === 'mp4') candidates = [...mp4, ...vp9, ...vp8, 'video/webm'];
+    else if (codecPref === 'vp8') candidates = [...vp8, ...vp9, 'video/webm', ...mp4];
+    else candidates = [...vp9, ...mp4, ...vp8, 'video/webm'];
+    for (const m of candidates) {
       if (MediaRecorder.isTypeSupported(m)) return m;
     }
     return '';
+  }
+
+  function restoreVideoViewport() {
+    if (!savedViewportBeforeVid) return;
+    const s = savedViewportBeforeVid;
+    savedViewportBeforeVid = null;
+    renderer.setPixelRatio(s.dpr);
+    renderer.setSize(s.width, s.height, false);
+    if (post) post.setSize(s.width, s.height, s.dpr);
+    camera.aspect = s.aspect;
+    camera.updateProjectionMatrix();
   }
 
   function startVideoCapture(optsOrName = {}) {
@@ -618,24 +643,81 @@ export function makeSceneExporter({ canvas: explicitCanvas, renderer, post, scen
       throw new Error('Video capture (MediaRecorder / canvas.captureStream) is not supported in this browser');
     }
     const isObj = optsOrName && typeof optsOrName === 'object';
-    const fps = isObj ? (optsOrName.fps || 60) : 60;
+    const fps = isObj ? Math.max(12, Math.min(120, Number(optsOrName.fps) || 60)) : 60;
+    const resMode = isObj && optsOrName.resolution ? String(optsOrName.resolution) : 'view';
+    const qualKey = isObj && optsOrName.quality ? String(optsOrName.quality) : 'ultra';
+    const codecPref = isObj && optsOrName.codec ? String(optsOrName.codec) : 'auto';
+    const presetBps = (VIDEO_QUALITY_PRESETS[qualKey] || VIDEO_QUALITY_PRESETS.ultra).bps;
+    const vBps = isObj && Number.isFinite(optsOrName.videoBitsPerSecond)
+      ? Number(optsOrName.videoBitsPerSecond)
+      : presetBps;
+    const aBps = isObj && Number.isFinite(optsOrName.audioBitsPerSecond)
+      ? Number(optsOrName.audioBitsPerSecond)
+      : 192_000;
     activeFilename = isObj ? (optsOrName.filename || 'petacity-capture.webm') : String(optsOrName);
-    const stream = canvas.captureStream(fps);
-    activeMime = pickMimeType();
-    const recOpts = activeMime
-      ? { mimeType: activeMime, videoBitsPerSecond: 18_000_000 }
-      : { videoBitsPerSecond: 18_000_000 };
+
+    // Lock render buffer to requested export resolution (`1080p`, `1440p`, `4k`, etc.) during video capture!
+    if (resMode && resMode !== 'view') {
+      renderer.getSize(tmpSize);
+      savedViewportBeforeVid = {
+        dpr: renderer.getPixelRatio(),
+        width: Math.max(1, Math.round(tmpSize.x) || (canvas && canvas.clientWidth) || 1280),
+        height: Math.max(1, Math.round(tmpSize.y) || (canvas && canvas.clientHeight) || 720),
+        aspect: camera.aspect,
+      };
+      const target = resolveResolution(resMode);
+      renderer.setPixelRatio(target.dpr);
+      renderer.setSize(target.width, target.height, false);
+      if (post) post.setSize(target.width, target.height, target.dpr);
+      camera.aspect = target.width / target.height;
+      camera.updateProjectionMatrix();
+    }
+
+    const vidStream = canvas.captureStream(fps);
+    const audioStream = isObj ? optsOrName.audioStream : null;
+    const audioTracks = (audioStream && typeof audioStream.getAudioTracks === 'function')
+      ? audioStream.getAudioTracks()
+      : [];
+    let combinedStream = vidStream;
+    if (audioTracks.length > 0) {
+      if (typeof MediaStream !== 'undefined' && typeof vidStream.getVideoTracks === 'function') {
+        combinedStream = new MediaStream([...vidStream.getVideoTracks(), ...audioTracks]);
+      } else if (typeof vidStream.addTrack === 'function') {
+        for (const trk of audioTracks) vidStream.addTrack(trk);
+      }
+    }
+
+    const hasAudio = audioTracks.length > 0;
+    activeMime = pickMimeType(codecPref, hasAudio);
+    const recOpts = {
+      videoBitsPerSecond: vBps,
+      ...(hasAudio ? { audioBitsPerSecond: aBps } : {}),
+      ...(activeMime ? { mimeType: activeMime } : {}),
+    };
     chunks = [];
-    mediaRec = new MediaRecorder(stream, recOpts);
+    try {
+      mediaRec = new MediaRecorder(combinedStream, recOpts);
+    } catch {
+      // Fallback if browser MediaRecorder rejects combined codec/bitrate hint
+      mediaRec = new MediaRecorder(combinedStream);
+    }
     mediaRec.ondataavailable = (ev) => {
       if (ev.data && ev.data.size > 0) chunks.push(ev.data);
     };
     mediaRec.start(200);
-    return { mimeType: activeMime || 'video/webm', ext: activeMime.includes('mp4') ? 'mp4' : 'webm' };
+    return {
+      mimeType: activeMime || 'video/webm',
+      ext: activeMime.includes('mp4') ? 'mp4' : 'webm',
+      hasAudio,
+      videoBitsPerSecond: vBps,
+    };
   }
 
   function stopVideoCapture() {
-    if (!mediaRec) return Promise.resolve(null);
+    if (!mediaRec) {
+      restoreVideoViewport();
+      return Promise.resolve(null);
+    }
     return new Promise((resolve) => {
       const rec = mediaRec;
       const mime = activeMime || 'video/webm';
@@ -645,6 +727,7 @@ export function makeSceneExporter({ canvas: explicitCanvas, renderer, post, scen
         const blob = new Blob(chunks, { type: mime });
         chunks = [];
         mediaRec = null;
+        restoreVideoViewport();
         if (blob.size > 0) triggerDownload(blob, finalName);
         resolve({ blob, filename: finalName });
       };
@@ -657,6 +740,9 @@ export function makeSceneExporter({ canvas: explicitCanvas, renderer, post, scen
     captureStillPNG,
     startVideoCapture,
     stopVideoCapture,
+    get lockedResolution() {
+      return !!savedViewportBeforeVid;
+    },
     get capturingVideo() {
       return !!mediaRec && mediaRec.state === 'recording';
     },

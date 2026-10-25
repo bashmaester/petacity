@@ -25,6 +25,7 @@ src/
   presets.js            Curated world presets, bookmarks & compact Base64URL exact-state codec
   director.js           MovieSetDirector: 3D raycast perception, scripted shots, building/sign/holo/car takeover
   webmcp.js             W3C/Chrome WebMCP (`navigator.modelContext`), `window.petacity` & `postMessage` bridge
+  demo-export.js        Single-file standalone HTML autoloop demo bundler (`window.__PETACITY_DEMO_BOOT__`)
   main.js               DOM bindings, URL state sync, render loop & subsystem orchestration
 tests/
   city.test.mjs         Unit & invariant suite for procedural city, rivers, dry streets & transit (29 tests)
@@ -136,8 +137,8 @@ To prevent open-ocean blotchiness and screen-space Moiré shimmer at grazing ang
   4. `106.8 FM · Sodium & Mercury`
   5. `88.9 FM · Foghorn & Starlight`
   6. `93.1 FM · Hanging Sky-Gardens`
-- **4-Movement Macro-Evolution Engine (`RADIO_MOVEMENTS`)**:
-  Across a 64-bar symphonic cycle, the composition evolves automatically through **I · Mist Prelude**, **II · Rising Skyline**, **III · Luminous Zenith** (pivoting into contrasting `bridgeProgressions` with counter-melodies and upper-octave voicings), and **IV · Nocturnal Dissolve**, followed by multi-cycle modal key transpositions (`MODAL_CYCLE_SHIFTS`) and motif mutations so long listening sessions continuously evolve.
+- **4-Movement Macro-Evolution Engine (`RADIO_MOVEMENTS`) & Playlist Auto-DJ**:
+  Across a 64-bar symphonic cycle, the composition evolves automatically through **I · Mist Prelude**, **II · Rising Skyline**, **III · Luminous Zenith** (pivoting into contrasting `bridgeProgressions` with counter-melodies and upper-octave voicings), and **IV · Nocturnal Dissolve**, followed by multi-cycle modal key transpositions (`MODAL_CYCLE_SHIFTS`) and motif mutations. In addition, the **Playlist Auto-DJ** (`seq` sequential, non-repeating `shuffle`, or `loop` hold) performs smooth 4.4-second ambient reverb/filter crossfades between stations at configurable intervals (`20..240s`), while `getAudioStream()` feeds stereo synth output directly into WebM/MP4 video recordings.
 
 ---
 
@@ -147,6 +148,6 @@ To prevent open-ocean blotchiness and screen-space Moiré shimmer at grazing ang
 # Start local static server on port 8000
 npm run serve   # or: python3 -m http.server 8000 --bind 0.0.0.0
 
-# Run full 81-test Node verification suite (city, scene, shaders, optics, PoIs, UI contract & JSDOM boot)
+# Run full 83-test Node verification suite (city, scene, shaders, optics, PoIs, UI contract & JSDOM boot)
 npm test
 ```

@@ -274,6 +274,42 @@ test('Phase-16 UI contract: camera optics, wide-angle, 360 projections, Dutch ro
   }
 });
 
+test('Phase-18 UI contract: glyph-only buttons, minimized hover-only startup, 0.02x camera speed, editable minimap loop, video quality/sound, playlist Auto-DJ & standalone HTML demo export', () => {
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  const main = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
+
+  // 1) Every <button> in index.html must be pure glyph (zero ASCII letters/digits inside button body) + aria-label + title
+  const btnMatches = [...html.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/g)];
+  assert.ok(btnMatches.length >= 44, `expected >= 44 buttons, got ${btnMatches.length}`);
+  for (const [, attrs, inner] of btnMatches) {
+    const id = (attrs.match(/id="([^"]+)"/) || [])[1] || '(no-id)';
+    const decoded = inner.replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16))).trim();
+    assert.ok(decoded.length > 0, `button #${id} must contain a glyph`);
+    assert.equal(/[A-Za-z0-9]/.test(decoded), false, `button #${id} must be glyph-only (got ${JSON.stringify(decoded)})`);
+    assert.match(attrs, /aria-label="[^"]+"/, `button #${id} must carry aria-label`);
+    assert.match(attrs, /title="[^"]+"/, `button #${id} must carry hover title`);
+  }
+
+  // 2) Starts minimized (`<body class="ui-off">`) and hides `#b-ui` (`opacity: 0`) until corner hover or focus
+  assert.match(html, /<body\s+class="ui-off">/, 'page starts with panel minimized (body.ui-off)');
+  const bUiOffRule = html.match(/body\.ui-off\s+#b-ui\s*\{([\s\S]*?)\}/);
+  assert.ok(bUiOffRule, 'body.ui-off #b-ui CSS rule exists');
+  assert.match(bUiOffRule[1], /opacity:\s*0\b/, '#b-ui starts invisible when minimized');
+  assert.match(html, /body\.ui-off\s+\.panel:hover\s+#b-ui/, 'hovering top-left corner reveals #b-ui');
+
+  // 3) Camera speed down to 0.02x (1/10th of old 0.2x minimum) + editable minimap loop buttons
+  assert.match(html, /id="sl-camspeed"[^>]*min="0\.02"/, 'camera speed slider reaches 0.02x (1/10th of previous 0.2x)');
+  for (const id of [
+    'b-loop-add', 'b-loop-reset',
+    'sel-radio-playlist', 'sl-radio-interval', 'radio-interval-label',
+    'b-vid-audio', 'sel-vid-fps', 'sel-vid-quality', 'sel-vid-codec',
+    'b-demo-html', 'b-demo-export',
+  ]) {
+    assert.ok(html.includes(`id="${id}"`), `#${id} exists in index.html`);
+  }
+  assert.ok(main.includes('exportStandaloneDemoHTML'), 'main.js wires standalone single-HTML demo exporter');
+});
+
 
 
 

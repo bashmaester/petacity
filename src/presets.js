@@ -268,6 +268,7 @@ const DEF_TUNE = {
 
 const DEF_RADIO = {
   station: 0, volume: 0.68, space: 0.9, warmth: 0.8, pulse: 0.55, react: 0.65,
+  playlistMode: 'seq', playlistInterval: 75,
 };
 
 const DEF_POST = {
@@ -365,7 +366,7 @@ export function normalizeExactState(raw = {}) {
     freelook: !!(raw.freelook ?? false),
     collide: raw.collide !== undefined ? !!raw.collide : (raw.collideOn !== undefined ? !!raw.collideOn : true),
     avoidance: raw.avoidance !== undefined ? !!raw.avoidance : true,
-    camSpeed: roundN(raw.camSpeed ?? 1.0, 2),
+    camSpeed: roundN(raw.camSpeed ?? 1.0, 3),
     camRadius: roundN(raw.camRadius ?? 2.2, 2),
     camSmooth: roundN(raw.camSmooth ?? 0.72, 2),
     turnSmooth: roundN(raw.turnSmooth ?? 1.25, 2),
@@ -407,7 +408,17 @@ export function normalizeExactState(raw = {}) {
       warmth: roundN(Number(raw.radio.warmth ?? 0.80), 2),
       pulse: roundN(Number(raw.radio.pulse ?? 0.55), 2),
       react: roundN(Number(raw.radio.react ?? 0.65), 2),
+      playlistMode: ['loop', 'seq', 'shuffle'].includes(raw.radio.playlistMode) ? raw.radio.playlistMode : 'seq',
+      playlistInterval: Math.max(15, Math.min(300, Math.round(Number(raw.radio.playlistInterval ?? 75)))),
     };
+  }
+  if (Array.isArray(raw.autoLoop) && raw.autoLoop.length >= 3) {
+    out.autoLoop = raw.autoLoop.slice(0, 32).map((p, idx) => ({
+      name: String(p.name || `Loop ${idx + 1}`).slice(0, 32),
+      x: roundN(Number(p.x) || 0, 1),
+      y: roundN(Number(p.y ?? 140), 1),
+      z: roundN(Number(p.z) || 0, 1),
+    }));
   }
   out.post = { ...DEF_POST };
   if (raw.post && typeof raw.post === 'object') {
@@ -545,6 +556,9 @@ function packCompactState(norm) {
     });
   }
 
+  if (Array.isArray(norm.autoLoop) && norm.autoLoop.length >= 3) {
+    pkg.l = norm.autoLoop.map((p) => [p.x, p.y, p.z]);
+  }
   if (norm.path && Array.isArray(norm.path.frames) && norm.path.frames.length >= 2) {
     pkg.k = [norm.path.loop !== false ? 1 : 0, norm.path.frames];
   }
@@ -612,6 +626,14 @@ function unpackCompactState(pkg) {
       if (row[9] !== null && row[9] !== undefined) bm.lensMode = row[9];
       return bm;
     });
+  }
+  if (Array.isArray(pkg.l) && pkg.l.length >= 3) {
+    raw.autoLoop = pkg.l.map((row, idx) => ({
+      name: `Loop ${idx + 1}`,
+      x: Number(row[0]) || 0,
+      y: Number(row[1] ?? 140),
+      z: Number(row[2]) || 0,
+    }));
   }
   if (Array.isArray(pkg.k) && Array.isArray(pkg.k[1])) {
     raw.path = { v: 1, loop: pkg.k[0] !== 0, frames: pkg.k[1] };
