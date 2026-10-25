@@ -240,6 +240,9 @@ const DEF_TOP = {
   turnSmooth: 1.25,
   camStyle: 0,
   pathSmooth: 0.65,
+  gazeMode: 1,
+  weatherAutoMode: 'off',
+  weatherInterval: 60,
 };
 
 const DEF_CUSTOM = {
@@ -264,6 +267,7 @@ const DEF_TUNE = {
   glyphStyle: 0, signAnim: 1,
   haze: 1, sun: 1, vib: 1,
   moon: 1, moonsz: 1, moonph: 0.85,
+  cloudPuffs: 1,
 };
 
 const DEF_RADIO = {
@@ -360,9 +364,16 @@ export function normalizeExactState(raw = {}) {
     daySpeed: roundN(raw.daySpeed ?? 1.0, 2),
     trafficSpeed: roundN(raw.trafficSpeed ?? 1.0, 2),
     weatherMode: Math.max(0, Math.min(6, Math.round(Number(raw.weatherMode) || 0))),
+    weatherAutoMode: ['off', 'seq', 'shuffle', 'cinematic'].includes(raw.weatherAutoMode) ? raw.weatherAutoMode : 'off',
+    weatherInterval: Math.max(15, Math.min(300, Math.round(Number(raw.weatherInterval ?? 60)))),
     dustLevel: roundN(raw.dustLevel ?? 0.6, 2),
     glide: !!(raw.glide ?? raw.glideOn),
-    autoLook: !!(raw.autoLook ?? false),
+    gazeMode: raw.gazeMode !== undefined
+      ? Math.max(0, Math.min(5, Math.round(Number(raw.gazeMode) || 0)))
+      : (raw.autoLook === false ? 0 : (raw.autoLook === true ? 1 : 1)),
+    autoLook: raw.gazeMode !== undefined
+      ? (Math.round(Number(raw.gazeMode) || 0) > 0)
+      : !!(raw.autoLook ?? true),
     freelook: !!(raw.freelook ?? false),
     collide: raw.collide !== undefined ? !!raw.collide : (raw.collideOn !== undefined ? !!raw.collideOn : true),
     avoidance: raw.avoidance !== undefined ? !!raw.avoidance : true,

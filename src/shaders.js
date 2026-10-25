@@ -912,7 +912,13 @@ void main() {
   }
 
   // True 3D volumetric raymarch through selectable multi-altitude concentric spherical cloud shells (Low / Mid / High)
-  float minElev = mix(-0.14, -1.02, clamp(uWorldCurve * 1.4, 0.0, 1.0));
+  float rawElevMul = (uCloudElev > 20.0) ? (uCloudElev / 260.0) : max(0.03, uCloudElev);
+  float lowestActiveBase = 99999.0;
+  if (uCloudLayerDens.x > 0.015) lowestActiveBase = min(lowestActiveBase, max(4.0, uCloudLayerElev.x * rawElevMul));
+  if (uCloudLayerDens.y > 0.015) lowestActiveBase = min(lowestActiveBase, max(4.0, uCloudLayerElev.y * rawElevMul));
+  if (uCloudLayerDens.z > 0.015) lowestActiveBase = min(lowestActiveBase, max(4.0, uCloudLayerElev.z * rawElevMul));
+  float aboveCloudDeck = smoothstep(lowestActiveBase - 25.0, lowestActiveBase + 35.0, cameraPosition.y);
+  float minElev = mix(mix(-0.14, -0.96, aboveCloudDeck), -1.02, clamp(uWorldCurve * 1.4, 0.0, 1.0));
   float maxLayerD = max(uCloudLayerDens.x, max(uCloudLayerDens.y, uCloudLayerDens.z));
   if (uCloud > 0.01 && maxLayerD > 0.01 && d.y > minElev) {
     float curveBlend = smoothstep(0.02, 0.35, uWorldCurve);
@@ -926,9 +932,9 @@ void main() {
     vec3 oc = cameraPosition - sphereCenter;
     float rCam = length(oc);
 
-    // Master elevation & range multipliers (supports both 1.0x multiplier & meter-value inputs cleanly)
-    float elevMul = (uCloudElev > 20.0) ? (uCloudElev / 260.0) : max(0.20, uCloudElev);
-    float rangeMul = (uCloudRange > 20.0) ? (uCloudRange / 780.0) : max(0.20, uCloudRange);
+    // Master elevation & range multipliers (supports lowering all the way down to street canyons!)
+    float elevMul = rawElevMul;
+    float rangeMul = (uCloudRange > 20.0) ? (uCloudRange / 780.0) : max(0.10, uCloudRange);
     float maxMarch = mix(13500.0, max(atmoR * 2.8, 9000.0), curveBlend);
     vec2 fc = gl_FragCoord.xy;
     float covBase = clamp(uCloud, 0.0, 2.5);
@@ -956,8 +962,8 @@ void main() {
 
       float rawBase = (L == 0) ? uCloudLayerElev.x : ((L == 1) ? uCloudLayerElev.y : uCloudLayerElev.z);
       float rawThick = (L == 0) ? uCloudLayerThick.x : ((L == 1) ? uCloudLayerThick.y : uCloudLayerThick.z);
-      float baseH = max(38.0, rawBase * elevMul);
-      float spanH = max(75.0, rawThick * rangeMul);
+      float baseH = max(4.0, rawBase * elevMul);
+      float spanH = max(24.0, rawThick * rangeMul);
       float layerType = uCloudType;
       float extMul = 1.0;
 
@@ -968,8 +974,8 @@ void main() {
       } else if (L == 1) {
         if (uCloudType > 0.5 && uCloudType < 1.5) { spanH *= 1.65; extMul = 1.25; }
         else if (uCloudType > 1.5 && uCloudType < 2.5) { spanH *= 0.72; extMul = 1.32; }
-        else if (uCloudType > 2.5 && uCloudType < 3.5) { baseH += 260.0; spanH *= 0.80; extMul = 0.52; }
-        else if (uCloudType > 4.5) { baseH *= 0.48; spanH *= 0.62; extMul = 1.45; }
+        else if (uCloudType > 2.5 && uCloudType < 3.5) { baseH *= 1.28; spanH *= 0.80; extMul = 0.52; }
+        else if (uCloudType > 4.5) { baseH = max(4.0, baseH * 0.48); spanH *= 0.62; extMul = 1.45; }
       } else {
         // High deck: wind-sheared altocumulus / cirrus canopy
         layerType = (uCloudType < 0.5) ? 4.0 : ((uCloudType > 1.5 && uCloudType < 2.5) ? 3.0 : uCloudType);
@@ -1075,6 +1081,7 @@ attribute float aLayer;
 uniform float uCloudType;
 uniform float uCloudElev;
 uniform float uCloudRange;
+uniform float uCloudPuffs;
 uniform vec3 uCloudLayerElev;
 uniform vec3 uCloudLayerThick;
 uniform vec3 uCloudLayerDens;
@@ -1088,49 +1095,56 @@ varying vec3 vAxisZ;
 varying vec3 vHalfExt;
 varying float vSeed;
 varying float vLayerDens;
+varying float vLayerIdx;
 ${GLSL_CURVE}
 void main() {
   vSeed = aSeed;
+  vLayerIdx = aLayer;
   vec3 ctr = aCenter;
   vec3 scl = aScale;
-  float elevMul = (uCloudElev > 20.0) ? (uCloudElev / 260.0) : max(0.20, uCloudElev);
-  float rangeMul = (uCloudRange > 20.0) ? (uCloudRange / 780.0) : max(0.20, uCloudRange);
+  float elevMul = (uCloudElev > 20.0) ? (uCloudElev / 260.0) : max(0.03, uCloudElev);
+  float rangeMul = (uCloudRange > 20.0) ? (uCloudRange / 780.0) : max(0.10, uCloudRange);
 
   float rawBase = (aLayer < 0.5) ? uCloudLayerElev.x : ((aLayer < 1.5) ? uCloudLayerElev.y : uCloudLayerElev.z);
   float rawThick = (aLayer < 0.5) ? uCloudLayerThick.x : ((aLayer < 1.5) ? uCloudLayerThick.y : uCloudLayerThick.z);
   float lDens = (aLayer < 0.5) ? uCloudLayerDens.x : ((aLayer < 1.5) ? uCloudLayerDens.y : uCloudLayerDens.z);
-  vLayerDens = lDens;
+  float puffAmt = uCloudPuffs;
+  float effDens = lDens * puffAmt;
+  vLayerDens = effDens;
 
   float hFrac = clamp((aCenter.y - 185.0) / 315.0 * 0.55 + fract(aSeed * 7.31) * 0.45, 0.0, 1.0);
-  float baseY = max(42.0, rawBase * elevMul);
-  float spanY = max(70.0, rawThick * rangeMul);
-  float vThick = clamp(sqrt(spanY / 420.0), 0.48, 1.95);
+  float baseY = max(4.0, rawBase * elevMul);
+  float spanY = max(20.0, rawThick * rangeMul);
+  float vThick = clamp(sqrt(spanY / 420.0), 0.24, 1.95);
   ctr.y = baseY + hFrac * spanY;
   scl.y *= vThick;
 
   if (aLayer < 0.5) {
     // Low tower-skimming stratus/mist puffs
-    scl *= vec3(1.35, 0.62, 1.35);
+    scl *= vec3(1.35, 0.55, 1.35);
   } else if (aLayer > 1.5) {
     // High altocumulus/cirrus canopy wisps
-    scl *= vec3(1.95, 0.36, 1.15);
+    scl *= vec3(2.05, 0.30, 1.10);
   } else if (uCloudType > 0.5 && uCloudType < 1.5) {
-    ctr.y = baseY * 0.85 + hFrac * spanY * 1.45;
+    ctr.y = max(4.0, baseY * 0.85) + hFrac * spanY * 1.45;
     scl *= vec3(1.15, 1.85, 1.15);
   } else if (uCloudType > 1.5 && uCloudType < 2.5) {
-    ctr.y = baseY * 1.05 + hFrac * spanY * 0.42;
+    ctr.y = baseY * 1.02 + hFrac * spanY * 0.42;
     scl *= vec3(1.75, 0.52, 1.55);
   } else if (uCloudType > 2.5 && uCloudType < 3.5) {
-    ctr.y = baseY * 1.35 + hFrac * spanY * 0.75;
+    ctr.y = baseY * 1.25 + hFrac * spanY * 0.75;
     scl *= vec3(2.25, 0.28, 0.85);
   } else if (uCloudType > 3.5 && uCloudType < 4.5) {
     float upper = step(0.5, fract(aSeed * 13.7));
     ctr.y = mix(baseY + hFrac * spanY * 0.42, baseY + spanY * (0.68 + hFrac * 0.48), upper);
     scl *= mix(vec3(1.35, 0.65, 1.35), vec3(2.0, 0.32, 0.9), upper);
   } else if (uCloudType > 4.5) {
-    ctr.y = max(38.0, baseY * 0.38) + hFrac * max(85.0, spanY * 0.42);
+    ctr.y = max(4.0, baseY * 0.38) + hFrac * max(20.0, spanY * 0.42);
     scl *= vec3(1.90, 0.54, 1.85);
   }
+
+  // Keep puff bottom from plunging deep underground when lowered to street level
+  ctr.y = max(ctr.y, max(6.0, scl.y * 0.18));
 
   // Wind-guided coherent streamline orientation:
   // Nearby clouds share smooth atmospheric wind streamlines + tropospheric Ekman altitude veer
@@ -1158,7 +1172,7 @@ void main() {
   vAxisZ = axZ;
 
   // Collapse inactive layer puffs outside clip frustum with zero fragment cost!
-  if (lDens <= 0.015) {
+  if (effDens <= 0.015) {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
     return;
   }
@@ -1179,6 +1193,7 @@ uniform vec3 uFogCol;
 uniform vec3 uSunFogCol;
 uniform float uHazeSun;
 uniform float uCloud;
+uniform float uCloudPuffs;
 uniform float uCloudType;
 uniform float uCloudStyle;
 uniform float uCloudSeed;
@@ -1197,6 +1212,7 @@ varying vec3 vAxisZ;
 varying vec3 vHalfExt;
 varying float vSeed;
 varying float vLayerDens;
+varying float vLayerIdx;
 ${GLSL_NOISE}
 ${GLSL_UTIL}
 ${GLSL_STORMY_PLATE}
@@ -1233,7 +1249,7 @@ float puffVolDensity(vec3 pL, float covK, float cType, float seed, float t) {
 }
 
 void main() {
-  if (uCloud <= 0.015 || vLayerDens <= 0.015) discard;
+  if (uCloud <= 0.015 || uCloudPuffs <= 0.015 || vLayerDens <= 0.015) discard;
   vec3 rayVec = vWorld - cameraPosition;
   float distToBack = length(rayVec);
   if (distToBack < 1e-3) discard;
@@ -1265,16 +1281,21 @@ void main() {
   float jit = grainHash(gl_FragCoord.xy + fract(uTime * 9.17) * 83.0);
   float dtL = (t1 - t0) / 7.0;
   float covK = clamp(uCloud * vLayerDens, 0.0, 2.5);
-  float isCirrus = (uCloudType > 2.5 && uCloudType < 3.5) ? 1.0 : 0.0;
-  float isLowSea = (uCloudType > 4.5) ? 1.0 : 0.0;
+  // Respect per-deck cloud character so High Cirrus Only & Low Mist Only don't force Mid Cumulus cauliflower puffs!
+  float effType = uCloudType;
+  if (vLayerIdx > 1.5 && uCloudType < 0.5) effType = 3.0;
+  else if (vLayerIdx < 0.5 && uCloudType < 0.5) effType = 2.0;
+  float isCirrus = (effType > 2.5 && effType < 3.5) ? 1.0 : 0.0;
+  float lowProx = smoothstep(240.0, 55.0, vCenterW.y);
+  float isLowSea = max((effType > 4.5) ? 1.0 : 0.0, lowProx);
 
   float Tr = 1.0;
   vec3 accum = vec3(0.0);
   float avgLit = 0.0;
   float wSum = 0.0;
 
-  // Low sea-of-clouds picks up warm/neon city under-glow on its undersides!
-  vec3 cityUnder = uPoolCol * max(uLightK, 0.15) * (0.20 + 0.45 * isLowSea);
+  // Low / lowered clouds pick up warm/neon city under-glow on their undersides!
+  vec3 cityUnder = uPoolCol * max(uLightK, 0.15) * (0.20 + 0.50 * isLowSea);
   vec3 darkBelly = uCloudCol * 0.38 + cityUnder * 0.35;
   vec3 brightTop = mix(uCloudCol + uSkySunCol * 0.95, vec3(0.97, 0.96, 0.93), 0.30);
   float fwd = pow(max(dot(rdW, sd), 0.0), 5.0);
@@ -1284,9 +1305,9 @@ void main() {
     if (Tr < 0.04) break;
     float tCur = t0 + (float(i) + jit) * dtL;
     vec3 pL = roL + rdL * tCur;
-    float dens = puffVolDensity(pL, covK, uCloudType, vSeed, uTime);
+    float dens = puffVolDensity(pL, covK, effType, vSeed, uTime);
     if (dens > 0.005) {
-      float shD = puffVolDensity(pL + sdL * 0.32, covK, uCloudType, vSeed, uTime);
+      float shD = puffVolDensity(pL + sdL * 0.32, covK, effType, vSeed, uTime);
       float sunT = exp(-shD * 2.4);
       float hUp = clamp(pL.y * 0.5 + 0.5, 0.0, 1.0);
       float lit = clamp(sunT * (0.55 + 0.52 * hUp) + 0.12, 0.0, 1.22);
@@ -3069,19 +3090,28 @@ varying float vT;
 varying float vW;
 varying vec4 vBeamMeta;
 varying vec3 vBeamTint;
+varying vec3 vWorldPos;
+varying vec3 vWorldNormal;
 ${GLSL_CURVE}
 void main() {
   vT = uv.y;
   vW = uv.x;
   vBeamMeta = aBeamMeta;
   vBeamTint = aBeamTint;
-  vec4 wp = vec4(position, 1.0);
+  vec4 localP = vec4(position, 1.0);
+  vec3 localN = normal;
   #ifdef USE_INSTANCING
-    wp = instanceMatrix * wp;
+    localP = instanceMatrix * localP;
+    localN = mat3(instanceMatrix) * localN;
   #endif
-  wp = modelMatrix * wp;
-  wp.xyz = bendWorld(wp.xyz);
-  gl_Position = projectionMatrix * viewMatrix * wp;
+  vec4 flatWp = modelMatrix * localP;
+  vec3 worldN = mat3(modelMatrix) * localN;
+  float nLen = length(worldN);
+  worldN = nLen > 1e-5 ? (worldN / nLen) : vec3(0.0, 1.0, 0.0);
+  vWorldNormal = bendNormal(flatWp.xz, worldN);
+  vec3 curvedWp = bendWorld(flatWp.xyz);
+  vWorldPos = curvedWp;
+  gl_Position = projectionMatrix * viewMatrix * vec4(curvedWp, 1.0);
 }
 `;
 
@@ -3094,6 +3124,8 @@ varying float vT;
 varying float vW;
 varying vec4 vBeamMeta;
 varying vec3 vBeamTint;
+varying vec3 vWorldPos;
+varying vec3 vWorldNormal;
 ${GLSL_NOISE}
 
 void main() {
@@ -3104,54 +3136,61 @@ void main() {
   float bPhase = vBeamMeta.w;
   vec3 tintCol = dot(vBeamTint, vBeamTint) > 0.001 ? vBeamTint : uBeamCol;
 
-  float uClamped = clamp(vW, 0.0, 1.0);
-  float baseCore = sin(3.14159 * uClamped);
+  // Radial volumetric chord falloff across the smooth 3D cone/frustum hull:
+  // |dot(N, V)| = 1.0 down the dense beam axis and fades smoothly to 0.0 at the outer silhouette rim,
+  // completely eliminating flat crossed-plane '+'/'X' seams from every viewing angle!
+  vec3 viewDir = normalize(cameraPosition - vWorldPos);
+  float nLen = length(vWorldNormal);
+  vec3 surfN = nLen > 1e-5 ? (vWorldNormal / nLen) : viewDir;
+  float baseCore = clamp(dot(surfN, viewDir), 0.0, 1.0);
+  float azim = fract(vW) * 6.2831853;
   vec2 orbB = loopOrbit(uTime, 1.8, 3.0);
-  float dust = 0.74 + 0.26 * vnoise(vec2(vT * 6.0 + orbB.x + bPhase * 5.0, orbB.y - bPhase * 3.0));
+  float dust = 0.76 + 0.24 * vnoise(vec2(vT * 6.0 + orbB.x + bPhase * 5.0, orbB.y - bPhase * 3.0 + cos(azim) * 0.6));
 
   float a = 0.0;
   vec3 emitCol = tintCol;
   if (bKind < 0.5) {
     // 0: Classic Cinema Carbon-Arc Searchlight (bright hot axial filament + soft Mie halo)
-    float hotCore = pow(baseCore, 2.4) * 0.72 + pow(baseCore, 0.75) * 0.36;
-    float along = pow(max(1.0 - vT, 0.0), bFalloff);
+    float hotCore = pow(baseCore, 2.8) * 0.86 + pow(baseCore, 1.15) * 0.42;
+    float along = pow(max(1.0 - vT, 0.0), bFalloff) * smoothstep(0.0, 0.03, vT);
     a = hotCore * along * dust;
     emitCol = tintCol * (0.65 + 0.90 * along);
   } else if (bKind < 1.5) {
     // 1: Coherent Sky-Piercer Laser (razor-thin collimated beam reaching high clouds + dust sparkle)
-    float laserCore = pow(baseCore, 7.5) * 1.45 + pow(baseCore, 2.2) * 0.22;
+    float laserCore = pow(baseCore, 6.2) * 1.45 + pow(baseCore, 2.1) * 0.28;
     float along = pow(max(1.0 - vT, 0.0), max(0.55, bFalloff * 0.55));
     float scint = 0.78 + 0.34 * sin(vT * 38.0 - uTime * 9.0 + bPhase * 25.0);
     a = laserCore * along * dust * scint;
     emitCol = mix(tintCol, vec3(1.0), 0.28) * (0.85 + 0.85 * along);
   } else if (bKind < 2.5) {
     // 2: Wide Architectural Flood Wash (broad Gaussian atmospheric wash, faster distance decay)
-    float floodCore = pow(baseCore, 0.58) * 0.78;
+    float floodCore = pow(baseCore, 1.35) * 0.84;
     float along = pow(max(1.0 - vT, 0.0), bFalloff * 1.45) * smoothstep(0.0, 0.08, vT);
     a = floodCore * along * dust;
     emitCol = tintCol * (0.55 + 0.70 * along);
   } else if (bKind < 3.5) {
-    // 3: Pulsed Aerial Fan Curtain (sheet fan with travelling interference ribbons)
-    float fanRibs = 0.68 + 0.32 * sin(uClamped * 28.0 + uTime * 2.5 + bPhase * 12.0);
+    // 3: Pulsed Aerial Fan Curtain (elliptical fan hull with periodic seamless azimuthal interference)
+    float fanRibs = 0.74 + 0.26 * sin(azim * 5.0 + uTime * 2.5 + bPhase * 12.0);
     float along = pow(max(1.0 - vT, 0.0), bFalloff * 0.95);
     float pulse = 0.76 + 0.24 * sin(uTime * 3.4 + bPhase * 19.0);
-    a = pow(baseCore, 0.85) * fanRibs * along * pulse * dust;
+    a = pow(baseCore, 1.45) * 0.92 * fanRibs * along * pulse * dust;
     emitCol = tintCol * (0.62 + 0.82 * along);
   } else {
-    // 4: Volumetric Holo-Projector Frustum (tight emitter lens at vT=0 focusing onto hologram screen at vT=1!)
-    float lensGlow = exp(-vT * 9.5) * pow(baseCore, 1.6) * 0.95;
-    float screenFocus = smoothstep(0.58, 0.995, vT) * (1.0 - smoothstep(0.995, 1.005, vT)) * 0.82;
-    float coneBody = (0.26 + 0.58 * vT) * pow(baseCore, 0.65);
-    float scan = 0.75 + 0.25 * sin(vT * 64.0 - uTime * 14.0 + bPhase * 17.0);
-    float rays = 0.72 + 0.28 * sin(uClamped * 34.0 + bPhase * 23.0);
+    // 4: Volumetric Holo-Projector Frustum (smooth lens-to-screen cone with zero internal X-cross!)
+    float rimSoft = pow(baseCore, 1.35);
+    float lensGlow = exp(-vT * 9.5) * pow(baseCore, 1.8) * 0.96;
+    float screenFocus = smoothstep(0.58, 0.995, vT) * (1.0 - smoothstep(0.995, 1.005, vT)) * rimSoft * 0.78;
+    float coneBody = (0.26 + 0.58 * vT) * rimSoft;
+    float scan = 0.78 + 0.22 * sin(vT * 64.0 - uTime * 14.0 + bPhase * 17.0);
+    float rays = 0.78 + 0.22 * sin(azim * 6.0 + bPhase * 23.0);
     a = (coneBody * scan * rays + lensGlow + screenFocus) * dust;
-    vec3 chroma = tintCol + vec3(0.14, 0.02, -0.10) * sin(uClamped * 18.0 + uTime * 4.0);
+    vec3 chroma = tintCol + vec3(0.12, 0.02, -0.09) * sin(azim * 3.0 + uTime * 4.0);
     emitCol = mix(chroma, vec3(1.0), lensGlow * 0.45 + screenFocus * 0.22);
   }
 
   float nightBoost = (bKind > 3.5) ? max(uLightK, 0.42) : max(uLightK, 0.12);
   a *= bGain * uBeamK * nightBoost;
-  gl_FragColor = vec4(emitCol, clamp(a, 0.0, 0.95));
+  gl_FragColor = vec4(emitCol, clamp(a, 0.0, 0.92));
 }
 `;
 
@@ -3714,33 +3753,120 @@ export const WEATHER_VERT = /* glsl */ `
 attribute float aOff;
 attribute float aSpeed;
 attribute float aSway;
+attribute float aFlakeSeed;
 uniform float uTime;
 uniform float uFallH;
 uniform float uSwayAmp;
 uniform float uWindX;
+uniform float uWeatherKind;
+uniform vec2 uFlakeSize;
 varying vec2 vUv;
+varying float vSeed;
+varying float vViewDist;
+varying float vColumnFade;
 void main() {
   vUv = uv;
-  vec4 wp = instanceMatrix * vec4(position, 1.0);
+  vSeed = aFlakeSeed;
+  vec3 center = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);
   // Subtract uTime * aSpeed so positive speeds fall DOWNWARD (-Y) toward the street!
-  float fallY = mod(wp.y + aOff - uTime * aSpeed, uFallH) - uFallH * 0.5;
-  wp.y = fallY;
-  wp.x += (fallY / max(uFallH, 1.0)) * uWindX + sin(uTime * aSway + aOff * 0.7) * uSwayAmp;
-  wp.z += cos(uTime * aSway * 0.8 + aOff * 1.3) * uSwayAmp;
-  wp = modelMatrix * wp;
-  gl_Position = projectionMatrix * viewMatrix * wp;
+  float fallY = mod(center.y + aOff - uTime * aSpeed, uFallH) - uFallH * 0.5;
+  float hNorm = clamp((fallY + uFallH * 0.5) / max(uFallH, 1.0), 0.0, 1.0);
+  vColumnFade = smoothstep(0.0, 0.09, hNorm) * (1.0 - smoothstep(0.91, 1.0, hNorm));
+  center.y = fallY;
+  float flutter2 = (uWeatherKind > 0.5)
+    ? sin(uTime * (aSway * 1.9 + 0.7) + aFlakeSeed * 19.0) * (uSwayAmp * 0.28)
+    : 0.0;
+  center.x += (fallY / max(uFallH, 1.0)) * uWindX + sin(uTime * aSway + aOff * 0.7) * uSwayAmp + flutter2;
+  center.z += cos(uTime * aSway * 0.8 + aOff * 1.3) * uSwayAmp + flutter2 * 0.75;
+
+  vec3 worldCenter = (modelMatrix * vec4(center, 1.0)).xyz;
+  vec3 toCam = cameraPosition - worldCenter;
+  vViewDist = length(toCam);
+
+  vec3 wp = worldCenter;
+  if (uWeatherKind < 0.5) {
+    // 0: Rain — camera-facing axial streak ribbon (never a boxy cuboid!)
+    vec3 streakUp = normalize((modelMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+    vec3 sideVec = cross(toCam, streakUp);
+    float sLen = length(sideVec);
+    vec3 streakRight = sLen > 1e-4 ? (sideVec / sLen) : vec3(1.0, 0.0, 0.0);
+    float lenVar = 0.82 + 0.36 * fract(aFlakeSeed * 5.71);
+    wp += streakRight * (position.x * uFlakeSize.x) + streakUp * (position.y * uFlakeSize.y * lenVar);
+  } else {
+    // 1: Snow / 2: Ash — true spherical camera-facing billboard with gentle spin & natural size distribution!
+    vec3 camRight = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
+    vec3 camUp = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
+    float spinDir = aFlakeSeed > 0.5 ? 1.0 : -1.0;
+    float spinAng = uTime * (0.42 + aSway * 0.32) * spinDir + aFlakeSeed * 6.2831853;
+    float cs = cos(spinAng);
+    float sn = sin(spinAng);
+    vec2 rotXY = vec2(position.x * cs - position.y * sn, position.x * sn + position.y * cs);
+    float sizeVar = mix(0.42, 1.32, pow(fract(aFlakeSeed * 7.31), 1.35));
+    wp += (camRight * rotXY.x * uFlakeSize.x + camUp * rotXY.y * uFlakeSize.y) * sizeVar;
+  }
+
+  gl_Position = projectionMatrix * viewMatrix * vec4(wp, 1.0);
 }
 `;
 
 export const WEATHER_FRAG = /* glsl */ `
 uniform vec3 uWeatherCol;
 uniform float uWeatherK;
+uniform float uWeatherKind;
+uniform float uWeatherFade;
+uniform float uTime;
 varying vec2 vUv;
+varying float vSeed;
+varying float vViewDist;
+varying float vColumnFade;
 void main() {
-  float along = 1.0 - abs(vUv.y * 2.0 - 1.0);
-  float across = 1.0 - abs(vUv.x * 2.0 - 1.0);
-  float a = along * (0.35 + 0.65 * across) * uWeatherK;
-  gl_FragColor = vec4(uWeatherCol, a);
+  float fadeK = uWeatherK * uWeatherFade * vColumnFade;
+  if (fadeK <= 0.003) discard;
+
+  if (uWeatherKind < 0.5) {
+    // Rain: sleek tapered motion-blurred streak with zero hard horizontal edges
+    float along = sin(3.14159265 * clamp(vUv.y, 0.0, 1.0));
+    float across = pow(sin(3.14159265 * clamp(vUv.x, 0.0, 1.0)), 1.65);
+    float a = along * across * fadeK;
+    if (a <= 0.004) discard;
+    gl_FragColor = vec4(uWeatherCol, clamp(a, 0.0, 0.92));
+    return;
+  }
+
+  vec2 p = (vUv - 0.5) * 2.0;
+  float r = length(p);
+  if (r > 1.0) discard;
+  float ang = atan(p.y, p.x);
+
+  if (uWeatherKind < 1.5) {
+    // Snow: 6-fold hexagonal stellar dendrite ice crystal close-up + soft optical snow bokeh at distance!
+    float armSharp = mix(5.5, 13.5, fract(vSeed * 3.17));
+    float arm6 = pow(max(0.0, cos(ang * 6.0)), armSharp);
+    float chev1 = pow(max(0.0, cos(ang * 6.0 + (r - 0.38) * 14.0)), 7.0)
+      * smoothstep(0.16, 0.42, r) * (1.0 - smoothstep(0.66, 0.94, r));
+    float chev2 = pow(max(0.0, cos(ang * 6.0 - (r - 0.38) * 14.0)), 7.0)
+      * smoothstep(0.16, 0.42, r) * (1.0 - smoothstep(0.66, 0.94, r));
+    float hexPlate = exp(-r * r * 9.5) * (0.85 + 0.15 * cos(ang * 6.0));
+    float rimFade = 1.0 - smoothstep(0.76, 1.0, r);
+    float crystal = clamp((hexPlate + arm6 * (1.0 - smoothstep(0.10, 0.96, r)) * 0.85 + (chev1 + chev2) * 0.42) * rimFade, 0.0, 1.0);
+    float softFlake = exp(-r * r * 3.6) * (1.0 - smoothstep(0.62, 1.0, r));
+    float detailBlend = (1.0 - smoothstep(12.0, 56.0, vViewDist)) * step(0.18, fract(vSeed * 11.3));
+    float a = mix(softFlake * 0.88, max(crystal, softFlake * 0.48), detailBlend);
+    float glint = 0.86 + 0.18 * sin(uTime * 3.1 + vSeed * 43.0);
+    vec3 snowCol = mix(uWeatherCol, vec3(1.0), 0.35 * crystal * glint);
+    float finalA = a * glint * fadeK;
+    if (finalA <= 0.004) discard;
+    gl_FragColor = vec4(snowCol, clamp(finalA, 0.0, 0.96));
+    return;
+  }
+
+  // Volcanic Ash & Glowing Cinders: irregular organic flake silhouette (never cubic!)
+  float lobe = 0.68 + 0.20 * sin(ang * 3.0 + vSeed * 19.0) + 0.11 * cos(ang * 5.0 - vSeed * 13.0);
+  if (r > lobe) discard;
+  float edge = 1.0 - smoothstep(lobe * 0.48, lobe, r);
+  float ember = step(0.82, vSeed) * (0.55 + 0.45 * sin(uTime * 4.8 + vSeed * 37.0));
+  vec3 ashCol = mix(uWeatherCol, vec3(1.0, 0.46, 0.14), ember * (1.0 - r * 0.6));
+  gl_FragColor = vec4(ashCol, clamp(edge * fadeK, 0.0, 0.92));
 }
 `;
 

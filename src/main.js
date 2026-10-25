@@ -20,7 +20,7 @@ import {
   buildStreetInfrastructure,
 } from './scene.js';
 import { makePostProcessor, ART_STYLE_NAMES, LENS_MODE_NAMES, CAMERA_ANGLE_PRESETS } from './post.js';
-import { FlyControls, CAMERA_STYLE_NAMES } from './controls.js';
+import { FlyControls, CAMERA_STYLE_NAMES, CINEMATIC_GAZE_MODES } from './controls.js';
 import { CameraPathRecorder, makeSceneExporter } from './recorder.js';
 import { makeMinimap } from './minimap.js';
 import { ModularRadioEngine, RADIO_STATIONS } from './audio.js';
@@ -223,7 +223,7 @@ const tune = initialExact
       tint: initLookDefTint,
       searchLight: 1, searchCount: 1, trafficLight: 1, sigDensity: 1, vehLight: 1, lampDensity: 1,
       waterShader: 0, waterScale: 1, waterChop: 1, waterFoam: 0.85, waterRefl: 1.15, waterContrast: 0.12, waterWarp: 0.4,
-      cloudSeed: 0, cloudEvol: 0.35, cloudLac: 2.08, cloudElev: 1, cloudRange: 1,
+      cloudSeed: 0, cloudEvol: 0.35, cloudLac: 2.08, cloudElev: 1, cloudRange: 1, cloudPuffs: 1,
       cloudLayersMode: 1,
       cloudLayerElev: [...defLayerPreset.elev],
       cloudLayerThick: [...defLayerPreset.thick],
@@ -249,12 +249,13 @@ const tune = initialExact
       waterContrast: params.get('wk') !== null ? clampFloat(params.get('wk'), 0, 1, 0.12) : 0.12,
       waterWarp: params.get('ww') !== null ? clampFloat(params.get('ww'), 0, 2, 0.4) : 0.4,
       clouds: params.get('cl') !== null ? clampFloat(params.get('cl'), 0, 2.4, 1) : 1,
+      cloudPuffs: params.get('cpf') !== null ? clampFloat(params.get('cpf'), 0, 2, 1) : 1,
       cloudType: clampInt(params.get('ct'), 0, 5, 0),
       cloudStyle: clampInt(params.get('cs'), 0, 6, 0),
       cloudSeed: params.get('cseed') !== null ? clampFloat(params.get('cseed'), 0, 100, 0) : 0,
       cloudEvol: params.get('cevol') !== null ? clampFloat(params.get('cevol'), 0, 2.5, 0.35) : 0.35,
       cloudLac: params.get('clac') !== null ? clampFloat(params.get('clac'), 1.4, 3.2, 2.08) : 2.08,
-      cloudElev: params.get('cel') !== null ? clampFloat(params.get('cel'), 0.35, 2.4, 1) : 1,
+      cloudElev: params.get('cel') !== null ? clampFloat(params.get('cel'), 0.05, 2.4, 1) : 1,
       cloudRange: params.get('crg') !== null ? clampFloat(params.get('crg'), 0.3, 3.0, 1) : 1,
       cloudLayersMode: clampInt(params.get('clm'), 0, 7, 1),
       cloudLayerElev: [...((CLOUD_LAYER_PRESETS[clampInt(params.get('clm'), 0, 7, 1)] || defLayerPreset).elev || defLayerPreset.elev)],
@@ -272,6 +273,12 @@ const radioState = initialExact && initialExact.radio
   ? { station: 0, volume: 0.68, space: 0.9, warmth: 0.8, pulse: 0.55, react: 0.65, playlistMode: 'seq', playlistInterval: 75, ...initialExact.radio }
   : { station: 0, volume: 0.68, space: 0.9, warmth: 0.8, pulse: 0.55, react: 0.65, playlistMode: 'seq', playlistInterval: 75 };
 let weatherMode = initialExact ? initialExact.weatherMode : clampInt(params.get('w'), 0, 6, 0);
+let weatherAutoMode = initialExact && ['off', 'seq', 'shuffle', 'cinematic'].includes(initialExact.weatherAutoMode)
+  ? initialExact.weatherAutoMode
+  : 'off';
+let weatherInterval = initialExact && Number.isFinite(initialExact.weatherInterval)
+  ? clampInt(initialExact.weatherInterval, 15, 240, 60)
+  : 60;
 let dustLevel = initialExact ? initialExact.dustLevel : 0.6;
 const initGrade = LOOK_BY_ID[lookId].grade || { bloom: 0.85, lens: 0.45, contrast: 1.06, temp: 0, film: 0.16 };
 const postState = initialExact
@@ -430,11 +437,17 @@ function boot() {
   let cityCollider = null;
   let poiList = [];
   let glideOn = (demoBoot && demoBoot.forceAutoloop) ? true : (initialExact ? !!initialExact.glide : false);
-  let autoLookOn = initialExact ? !!initialExact.autoLook : false;
+  let gazeMode = initialExact
+    ? clampInt(initialExact.gazeMode ?? (initialExact.autoLook === false ? 0 : 1), 0, 5, 1)
+    : 1;
+  let autoLookOn = gazeMode > 0;
   let freelookOn = initialExact ? !!initialExact.freelook : false;
   let collideOn = initialExact ? initialExact.collide !== false : true;
   let avoidOn = initialExact ? initialExact.avoidance !== false : true;
   let timeCycleOn = initialExact ? !!initialExact.dayCycle : false;
+  let weatherAutoTimer = 0;
+  let weatherArcIdx = 0;
+  const CINEMATIC_WEATHER_ARC = [0, 1, 2, 0, 3, 5, 6];
   let vidAudioOn = true;
   let userLoopOverride = (initialExact && Array.isArray(initialExact.autoLoop) && initialExact.autoLoop.length >= 3)
     ? initialExact.autoLoop.map((p) => ({ ...p }))
@@ -456,10 +469,31 @@ function boot() {
     getVehicles: () => vehicles,
   });
 
+  controls.getLiveProjections = () => {
+    const out = [];
+    if (director && director._projectedHolos) {
+      for (const h of director._projectedHolos.values()) {
+        if (h && h.group) {
+          out.push({
+            name: h.text || 'Projected Hologram',
+            x: h.group.position.x,
+            y: h.group.position.y,
+            lookY: h.group.position.y,
+            z: h.group.position.z,
+            live: true,
+            priority: 2.6,
+          });
+        }
+      }
+    }
+    return out;
+  };
+
   function enqueueSpotRoute(rawSpot, opts = {}) {
     if (!rawSpot) return;
     const spot = rawSpot.poi ? rawSpot.poi : rawSpot;
     director.stopCameraScript();
+    fly = null; // never quick-jump teleport; route smoothly at current camera speed!
     const dist = spot.kind === 'media' ? Math.max(190, (spot.r || 90) * 1.05) : Math.max(150, (spot.r || 32) * 3.2);
     const away = new THREE.Vector3(camera.position.x - spot.x, 0, camera.position.z - spot.z);
     if (away.lengthSq() < 1) away.set(1, 0, 1);
@@ -467,17 +501,26 @@ function boot() {
     const terrAtTarget = cityCollider && cityCollider.groundHeightAt ? cityCollider.groundHeightAt(spot.x, spot.z) : 0;
     const baseH = spot.h || spot.y || 65;
     const cruiseY = Math.max(terrAtTarget + 44, terrAtTarget + baseH * 0.68 * heightScale + 26);
+    const lookY = terrAtTarget + baseH * 0.52 * heightScale;
     const curved = bendWorldPoint(spot.x + away.x, cruiseY, spot.z + away.z, worldCurve, U.uPlanetR.value);
+    const curvedLook = bendWorldPoint(spot.x, lookY, spot.z, worldCurve, U.uPlanetR.value);
 
     const nStops = controls.enqueueWaypoint(
-      { name: spot.name || 'Map Pin', x: curved.x, y: curved.y, z: curved.z },
+      {
+        name: spot.name || 'Map Pin',
+        x: curved.x,
+        y: curved.y,
+        z: curved.z,
+        lookX: curvedLook.x,
+        lookY: curvedLook.y,
+        lookZ: curvedLook.z,
+      },
       { append: !!opts.append, stopOnArrive: !!opts.stopOnArrive }
     );
-    if (controls.glideSpeed < 55) controls.glideSpeed = 145;
     if (!glideOn) setGlideState(true, false);
     flash(opts.append && nStops > 1
       ? `\u2708\uFE0E Route +Stop #${nStops} \u00B7 ${spot.name || 'Pin'}`
-      : `\u2708\uFE0E Flying route \u2192 ${spot.name || 'Map Pin'}`);
+      : `\u2708\uFE0E Destination \u2192 ${spot.name || 'Map Pin'}`);
   }
 
   controls.onRouteArrive = (wp) => {
@@ -903,12 +946,18 @@ function boot() {
     $('#water-contrast-label').textContent = `Tint ${Math.round((tune.waterContrast ?? 0.12) * 100)}%`;
     $('#water-warp-label').textContent = `Warp ${Math.round((tune.waterWarp ?? 0.4) * 100)}%`;
     $('#cloud-label').textContent = tune.clouds <= 0.005 ? 'Off' : `${Math.round(tune.clouds * 100)}%`;
+    $('#cloud-puffs-label').textContent = (tune.cloudPuffs ?? 1) <= 0.005 ? 'Off' : `Puffs ${Math.round((tune.cloudPuffs ?? 1) * 100)}%`;
     $('#cloudelev-label').textContent = `${(tune.cloudElev ?? 1).toFixed(2)}\u00D7`;
     $('#cloudrange-label').textContent = `${(tune.cloudRange ?? 1).toFixed(2)}\u00D7`;
     $('#cloud-lac-label').textContent = `Lac ${(tune.cloudLac ?? 2.08).toFixed(2)}`;
     $('#windang-label').textContent = `${Math.round(tune.windAngle ?? 30)}\u00B0`;
     $('#windstr-label').textContent = (tune.windStrength ?? 1) <= 0.02 ? 'Calm' : `${(tune.windStrength ?? 1).toFixed(2)}\u00D7`;
     syncCloudLayerInspector();
+    $('#sel-weather-auto').value = weatherAutoMode;
+    $('#sl-weather-interval').value = String(weatherInterval);
+    $('#weather-interval-label').textContent = weatherAutoMode === 'off'
+      ? 'Hold'
+      : (weatherInterval >= 60 ? `${Math.floor(weatherInterval / 60)}m ${String(weatherInterval % 60).padStart(2, '0')}s` : `${weatherInterval}s`);
     $('#traffspeed-label').textContent = trafficSpeed <= 0.01 ? 'Paused' : `${trafficSpeed.toFixed(2)}\u00D7`;
     $('#dayspeed-label').textContent = `${daySpeed.toFixed(2)}\u00D7`;
     $('#transit-label').textContent = transitAmt <= 0.01 ? 'Off' : `${Math.round(transitAmt * 100)}%`;
@@ -942,6 +991,7 @@ function boot() {
     $('#sel-look').value = lookId;
     $('#sl-tint').value = String(tune.tint ?? 0.72);
     $('#sel-camstyle').value = String(camStyle);
+    $('#sel-gaze-mode').value = String(gazeMode);
     $('#sl-camspeed').value = String(camSpeed);
     $('#sl-camrad').value = String(camRadius);
     $('#sl-camsmooth').value = String(camSmooth);
@@ -986,6 +1036,7 @@ function boot() {
     $('#sl-fog').value = String(tune.fog);
     $('#sl-lights').value = String(tune.lights);
     $('#sl-clouds').value = String(tune.clouds);
+    $('#sl-cloud-puffs').value = String(tune.cloudPuffs ?? 1);
     $('#sl-cloudelev').value = String(tune.cloudElev ?? 1);
     $('#sl-cloudrange').value = String(tune.cloudRange ?? 1);
     syncCloudLayerInspector();
@@ -1059,9 +1110,12 @@ function boot() {
       postState.film = look.grade.film;
       syncPostSliders();
     }
+    const stormB = weather && typeof weather.stormBlend === 'number'
+      ? weather.stormBlend
+      : ((weatherMode === 2 || weatherMode === 6) ? 1 : 0);
     const effClouds = tune.clouds <= 0.005
       ? 0
-      : (weatherMode === 2 || weatherMode === 6 ? Math.max(tune.clouds, 1.35) : tune.clouds);
+      : tune.clouds + Math.max(0, 1.35 - tune.clouds) * stormB;
     const effType = weatherMode === 2 && (tune.cloudType ?? 0) === 0 ? 1 : (tune.cloudType ?? 0);
     const effStyle = weatherMode === 6 && tune.cloudStyle === 0 ? 1 : tune.cloudStyle;
     const lookTune = {
@@ -1087,7 +1141,10 @@ function boot() {
       streetInfraObj.setSignalGlow(tune.trafficLight ?? 1);
       if (streetInfraObj.setDensity) streetInfraObj.setDensity(tune.sigDensity ?? 1);
     }
-    if (world.clouds) world.clouds.visible = U.uCloud.value > 0.008;
+    if (world.clouds) {
+      const maxLayerD = Array.isArray(tune.cloudLayerDens) ? Math.max(...tune.cloudLayerDens) : 1;
+      world.clouds.visible = U.uCloud.value > 0.008 && (tune.cloudPuffs ?? 1) > 0.008 && maxLayerD > 0.008;
+    }
     if (billboards) billboards.visible = signAmt > 0.01;
     if (signGroup) signGroup.visible = signAmt > 0.01;
     if (holoGroup) holoGroup.visible = signAmt > 0.01;
@@ -1195,8 +1252,11 @@ function boot() {
       daySpeed,
       trafficSpeed,
       weatherMode,
+      weatherAutoMode,
+      weatherInterval,
       dustLevel,
       glide: glideOn,
+      gazeMode,
       autoLook: autoLookOn,
       freelook: freelookOn,
       collide: collideOn,
@@ -1273,6 +1333,9 @@ function boot() {
     controls.turnSmooth = turnSmooth;
     controls.motionStyle = camStyle;
     weatherMode = st.weatherMode;
+    weatherAutoMode = st.weatherAutoMode || 'off';
+    weatherInterval = st.weatherInterval || 60;
+    weatherAutoTimer = 0;
     dustLevel = st.dustLevel;
     Object.assign(tune, st.tune);
     if (!Array.isArray(tune.cloudLayerElev) || tune.cloudLayerElev.length !== 3) {
@@ -1320,7 +1383,8 @@ function boot() {
     if (st.avoidance !== avoidOn) setAvoidanceState(st.avoidance);
     if (st.collide !== collideOn) setCollisionState(st.collide);
     if (st.glide !== glideOn) setGlideState(st.glide);
-    if (!!st.autoLook !== autoLookOn) setAutoLookState(!!st.autoLook);
+    if (st.gazeMode !== undefined) setGazeModeState(st.gazeMode, false);
+    else if (!!st.autoLook !== autoLookOn) setAutoLookState(!!st.autoLook);
     if (!!st.freelook !== freelookOn) setFreelookState(!!st.freelook);
 
     if (applyBookmarks && st.bookmarks && st.bookmarks.length) {
@@ -2058,7 +2122,8 @@ function boot() {
   bindSlider($('#sl-fog'), (v) => { tune.fog = v; refreshLook(); });
   bindSlider($('#sl-lights'), (v) => { tune.lights = v; refreshLook(); });
   bindSlider($('#sl-clouds'), (v) => { tune.clouds = v; refreshLook(); });
-  bindSlider($('#sl-cloudelev'), (v) => { tune.cloudElev = clampFloat(v, 0.35, 2.4, 1); refreshLook(); });
+  bindSlider($('#sl-cloud-puffs'), (v) => { tune.cloudPuffs = clampFloat(v, 0, 2, 1); refreshLook(); });
+  bindSlider($('#sl-cloudelev'), (v) => { tune.cloudElev = clampFloat(v, 0.05, 2.4, 1); refreshLook(); });
   bindSlider($('#sl-cloudrange'), (v) => { tune.cloudRange = clampFloat(v, 0.3, 3.0, 1); refreshLook(); });
   $('#sel-cloud-layers').onchange = (ev) => {
     const mode = clampInt(ev.target.value, 0, CLOUD_LAYER_PRESETS.length - 1, 1);
@@ -2087,13 +2152,13 @@ function boot() {
   });
   bindSlider($('#sl-clayer-elev'), (v) => {
     if (!Array.isArray(tune.cloudLayerElev)) tune.cloudLayerElev = [...defLayerPreset.elev];
-    tune.cloudLayerElev[cloudEditLayer] = clampFloat(v, 60, 2800, 680);
+    tune.cloudLayerElev[cloudEditLayer] = clampFloat(v, 5, 2800, 680);
     tune.cloudLayersMode = 7;
     refreshLook();
   });
   bindSlider($('#sl-clayer-thick'), (v) => {
     if (!Array.isArray(tune.cloudLayerThick)) tune.cloudLayerThick = [...defLayerPreset.thick];
-    tune.cloudLayerThick[cloudEditLayer] = clampFloat(v, 80, 1600, 620);
+    tune.cloudLayerThick[cloudEditLayer] = clampFloat(v, 25, 1600, 620);
     tune.cloudLayersMode = 7;
     refreshLook();
   });
@@ -2145,9 +2210,26 @@ function boot() {
   });
   bindSlider($('#sl-weather'), (v) => {
     weatherMode = Math.round(v);
+    weatherAutoTimer = 0;
     weather.setMode(weatherMode);
     syncWeatherLabel();
     refreshLook();
+  });
+  $('#sel-weather-auto').value = weatherAutoMode;
+  $('#sel-weather-auto').onchange = (ev) => {
+    const m = String(ev.target.value || 'off');
+    weatherAutoMode = ['off', 'seq', 'shuffle', 'cinematic'].includes(m) ? m : 'off';
+    weatherAutoTimer = 0;
+    syncFeatureLabels();
+    syncURL();
+    flash(weatherAutoMode === 'off'
+      ? 'Weather Cycle \u00B7 Hold Current Mode'
+      : `\u21BB Weather Auto-Cycle \u00B7 ${weatherAutoMode} (${weatherInterval}s)`);
+  };
+  bindSlider($('#sl-weather-interval'), (v) => {
+    weatherInterval = clampInt(v, 15, 240, 60);
+    weatherAutoTimer = Math.min(weatherAutoTimer, weatherInterval * 0.9);
+    syncFeatureLabels();
   });
   $('#sel-cloudtype').value = String(tune.cloudType ?? 0);
   $('#sel-cloudtype').onchange = (ev) => {
@@ -2544,22 +2626,39 @@ function boot() {
     }
   }
 
-  function setAutoLookState(on, announce = false) {
-    autoLookOn = !!on;
-    controls.setAutoLook(autoLookOn);
+  function setGazeModeState(mode, announce = false) {
+    const m = clampInt(mode, 0, CINEMATIC_GAZE_MODES.length - 1, 1);
+    gazeMode = controls.setGazeMode(m);
+    autoLookOn = gazeMode > 0;
     const b = $('#b-autolook');
     b.classList.toggle('on', autoLookOn);
     b.setAttribute('aria-pressed', String(autoLookOn));
-    b.title = `Autopilot POI Auto-Look — automatically gaze at nearby landmarks & vistas while cruising slowly or hovering: ${autoLookOn ? 'on' : 'off'} (O)`;
+    b.title = `Strategic Cinematic Gaze — realistically admire nearby landmarks, projections, street canyons & spires: ${autoLookOn ? CINEMATIC_GAZE_MODES[gazeMode] : 'off'} (O)`;
+    $('#sel-gaze-mode').value = String(gazeMode);
     if (autoLookOn && !glideOn && announce) {
       setGlideState(true, false);
     }
     if (announce) {
       flash(autoLookOn
-        ? '\u29BF Autopilot POI Auto-Look on (wheel down to slow/hover & gaze around)'
-        : 'POI Auto-Look off');
+        ? `\u29BF Gaze \u00B7 ${CINEMATIC_GAZE_MODES[gazeMode]}`
+        : 'Cinematic Gaze \u00B7 Off (Locked Forward Nose)');
     }
   }
+
+  function setAutoLookState(on, announce = false) {
+    if (on) {
+      const restore = gazeMode > 0 ? gazeMode : (controls._lastActiveGazeMode || 1);
+      setGazeModeState(restore, announce);
+    } else {
+      setGazeModeState(0, announce);
+    }
+  }
+
+  $('#sel-gaze-mode').value = String(gazeMode);
+  $('#sel-gaze-mode').onchange = (ev) => {
+    setGazeModeState(clampInt(ev.target.value, 0, CINEMATIC_GAZE_MODES.length - 1, 1), true);
+    syncURL();
+  };
 
   function toggleGlide() { setGlideState(!glideOn, true); }
   function toggleAutoLook() { setAutoLookState(!autoLookOn, true); }
@@ -2737,15 +2836,47 @@ function boot() {
         ? 1.65
         : (lm.kind === 'media' || lm.kind === 'spaceport' || lm.kind === 'harbor' ? 1.45 : 1.0),
     }));
+
+    // Populate 3D Hologram & Hero Projection targets for Strategic Cinematic Gaze!
+    const projTargets = [];
+    if (Array.isArray(city.holos)) {
+      city.holos.forEach((H, idx) => {
+        projTargets.push({
+          name: H.label || `Hologram #${idx + 1}`,
+          x: H.x,
+          y: (H.y || 55) * heightScale,
+          lookY: (H.y || 55) * heightScale,
+          z: H.z,
+          priority: H.kind === 'portal' || H.kind === 'cylinder' ? 1.85 : 1.55,
+        });
+      });
+    }
+    if (Array.isArray(city.bills)) {
+      const step = Math.max(1, Math.floor(city.bills.length / 24));
+      for (let bi = 0; bi < city.bills.length && projTargets.length < 48; bi += step) {
+        const B = city.bills[bi];
+        if (B && Number.isFinite(B.x) && Number.isFinite(B.z)) {
+          projTargets.push({
+            name: `Neon Projection #${bi + 1}`,
+            x: B.x,
+            y: (B.y || 48) * heightScale,
+            lookY: (B.y || 48) * heightScale,
+            z: B.z,
+            priority: 1.15,
+          });
+        }
+      }
+    }
+    controls.projectionList = projTargets;
   }
 
   $('#sel-poi').onchange = (ev) => {
     const lm = poiList[parseInt(ev.target.value, 10)];
-    if (lm) flyToLandmark(lm);
+    if (lm) enqueueSpotRoute(lm);
   };
-  $('#b-poi-go').onclick = () => {
+  $('#b-poi-go').onclick = (ev) => {
     const lm = poiList[parseInt($('#sel-poi').value, 10)];
-    if (lm) flyToLandmark(lm);
+    if (lm) enqueueSpotRoute(lm, { append: !!(ev && ev.shiftKey) });
   };
 
   // Separate Place Bookmarks system (user camera viewpoints)
@@ -2840,6 +2971,35 @@ function boot() {
         tune.moonph = ((tune.moonph + dt * 0.032 * daySpeed) % 2 + 2) % 2;
         $('#sl-time').value = String(timeOfDay);
         $('#sl-moonph').value = String(tune.moonph);
+        refreshLook(false, true);
+      }
+      if (weatherAutoMode !== 'off') {
+        weatherAutoTimer += dt;
+        if (weatherAutoTimer >= weatherInterval) {
+          weatherAutoTimer = 0;
+          let nextW = weatherMode;
+          if (weatherAutoMode === 'seq') {
+            nextW = (weatherMode + 1) % WEATHER_NAMES.length;
+          } else if (weatherAutoMode === 'shuffle') {
+            const delta = 1 + Math.floor(Math.random() * Math.max(1, WEATHER_NAMES.length - 1));
+            nextW = (weatherMode + delta) % WEATHER_NAMES.length;
+          } else if (weatherAutoMode === 'cinematic') {
+            weatherArcIdx = (weatherArcIdx + 1) % CINEMATIC_WEATHER_ARC.length;
+            nextW = CINEMATIC_WEATHER_ARC[weatherArcIdx];
+            if (nextW === weatherMode) {
+              weatherArcIdx = (weatherArcIdx + 1) % CINEMATIC_WEATHER_ARC.length;
+              nextW = CINEMATIC_WEATHER_ARC[weatherArcIdx];
+            }
+          }
+          weatherMode = nextW;
+          $('#sl-weather').value = String(weatherMode);
+          syncWeatherLabel();
+          weather.transitionTo(weatherMode, Math.min(6.0, Math.max(2.5, weatherInterval * 0.22)));
+          refreshLook(false, true);
+          flash(`\u2602\uFE0E Weather \u2192 ${WEATHER_NAMES[weatherMode]}`);
+        }
+      }
+      if (weather && weather.isTransitioning && !timeCycleOn) {
         refreshLook(false, true);
       }
       if (pathRecorder.playing) {
@@ -2952,6 +3112,21 @@ function boot() {
     if (patch.waterChop !== undefined) { tune.waterChop = clampFloat(patch.waterChop, 0, 2.5, 1); needRefreshLook = true; }
     if (patch.waterFoam !== undefined) { tune.waterFoam = clampFloat(patch.waterFoam, 0, 2.5, 0.85); needRefreshLook = true; }
     if (patch.clouds !== undefined) { tune.clouds = clampFloat(patch.clouds, 0, 2.4, 1); needRefreshLook = true; }
+    if (patch.cloudPuffs !== undefined) { tune.cloudPuffs = clampFloat(patch.cloudPuffs, 0, 2, 1); needRefreshLook = true; }
+    if (patch.cloudElev !== undefined) { tune.cloudElev = clampFloat(patch.cloudElev, 0.05, 2.4, 1); needRefreshLook = true; }
+    if (patch.weatherMode !== undefined) {
+      weatherMode = clampInt(patch.weatherMode, 0, 6, 0);
+      weather.transitionTo(weatherMode, 2.2);
+      syncWeatherLabel();
+      needRefreshLook = true;
+    }
+    if (patch.weatherAutoMode !== undefined && ['off', 'seq', 'shuffle', 'cinematic'].includes(patch.weatherAutoMode)) {
+      weatherAutoMode = patch.weatherAutoMode;
+      weatherAutoTimer = 0;
+    }
+    if (patch.weatherInterval !== undefined) {
+      weatherInterval = clampInt(patch.weatherInterval, 15, 240, 60);
+    }
     if (patch.cloudLayer !== undefined) {
       const m = clampInt(patch.cloudLayer, 0, 7, 1);
       tune.cloudLayersMode = m;
@@ -3038,7 +3213,8 @@ function boot() {
       controls.turnSmooth = turnSmooth;
     }
     if (patch.glide !== undefined) setGlideState(!!patch.glide, false);
-    if (patch.autoLook !== undefined) setAutoLookState(!!patch.autoLook, false);
+    if (patch.gazeMode !== undefined) setGazeModeState(clampInt(patch.gazeMode, 0, 5, 1), false);
+    else if (patch.autoLook !== undefined) setAutoLookState(!!patch.autoLook, false);
     if (patch.freelook !== undefined) setFreelookState(!!patch.freelook, false);
     if (Array.isArray(patch.autoLoop) && patch.autoLoop.length >= 3) {
       userLoopOverride = patch.autoLoop.map((p) => ({ ...p }));
@@ -3087,7 +3263,7 @@ function boot() {
   setAvoidanceState(avoidOn, false);
   setCollisionState(collideOn, false);
   setFreelookState(freelookOn, false);
-  setAutoLookState(autoLookOn, false);
+  setGazeModeState(gazeMode, false);
   if (initialExact && initialExact.camera) {
     controls.setPose(initialExact.camera);
   }

@@ -19,14 +19,14 @@ import {
   buildWater, buildBoulevards, buildBillboards, buildTrees, buildSculptures,
   makeWeather, WEATHER_NAMES, CLOUD_TYPE_NAMES, CLOUD_LAYER_PRESETS,
   WATER_MODE_NAMES, WATER_SHADER_NAMES, TERRAIN_MODE_NAMES, TREE_MODE_NAMES, GLYPH_STYLE_NAMES, describeMoonPhase,
-  buildSigns, buildHolos, projectorFrustumGeometry,
+  buildSigns, buildHolos, projectorFrustumGeometry, beamGeometry,
   buildTransitInfrastructure, buildBridges, buildHarbor, buildSpaceport,
   buildStreetInfrastructure, evalTrafficSignalState,
 } from '../src/scene.js';
 import {
   WORLD_PRESETS, DEFAULT_BOOKMARKS, normalizeExactState, encodeExactState, decodeExactState,
 } from '../src/presets.js';
-import { FlyControls, CAMERA_STYLE_NAMES } from '../src/controls.js';
+import { FlyControls, CAMERA_STYLE_NAMES, CINEMATIC_GAZE_MODES } from '../src/controls.js';
 import { CameraPathRecorder, makeSceneExporter, VIDEO_QUALITY_PRESETS } from '../src/recorder.js';
 import { makeMinimap } from '../src/minimap.js';
 import {
@@ -2474,6 +2474,196 @@ test('Phase-18 ultra-slow gap-seeking camera, editable minimap autopilot loop, p
   const extRefs = [...standaloneHtml.matchAll(/(?:src|href)="(https?:)?\/\/[^"]+"/g)];
   assert.equal(extRefs.length, 0, 'standalone demo HTML has zero external network dependencies');
 });
+
+test('Phase-19 landmark destination at current speed, strategic cinematic gaze modes, cross-free volumetric cones, controllable cumulus, auto-weather crossfade & non-cubic crystalline snow', () => {
+  const domStub = { addEventListener() {}, removeEventListener() {}, setPointerCapture() {} };
+
+  // 1) Landmark / Waypoint routing strictly preserves current camera speed (no quick-jump or speed reset!)
+  {
+    const cam = new THREE.PerspectiveCamera(58, 16 / 9, 2, 34000);
+    cam.position.set(0, 120, 400);
+    const ctl = new FlyControls(cam, domStub);
+    ctl.glideSpeed = 24;   // user slowed cruise down via scroll wheel
+    ctl.speedMul = 0.08;   // ultra-slow 0.08x cruise multiplier
+    const posBefore = cam.position.clone();
+    const q = ctl.enqueueWaypoint({
+      name: 'Helix Arcology',
+      x: 780,
+      y: 155,
+      z: -620,
+      lookX: 780,
+      lookY: 95,
+      lookZ: -620,
+    });
+    assert.equal(ctl.glide, true, 'routing to landmark smoothly engages autopilot glide');
+    assert.equal(ctl.glideSpeed, 24, 'enqueueWaypoint preserves current glideSpeed instead of resetting to 145');
+    assert.equal(ctl.speedMul, 0.08, 'enqueueWaypoint preserves current speedMul');
+    assert.ok(q.length >= 2, 'distant landmark inserts smooth elevated approach arc + final destination');
+    assert.equal(cam.position.distanceTo(posBefore), 0, 'landmark selection never teleports camera instantaneously');
+
+    for (let s = 0; s < 30; s++) ctl.update(1 / 60);
+    const moved = cam.position.distanceTo(posBefore);
+    assert.ok(moved > 0.3 && moved < 3.0, `camera advances smoothly at preserved slow speed (moved ${moved.toFixed(2)}m in 0.5s)`);
+  }
+
+  // 2) Strategic, Realistic Cinematic Gaze Modes (0..5: Off, Director, Sites, Projections, Vertigo Up/Down, Drift)
+  assert.equal(CINEMATIC_GAZE_MODES.length, 6, '6 settable cinematic gaze modes exposed');
+  {
+    const cam = new THREE.PerspectiveCamera(58, 16 / 9, 2, 34000);
+    cam.position.set(0, 140, 200);
+    cam.lookAt(0, 140, -200);
+    const ctl = new FlyControls(cam, domStub);
+    ctl.syncFromCamera();
+    // Place one occluded landmark behind a solid wall on the left (-X) and one clear landmark on the right (+X)
+    const wallCollider = makeCityCollider({
+      count: 1,
+      x: new Float32Array([-32]),
+      y: new Float32Array([90]),
+      z: new Float32Array([180]),
+      w: new Float32Array([28]),
+      h: new Float32Array([180]),
+      d: new Float32Array([120]),
+      rot: new Float32Array([0]),
+      landmarks: [],
+      places: [],
+    });
+    ctl.collider = wallCollider;
+    ctl.poiList = [
+      { name: 'Blocked West Tower', x: -160, y: 140, lookY: 130, z: 180, priority: 1.5 },
+      { name: 'Clear East Ziggurat', x: 150, y: 140, lookY: 125, z: 140, priority: 1.5 },
+    ];
+    ctl.projectionList = [
+      { name: 'Holo Portal Alpha', x: -95, y: 95, lookY: 95, z: -160, priority: 1.8 },
+    ];
+    ctl.getLiveProjections = () => [
+      { name: 'Live Drone Holo', x: 45, y: 132, lookY: 132, z: -115, live: true, priority: 2.6 },
+    ];
+    ctl.autopilotLoop = [];
+    ctl.setGlide(true);
+
+    // Mode 2 (Sites & Landmarks):sightline check rejects blocked West landmark & smoothly pans right (-yaw) toward Clear East Ziggurat
+    ctl.setGazeMode(2);
+    assert.equal(ctl.autoLook, true);
+    assert.equal(ctl.gazeMode, 2);
+    ctl._gazeBeatCount = 0; // ensure subject beat (not 3rd rest beat)
+    for (let s = 0; s < 90; s++) ctl.update(1 / 60);
+    assert.equal(ctl._autoLookPoi && ctl._autoLookPoi.name, 'Clear East Ziggurat', 'sightline guard selects unoccluded landmark');
+    assert.ok(ctl.yaw < -0.05 && Math.abs(ctl.moveYaw) < 0.08, 'head pans smoothly toward landmark while travel vector stays down avenue');
+
+    // Mode 3 (Holograms & Projections): locks onto live / nearby 3D hologram projection
+    ctl.setGazeMode(3);
+    ctl._gazeBeatCount = 0;
+    ctl.update(1 / 60);
+    assert.equal(ctl._autoLookPoi && ctl._autoLookPoi.name, 'Live Drone Holo', 'Projections mode prioritizes live hologram projection');
+
+    // Mode 4 (Vertigo Canyon & Spire Tilt): pitches downward into street canyons or upward toward spires
+    ctl.setGazeMode(4);
+    ctl._gazeKind = 'spire_up'; // force alternate beat -> canyon_down
+    ctl._autoLookTimer = 0;
+    for (let s = 0; s < 90; s++) ctl.update(1 / 60);
+    assert.equal(ctl._autoLookPoi && ctl._autoLookPoi.gazeKind, 'canyon_down', 'Vertigo mode frames street canyon below when high AGL');
+    assert.ok(ctl.pitch < -0.12, `Vertigo canyon gaze tilts camera pitch downward (pitch=${ctl.pitch.toFixed(3)})`);
+
+    // Mode 0 (Off) disables autoLook cleanly
+    ctl.setGazeMode(0);
+    assert.equal(ctl.autoLook, false);
+    assert.equal(ctl.gazeMode, 0);
+  }
+
+  // 3) Seamless Volumetric Light Cones & Holo Frustums — FrontSide + smooth outward normals + ZERO crossed planes!
+  const U = makeUniforms();
+  const world = makeWorld(U);
+  const { city } = growCity(4417, 5, world.towerMat, 0.5, { U, waterMode: 1 });
+  const veh = makeVehicles(city, U);
+  assert.equal(world.beamMat.side, THREE.FrontSide, 'world searchlight/holo beamMat uses FrontSide (no DoubleSide cross)');
+  assert.equal(veh.beams[0].material.side, THREE.FrontSide, 'vehicle headlight/blimp beamMat uses FrontSide');
+  assert.match(SHADERS.BEAM_FRAG, /dot\(surfN,\s*viewDir\)/, 'BEAM_FRAG computes smooth Fresnel view-chord falloff');
+
+  const coneGeo = beamGeometry(600, 120, { archetype: 0 });
+  const cPos = coneGeo.getAttribute('position');
+  const cNrm = coneGeo.getAttribute('normal');
+  assert.ok(cNrm && cNrm.count === cPos.count, 'beamGeometry carries smooth analytical vertex normals');
+  // Every vertex at y = 600 must sit on the outer cone perimeter (radius ~64.8m), NEVER crossing axis (0, y, 0)
+  for (let i = 0; i < cPos.count; i++) {
+    if (cPos.getY(i) > 300) {
+      const rXZ = Math.hypot(cPos.getX(i), cPos.getZ(i));
+      assert.ok(rXZ > 50, `cone vertex ${i} lies on outer hull (r=${rXZ.toFixed(1)}m), zero interior cross planes`);
+    }
+  }
+
+  const frGeo = projectorFrustumGeometry(0, 10, 14, { x: 0, y: 24, z: 0, w: 24, h: 16, rot: 0 }, 0.25);
+  const fPos = frGeo.getAttribute('position');
+  const fUv = frGeo.getAttribute('uv');
+  const fNrm = frGeo.getAttribute('normal');
+  assert.ok(fNrm && fNrm.count === fPos.count, 'projectorFrustumGeometry carries smooth outward normals');
+  for (let i = 0; i < fPos.count; i++) {
+    if (fUv.getY(i) > 0.9) {
+      const rScreen = Math.hypot(fPos.getX(i), fPos.getY(i) - 24);
+      assert.ok(rScreen > 6.5, `projector frustum screen vertex ${i} lies on outer gate perimeter (r=${rScreen.toFixed(2)}m), zero internal diagonal X-sheets`);
+    }
+  }
+
+  const dirCam = new THREE.PerspectiveCamera(58, 16 / 9, 2, 34000);
+  const dirScene = new THREE.Scene();
+  const dir = new MovieSetDirector({ scene: dirScene, camera: dirCam, controls: null, uniforms: U, getCity: () => city, getVehicles: () => veh });
+  const projRes = dir.projectInFrontOfCamera({ text: 'NO CROSS', distance: 30 });
+  assert.equal(projRes.ok, true);
+  const spawnedHolo = dir._projectedHolos.get(projRes.projectionId);
+  assert.equal(spawnedHolo.frustumMesh.material.side, THREE.FrontSide, 'Director projected hologram frustum uses FrontSide ShaderMaterial');
+
+  // 4) Controllable Cumulus Clouds: can be lowered down to street canyons (4m floor) or turned completely off (cloudPuffs = 0)
+  applyLook(U, LOOK_BY_ID.bladerunner, { cloudPuffs: 0, cloudElev: 0.05, cloudLayerElev: [8, 15, 1200] });
+  assert.equal(U.uCloudPuffs.value, 0, 'applyLook sets uCloudPuffs = 0 to turn off 3D cumulus puffs');
+  applyTime(U, LOOK_BY_ID.bladerunner, 18.5, { cloudPuffs: 0, cloudElev: 0.05, cloudLayerElev: [8, 15, 1200] });
+  assert.equal(U.uCloudPuffs.value, 0, 'applyTime preserves uCloudPuffs = 0');
+  assert.equal(U.uCloudElev.value, 0.05, 'cloudElev supports 0.05x street-canyon altitude');
+  assert.equal(U.uCloudLayerElev.value.y, 15, 'Mid Cumulus deck lowers down to 15m');
+  assert.match(CLOUD_VERT, /max\(4\.0,\s*rawBase\s*\*\s*elevMul\)/, 'CLOUD_VERT lowers altitude floor from 42m down to 4m');
+  assert.match(SKY_FRAG, /max\(4\.0,\s*rawBase\s*\*\s*elevMul\)/, 'SKY_FRAG lowers altitude floor from 38m down to 4m');
+
+  // 5) Crystalline Non-Cubic Snowflakes + Auto Weather Smooth Crossfade (`transitionTo`)
+  const wSys = makeWeather(U);
+  const snowPosCount = wSys.snow.geometry.getAttribute('position').count;
+  assert.ok(snowPosCount <= 6, `snow uses 2-triangle camera-billboarded quad (${snowPosCount} verts), NEVER 24-vertex BoxGeometry cubes!`);
+  assert.ok(wSys.snow.geometry.getAttribute('aFlakeSeed'), 'snow instances carry per-flake crystalline seed');
+  assert.equal(wSys.snow.material.uniforms.uWeatherKind.value, 1, 'snow selects crystalline dendrite/bokeh shader mode');
+  assert.match(SHADERS.WEATHER_FRAG, /if\s*\(\s*r\s*>\s*1\.0\s*\)\s*discard/, 'WEATHER_FRAG strictly discards outside unit circle (zero square corners)');
+  assert.match(SHADERS.WEATHER_FRAG, /cos\(\s*ang\s*\*\s*6\.0\s*\)/, 'WEATHER_FRAG synthesizes 6-fold hexagonal snowflake crystal arms');
+
+  wSys.setMode(0);
+  assert.equal(wSys.snow.visible, false);
+  wSys.transitionTo(3, 4.0); // smooth 4s crossfade Clear -> Snow
+  assert.equal(wSys.isTransitioning, true);
+  wSys.update(2.0, new THREE.Vector3(0, 100, 0));
+  const midFade = wSys.snow.material.uniforms.uWeatherFade.value;
+  assert.ok(wSys.snow.visible && midFade > 0.2 && midFade < 0.8, `snow crossfades smoothly at midpoint (fade=${midFade.toFixed(2)})`);
+  wSys.update(2.5, new THREE.Vector3(0, 100, 0));
+  assert.equal(wSys.isTransitioning, false);
+  assert.equal(wSys.snow.material.uniforms.uWeatherFade.value, 1.0);
+
+  // 6) Exact-state compact token round-trips Phase-19 gazeMode, cloudPuffs & auto-weather cycle settings
+  const prevWin = globalThis.window;
+  globalThis.window = { btoa: (s) => Buffer.from(s, 'binary').toString('base64'), atob: (s) => Buffer.from(s, 'base64').toString('binary') };
+  try {
+    const tok = encodeExactState(normalizeExactState({
+      seed: 4417,
+      gazeMode: 3,
+      weatherAutoMode: 'cinematic',
+      weatherInterval: 45,
+      tune: { cloudPuffs: 0, cloudElev: 0.08 },
+    }));
+    const dec = decodeExactState(tok);
+    assert.equal(dec.gazeMode, 3);
+    assert.equal(dec.autoLook, true);
+    assert.equal(dec.weatherAutoMode, 'cinematic');
+    assert.equal(dec.weatherInterval, 45);
+    assert.equal(dec.tune.cloudPuffs, 0);
+    assert.equal(dec.tune.cloudElev, 0.08);
+  } finally {
+    globalThis.window = prevWin;
+  }
+});
+
 
 
 

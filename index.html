@@ -590,9 +590,9 @@ button.icon-btn.rec-on, button.action.rec-on {
     <details class="subpanel" open>
       <summary>Places, Landmarks &amp; Bookmarks</summary>
       <div class="subpanel-body">
-        <div class="drop-row" title="Fly to Park, Harbor, Bridges, Spaceport, Transit Hub or Landmarks">
-          <select id="sel-poi" aria-label="Places of interest" title="Select a procedural place to visit"></select>
-          <button id="b-poi-go" type="button" class="icon-btn" aria-label="Fly to selected place" title="Fly to selected place">&#x27A4;</button>
+        <div class="drop-row" title="Set Autopilot destination to Park, Harbor, Bridges, Spaceport, Transit Hub or Landmarks at current camera speed (Shift-click ➤ to append stop)">
+          <select id="sel-poi" aria-label="Places of interest" title="Select a landmark or place to fly toward smoothly at current camera speed"></select>
+          <button id="b-poi-go" type="button" class="icon-btn" aria-label="Route autopilot to selected place at current speed" title="Fly smoothly to selected place at current camera speed (Shift-click to append waypoint)">&#x27A4;</button>
         </div>
         <div class="drop-row" style="margin-top: 5px;" title="Saved camera viewpoint bookmarks">
           <select id="sel-bookmark" aria-label="Saved place bookmarks" title="Saved camera bookmarks"></select>
@@ -621,12 +621,23 @@ button.icon-btn.rec-on, button.action.rec-on {
           </div>
         </div>
         <div class="cam-toggles" role="group" aria-label="Camera gaze and collision toggles">
-          <button id="b-autolook" class="icon-btn" type="button" aria-pressed="false" aria-label="Autopilot POI auto-look" title="Autopilot POI Auto-Look — automatically gaze at nearby landmarks &amp; vistas while cruising slowly or hovering (O)">&#x29BF;</button>
+          <button id="b-autolook" class="icon-btn on" type="button" aria-pressed="true" aria-label="Strategic cinematic camera gaze" title="Strategic Cinematic Gaze — realistically admire nearby landmarks, projections, street canyons &amp; spires: on (O)">&#x29BF;</button>
           <button id="b-freelook" class="icon-btn" type="button" aria-pressed="false" aria-label="Free look-around mode" title="Free look-around mode — decouple head gaze from flight travel direction (L)">&#x25CE;</button>
           <button id="b-avoid" class="icon-btn on" type="button" aria-pressed="true" aria-label="Anticipatory obstacle and gap-seeking avoidance" title="Long-horizon gap-threading &amp; building-crack obstacle avoidance: on (V)">&#x2934;</button>
           <button id="b-collide" class="icon-btn on" type="button" aria-pressed="true" aria-label="Toggle collision detection" title="Collision: on — toggle noclip (C)">&#x2B21;</button>
         </div>
         <div class="slider-grid">
+          <div class="slider-row wide" title="Strategic Cinematic Camera Gaze Mode (admire nearby landmarks, 3D projections, street canyons below &amp; spires above)">
+            <span>&#x29BF;</span>
+            <select id="sel-gaze-mode" aria-label="Strategic cinematic camera gaze mode">
+              <option value="0">Gaze · Off (Locked Forward Nose)</option>
+              <option value="1" selected>Gaze · Cinematic Director (Sites, Projections &amp; Canyons)</option>
+              <option value="2">Gaze · Sites &amp; Landmarks Tracking</option>
+              <option value="3">Gaze · Holograms, Neon &amp; Projections</option>
+              <option value="4">Gaze · Vertigo Canyon &amp; Spire Tilt (Up / Down)</option>
+              <option value="5">Gaze · Gentle Horizon Drift</option>
+            </select>
+          </div>
           <div class="slider-row wide" title="Camera flight physics &amp; motion style">
             <span>&#x2708;&#xFE0E;</span>
             <select id="sel-camstyle" aria-label="Camera motion style">
@@ -808,6 +819,11 @@ button.icon-btn.rec-on, button.action.rec-on {
             <input id="sl-clouds" type="range" min="0" max="2.4" step="0.02" value="1" aria-label="Cloud cover">
             <em id="cloud-label">100%</em>
           </div>
+          <div class="slider-row wide" title="3D Volumetric Cumulus Puffs (0 = turn off close 3D cumulus puffs … 2.0 = dense billowy fly-through cumulus)">
+            <span>&#x2740;</span>
+            <input id="sl-cloud-puffs" type="range" min="0" max="2" step="0.02" value="1" aria-label="3D volumetric cumulus puffs density">
+            <em id="cloud-puffs-label">Puffs 100%</em>
+          </div>
           <div class="slider-row wide" title="Volumetric cloud formation type">
             <span>&#x2601;&#xFE0E;</span>
             <select id="sel-cloudtype" aria-label="Volumetric cloud formation type">
@@ -865,19 +881,19 @@ button.icon-btn.rec-on, button.action.rec-on {
             <input id="sl-clayer-dens" type="range" min="0" max="2" step="0.02" value="1" aria-label="Selected cloud layer density">
             <em id="clayer-dens-label">100%</em>
           </div>
-          <div class="slider-row wide" title="Selected Cloud Layer Base Altitude in metres">
+          <div class="slider-row wide" title="Selected Cloud Layer Base Altitude in metres (lower down to 5m street canyons)">
             <span>&#x21A5;</span>
-            <input id="sl-clayer-elev" type="range" min="60" max="2800" step="10" value="680" aria-label="Selected cloud layer altitude">
+            <input id="sl-clayer-elev" type="range" min="5" max="2800" step="5" value="680" aria-label="Selected cloud layer altitude">
             <em id="clayer-elev-label">680m</em>
           </div>
           <div class="slider-row wide" title="Selected Cloud Layer Vertical Thickness in metres">
             <span>&#x2195;</span>
-            <input id="sl-clayer-thick" type="range" min="80" max="1600" step="10" value="620" aria-label="Selected cloud layer thickness">
+            <input id="sl-clayer-thick" type="range" min="25" max="1600" step="5" value="620" aria-label="Selected cloud layer thickness">
             <em id="clayer-thick-label">620m</em>
           </div>
-          <div class="slider-row wide" title="Master Cloud Elevation Multiplier across all active layers (0.35× … 2.4×)">
+          <div class="slider-row wide" title="Master Cloud Elevation Multiplier across all active layers (0.05× street canyons … 2.4× stratosphere)">
             <span>&#x21C8;</span>
-            <input id="sl-cloudelev" type="range" min="0.35" max="2.4" step="0.02" value="1" aria-label="Cloud cover elevation">
+            <input id="sl-cloudelev" type="range" min="0.05" max="2.4" step="0.02" value="1" aria-label="Cloud cover elevation">
             <em id="cloudelev-label">1.0×</em>
           </div>
           <div class="slider-row wide" title="Master Cloud Vertical Range Multiplier across all active layers (0.3× … 3.0×)">
@@ -1165,6 +1181,20 @@ button.icon-btn.rec-on, button.action.rec-on {
             <em id="dayspeed-label">1.0×</em>
           </div>
           <div class="slider-row wide" title="Weather mode"><span>&#x2602;&#xFE0E;</span><input id="sl-weather" type="range" min="0" max="6" step="1" value="0" aria-label="Weather mode"><em id="weather-label">&#x2600;&#xFE0E; Clear</em></div>
+          <div class="slider-row wide" title="Automatic Weather Cycle Mode — smoothly crossfades atmosphere &amp; precipitation at set intervals">
+            <span>&#x21BB;</span>
+            <select id="sel-weather-auto" aria-label="Automatic weather cycle mode">
+              <option value="off" selected>Weather · Hold Current Mode</option>
+              <option value="seq">Weather · Auto-Cycle All (Crossfade)</option>
+              <option value="shuffle">Weather · Shuffle All (Crossfade)</option>
+              <option value="cinematic">Weather · Cinematic Arc (Clear → Rain → Storm → Snow)</option>
+            </select>
+          </div>
+          <div class="slider-row wide" title="Auto Weather Cycle crossfade interval (seconds per weather state)">
+            <span>&#x29D6;</span>
+            <input id="sl-weather-interval" type="range" min="15" max="240" step="5" value="60" aria-label="Auto weather cycle interval">
+            <em id="weather-interval-label">Hold</em>
+          </div>
           <div class="slider-row wide" title="Full synodic lunar phase cycle (New → Waxing → Full → Waning → New)">
             <span>&#x25D0;</span>
             <input id="sl-moonph" type="range" min="0" max="2" step="0.01" value="0.85" aria-label="Moon phase">

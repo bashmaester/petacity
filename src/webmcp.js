@@ -252,12 +252,13 @@ export function buildPetacityTools(ctx) {
 
     {
       name: 'petacity_autopilot_route',
-      description: 'Control Autopilot smooth flight, POI Auto-Look (gaze around at nearby points of interest while moving slowly or hovering), and smooth multi-stop waypoint routing.',
+      description: 'Control Autopilot smooth flight, Strategic Cinematic Gaze mode (0=Off, 1=Cinematic Director, 2=Sites & Landmarks, 3=Holograms & Projections, 4=Vertigo Canyon/Spire Up-Down, 5=Gentle Drift), and smooth multi-stop waypoint routing at current speed.',
       inputSchema: {
         type: 'object',
         properties: {
           enabled: { type: 'boolean', description: 'Enable or disable Autopilot glide' },
-          speed: { type: 'number', description: 'Autopilot cruise speed in m/s (0 = stationary hover while Auto-Look gazes around!)' },
+          speed: { type: 'number', description: 'Autopilot cruise speed in m/s (omit to preserve current camera speed)' },
+          gazeMode: { type: 'number', description: '0=Off, 1=Cinematic Director, 2=Sites & Landmarks, 3=Holograms & Projections, 4=Vertigo Up/Down, 5=Gentle Drift' },
           autoLook: { type: 'boolean', description: 'Automatically pan & frame nearby points of interest during Autopilot' },
           turnSmooth: { type: 'number', description: 'Turn damping factor (0.2..3.5; >1.4 eliminates fast turns)' },
           destination: { description: '[x, y, z] coordinates or landmark name to smoothly fly to' },
@@ -272,7 +273,8 @@ export function buildPetacityTools(ctx) {
         director.stopCameraScript();
         const patch = {};
         if (args.enabled !== undefined) patch.glide = Boolean(args.enabled);
-        if (args.autoLook !== undefined) patch.autoLook = Boolean(args.autoLook);
+        if (args.gazeMode !== undefined) patch.gazeMode = Number(args.gazeMode);
+        else if (args.autoLook !== undefined) patch.autoLook = Boolean(args.autoLook);
         if (args.turnSmooth !== undefined) patch.turnSmooth = Number(args.turnSmooth);
         if (Object.keys(patch).length > 0) applyPartialState(patch);
         if (args.speed !== undefined) controls.glideSpeed = Math.max(0, Math.min(640, Number(args.speed)));
@@ -306,6 +308,7 @@ export function buildPetacityTools(ctx) {
           ok: true,
           glide: controls.glide,
           glideSpeed: controls.glideSpeed,
+          gazeMode: controls.gazeMode,
           autoLook: controls.autoLook,
           routeWaypointsRemaining: controls.routeQueue.length,
         };
@@ -463,9 +466,14 @@ export function buildPetacityTools(ctx) {
           waterChop: { type: 'number' },
           waterFoam: { type: 'number' },
           clouds: { type: 'number', description: 'Cloud density (0 = clear sky .. 2.4 = overcast)' },
-          cloudLayer: { type: 'number', description: '0..6 cloud elevation layer preset' },
+          cloudPuffs: { type: 'number', description: '3D volumetric cumulus puffs density (0 = off .. 2.0 = dense cumulus)' },
+          cloudElev: { type: 'number', description: 'Master cloud altitude multiplier (0.05 street canyons .. 2.4 high sky)' },
+          cloudLayer: { type: 'number', description: '0..7 cloud elevation layer preset' },
           windAngle: { type: 'number', description: 'Prevailing wind direction in degrees (0..360) orienting clouds & waves' },
           windStrength: { type: 'number', description: 'Wind speed & cloud streamline stretch (0..2.5)' },
+          weatherMode: { type: 'number', description: '0=Clear, 1=Rain, 2=Thunderstorm, 3=Snow, 4=Volcanic ash, 5=Dust haze, 6=Old-film storm' },
+          weatherAutoMode: { type: 'string', enum: ['off', 'seq', 'shuffle', 'cinematic'], description: 'Automatic weather cycle crossfade mode' },
+          weatherInterval: { type: 'number', description: 'Auto weather cycle interval in seconds (15..240)' },
           rain: { type: 'number' },
           fog: { type: 'number' },
           lightning: { type: 'number' },

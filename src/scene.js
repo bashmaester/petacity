@@ -162,6 +162,7 @@ export function makeUniforms() {
     uCloudLac: { value: 2.08 },
     uCloudElev: { value: 1.0 },
     uCloudRange: { value: 1.0 },
+    uCloudPuffs: { value: 1.0 },
     uCloudLayerElev: { value: new THREE.Vector3(210.0, 680.0, 1620.0) },
     uCloudLayerThick: { value: new THREE.Vector3(220.0, 620.0, 540.0) },
     uCloudLayerDens: { value: new THREE.Vector3(0.0, 1.0, 0.72) },
@@ -366,7 +367,7 @@ export function makeWorld(U) {
     fragmentShader: CLOUD_FRAG,
     uniforms: pick(U, [
       'uCloudCol', 'uSkySunCol', 'uSunDir', 'uFogCol', 'uSunFogCol', 'uHazeSun',
-      'uCloud', 'uCloudType', 'uCloudStyle', 'uCloudSeed', 'uCloudEvol', 'uCloudLac', 'uCloudElev', 'uCloudRange',
+      'uCloud', 'uCloudPuffs', 'uCloudType', 'uCloudStyle', 'uCloudSeed', 'uCloudEvol', 'uCloudLac', 'uCloudElev', 'uCloudRange',
       'uCloudLayerElev', 'uCloudLayerThick', 'uCloudLayerDens',
       'uWindAngle', 'uWindStrength',
       'uSunGlow', 'uTime', 'uSat',
@@ -431,7 +432,7 @@ export function makeWorld(U) {
     side: THREE.DoubleSide,
   });
 
-  // fake-volumetric searchlight shafts
+  // fake-volumetric searchlight shafts (single front-facing volumetric cone hull — zero crossed planes!)
   const beamMat = new THREE.ShaderMaterial({
     vertexShader: BEAM_VERT,
     fragmentShader: BEAM_FRAG,
@@ -439,7 +440,7 @@ export function makeWorld(U) {
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
-    side: THREE.DoubleSide,
+    side: THREE.FrontSide,
   });
 
   // warm pools of lamp light on the ground
@@ -1977,52 +1978,79 @@ function mergeParts(parts) {
 
 /**
  * Volumetric spotlight cone: two crossed tapered quads along +Y flaring from a
- * tight lens aperture at y=0 to a wide shaft at y=length, carrying both `uv`
- * (read by BEAM_VERT) and `aBeamT`/`aBeamW` falloff attributes.
+/**
+ * Seamless 3D volumetric cone hull (zero crossed flat planes!) tapering from a
+ * tight lens aperture at y=0 to a wide elliptical shaft at y=length, with smooth
+ * outward analytical normals for Fresnel view-chord falloff in BEAM_VERT/BEAM_FRAG.
  */
-function beamGeometry(length, width, opts = null) {
+export function beamGeometry(length, width, opts = null) {
   const o = opts || {};
   const hw0 = Math.max(0.18, width * (o.hw0Mul ?? 0.085));
   const hw1Z = o.hw1Z !== undefined ? o.hw1Z : width * 0.54;
   const hw1X = o.hw1X !== undefined ? o.hw1X : width * 0.54;
+  const maxHW1 = Math.max(hw1X, hw1Z, 1e-3);
+  const rx0 = Math.max(0.12, hw0 * (hw1X / maxHW1));
+  const rz0 = Math.max(0.12, hw0 * (hw1Z / maxHW1));
   const arch = o.archetype ?? 0;
   const gain = o.gain ?? 1.0;
   const falloff = o.falloff ?? 1.35;
   const phase = o.phase ?? 0.0;
   const tint = o.tint || [0, 0, 0];
+  const segs = 18;
+  const safeLen = Math.max(0.5, length);
+
   const pos = [];
+  const nrm = [];
   const uvs = [];
   const bt = [];
   const bw = [];
   const meta = [];
   const tints = [];
-  const quad = (corners) => {
-    const idx = [0, 1, 2, 0, 2, 3];
-    for (const k of idx) {
-      pos.push(...corners[k].p);
-      uvs.push(corners[k].w, corners[k].t);
-      bt.push(corners[k].t);
-      bw.push(corners[k].w);
-      meta.push(arch, gain, falloff, phase);
-      tints.push(tint[0], tint[1], tint[2]);
-    }
+
+  const ringPoint = (segIdx, t) => {
+    const s = segIdx / segs;
+    const ang = s * Math.PI * 2;
+    const cs = Math.cos(ang);
+    const sn = Math.sin(ang);
+    const rx = rx0 + (hw1X - rx0) * t;
+    const rz = rz0 + (hw1Z - rz0) * t;
+    const x = rx * cs;
+    const y = safeLen * t;
+    const z = rz * sn;
+    // Outward normal to elliptical cone (x/rx)^2 + (z/rz)^2 = 1
+    let nx = cs / Math.max(rx, 1e-3);
+    let nz = sn / Math.max(rz, 1e-3);
+    const hLen = Math.hypot(nx, nz) || 1;
+    nx /= hLen;
+    nz /= hLen;
+    const dR = (hw1X - rx0) * cs * cs + (hw1Z - rz0) * sn * sn;
+    let ny = -dR / safeLen;
+    const nL = Math.hypot(nx, ny, nz) || 1;
+    return { p: [x, y, z], n: [nx / nL, ny / nL, nz / nL], s, t };
   };
-  // quad A: spans z (flared spotlight cone)
-  quad([
-    { p: [0, 0, -hw0], t: 0, w: 0 },
-    { p: [0, 0, hw0], t: 0, w: 1 },
-    { p: [0, length, hw1Z], t: 1, w: 1 },
-    { p: [0, length, -hw1Z], t: 1, w: 0 },
-  ]);
-  // quad B: spans x (flared spotlight cone)
-  quad([
-    { p: [-hw0, 0, 0], t: 0, w: 0 },
-    { p: [hw0, 0, 0], t: 0, w: 1 },
-    { p: [hw1X, length, 0], t: 1, w: 1 },
-    { p: [-hw1X, length, 0], t: 1, w: 0 },
-  ]);
+
+  const emitVert = (v) => {
+    pos.push(v.p[0], v.p[1], v.p[2]);
+    nrm.push(v.n[0], v.n[1], v.n[2]);
+    uvs.push(v.s, v.t);
+    bt.push(v.t);
+    bw.push(v.s);
+    meta.push(arch, gain, falloff, phase);
+    tints.push(tint[0], tint[1], tint[2]);
+  };
+
+  for (let i = 0; i < segs; i++) {
+    const b0 = ringPoint(i, 0);
+    const b1 = ringPoint(i + 1, 0);
+    const t1 = ringPoint(i + 1, 1);
+    const t0 = ringPoint(i, 1);
+    emitVert(b0); emitVert(b1); emitVert(t1);
+    emitVert(b0); emitVert(t1); emitVert(t0);
+  }
+
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nrm), 3));
   g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
   g.setAttribute('aBeamT', new THREE.BufferAttribute(new Float32Array(bt), 1));
   g.setAttribute('aBeamW', new THREE.BufferAttribute(new Float32Array(bw), 1));
@@ -2032,9 +2060,9 @@ function beamGeometry(length, width, opts = null) {
 }
 
 /**
- * Paired left/right forward headlight cones rooted at X = 0 (vehicle nose plane)
+ * Paired left/right forward volumetric headlight cones rooted at X = 0 (vehicle nose plane)
  * and offset to exact lateral ±lampSepZ sockets (with natural slight toe-out & road pitch),
- * eliminating the unnatural single centered hood-nose cone!
+ * built as smooth closed cones with zero crossed '+' ribbons!
  */
 function twinHeadlightGeometry(V) {
   const parts = V.parts();
@@ -2054,48 +2082,68 @@ function twinHeadlightGeometry(V) {
   }
   if (sepZ < 0.25) sepZ = maxHalfZ * 0.68;
 
-  const len = V.beamLen || 22;
+  const len = Math.max(1, V.beamLen || 22);
   const coneW = (V.beamW || 5.2) * 0.56;
   const hw0 = Math.max(0.14, coneW * 0.11);
   const hw1 = coneW * 0.52;
+  const segs = 12;
   const pos = [];
+  const nrm = [];
   const uvs = [];
   const bt = [];
   const bw = [];
   const meta = [];
   const tints = [];
-  const pushQuad = (corners) => {
-    const idx = [0, 1, 2, 0, 2, 3];
-    for (const k of idx) {
-      pos.push(...corners[k].p);
-      uvs.push(corners[k].w, corners[k].t);
-      bt.push(corners[k].t);
-      bw.push(corners[k].w);
-      meta.push(0, 0.92, 1.55, 0);
-      tints.push(0, 0, 0);
-    }
+
+  const emitVert = (p, n, s, t) => {
+    pos.push(p[0], p[1], p[2]);
+    nrm.push(n[0], n[1], n[2]);
+    uvs.push(s, t);
+    bt.push(t);
+    bw.push(s);
+    meta.push(0, 0.92, 1.55, 0);
+    tints.push(0, 0, 0);
   };
+
   for (const side of [-1, 1]) {
     const z0 = side * sepZ;
     const zEnd = z0 + side * len * 0.045; // subtle outward road shoulder spread
     const yEnd = lampY - len * 0.032;     // subtle downward dip onto street
-    // Horizontal ribbon of this headlamp cone
-    pushQuad([
-      { p: [0, lampY, z0 - hw0], t: 0, w: 0 },
-      { p: [0, lampY, z0 + hw0], t: 0, w: 1 },
-      { p: [len, yEnd, zEnd + hw1], t: 1, w: 1 },
-      { p: [len, yEnd, zEnd - hw1], t: 1, w: 0 },
-    ]);
-    // Vertical ribbon of this headlamp cone
-    pushQuad([
-      { p: [0, lampY - hw0, z0], t: 0, w: 0 },
-      { p: [0, lampY + hw0, z0], t: 0, w: 1 },
-      { p: [len, yEnd + hw1 * 0.72, zEnd], t: 1, w: 1 },
-      { p: [len, yEnd - hw1 * 0.72, zEnd], t: 1, w: 0 },
-    ]);
+    const makeRing = (segIdx, t) => {
+      const s = segIdx / segs;
+      const ang = s * Math.PI * 2;
+      const cs = Math.cos(ang);
+      const sn = Math.sin(ang);
+      const ry = hw0 + (hw1 * 0.74 - hw0) * t;
+      const rz = hw0 + (hw1 - hw0) * t;
+      const cx = len * t;
+      const cy = lampY + (yEnd - lampY) * t + ry * sn;
+      const cz = z0 + (zEnd - z0) * t + rz * cs;
+      let ny = sn / Math.max(ry, 1e-3);
+      let nz = cs / Math.max(rz, 1e-3);
+      const yzL = Math.hypot(ny, nz) || 1;
+      ny /= yzL;
+      nz /= yzL;
+      const nx = -((hw1 - hw0) / len);
+      const nL = Math.hypot(nx, ny, nz) || 1;
+      return { p: [cx, cy, cz], n: [nx / nL, ny / nL, nz / nL], s, t };
+    };
+    for (let i = 0; i < segs; i++) {
+      const b0 = makeRing(i, 0);
+      const b1 = makeRing(i + 1, 0);
+      const t1 = makeRing(i + 1, 1);
+      const t0 = makeRing(i, 1);
+      emitVert(b0.p, b0.n, b0.s, b0.t);
+      emitVert(b1.p, b1.n, b1.s, b1.t);
+      emitVert(t1.p, t1.n, t1.s, t1.t);
+      emitVert(b0.p, b0.n, b0.s, b0.t);
+      emitVert(t1.p, t1.n, t1.s, t1.t);
+      emitVert(t0.p, t0.n, t0.s, t0.t);
+    }
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nrm), 3));
   g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
   g.setAttribute('aBeamT', new THREE.BufferAttribute(new Float32Array(bt), 1));
   g.setAttribute('aBeamW', new THREE.BufferAttribute(new Float32Array(bw), 1));
@@ -2133,59 +2181,85 @@ function twinTrailGeometry() {
 }
 
 /**
- * Volumetric 3D optical projector frustum (`archetype = 4` in BEAM_FRAG) originating
- * at physical projector lens `(ex, ey, ez)` (`vT = 0`) and terminating directly onto
- * the 4 corners of hologram `H` (`vT = 1`)!
+ * Smooth 3D optical projector frustum (`archetype = 4` in BEAM_FRAG) morphing
+ * from a circular projector lens at `(ex, ey, ez)` (`vT = 0`) onto the rounded
+ * hologram gate `H` (`vT = 1`) with smooth outward normals and ZERO internal X-cross sheets!
  */
 export function projectorFrustumGeometry(ex, ey, ez, H, phase = 0, tint = [0.32, 0.88, 1.0]) {
   const cy = Math.cos(H.rot || 0);
   const sy = Math.sin(H.rot || 0);
-  const hw = (H.w || 24) * 0.48;
-  const hh = (H.h || 18) * 0.48;
-  // Local X axis of hologram rotated by H.rot around Y: (cy, 0, -sy)
-  const corner = (sx, syOff) => [
-    H.x + cy * (sx * hw),
-    H.y + syOff * hh,
-    H.z - sy * (sx * hw),
-  ];
-  const tl = corner(-1, 1);
-  const tr = corner(1, 1);
-  const br = corner(1, -1);
-  const bl = corner(-1, -1);
+  const hw = Math.max(0.5, (H.w || 24) * 0.48);
+  const hh = Math.max(0.5, (H.h || 18) * 0.48);
   const ap = 0.42;
-  const eTL = [ex - cy * ap, ey + ap * 0.6, ez + sy * ap];
-  const eTR = [ex + cy * ap, ey + ap * 0.6, ez - sy * ap];
-  const eBR = [ex + cy * ap, ey - ap * 0.6, ez - sy * ap];
-  const eBL = [ex - cy * ap, ey - ap * 0.6, ez + sy * ap];
+  const segs = 20;
+
+  const axisX = H.x - ex;
+  const axisY = H.y - ey;
+  const axisZ = H.z - ez;
+  const axisLen = Math.hypot(axisX, axisY, axisZ) || 1;
+  const ax = [axisX / axisLen, axisY / axisLen, axisZ / axisLen];
 
   const pos = [];
+  const nrm = [];
   const uvs = [];
   const meta = [];
   const tints = [];
-  const pushSheet = (a0, b0, b1, a1, gainMul = 1.0) => {
-    const c = [
-      { p: a0, t: 0, w: 0 },
-      { p: b0, t: 0, w: 1 },
-      { p: b1, t: 1, w: 1 },
-      { p: a1, t: 1, w: 0 },
-    ];
-    for (const k of [0, 1, 2, 0, 2, 3]) {
-      pos.push(...c[k].p);
-      uvs.push(c[k].w, c[k].t);
-      meta.push(4.0, 0.88 * gainMul, 1.0, phase);
-      tints.push(tint[0], tint[1], tint[2]);
-    }
+
+  const superPow = (v, exp) => Math.sign(v) * Math.pow(Math.abs(v), exp);
+
+  const ringPoint = (segIdx, t) => {
+    const s = segIdx / segs;
+    const ang = s * Math.PI * 2;
+    const cs = Math.cos(ang);
+    const sn = Math.sin(ang);
+    // Morph smoothly from round optical lens (t=0) to rounded-rect hologram frame (t=1)
+    const lx0 = cs * ap;
+    const ly0 = sn * ap * 0.72;
+    const lx1 = superPow(cs, 0.48) * hw;
+    const ly1 = superPow(sn, 0.48) * hh;
+    const locX = lx0 + (lx1 - lx0) * t;
+    const locY = ly0 + (ly1 - ly0) * t;
+    const cx = ex + axisX * t + cy * locX;
+    const cyW = ey + axisY * t + locY;
+    const cz = ez + axisZ * t - sy * locX;
+
+    // Smooth outward radial vector in hologram screen plane, orthogonalized against frustum axis
+    let rx = cy * (cs / Math.max(hw, 1e-3));
+    let ry = sn / Math.max(hh, 1e-3);
+    let rz = -sy * (cs / Math.max(hw, 1e-3));
+    const dotA = rx * ax[0] + ry * ax[1] + rz * ax[2];
+    rx -= ax[0] * dotA;
+    ry -= ax[1] * dotA;
+    rz -= ax[2] * dotA;
+    const rLen = Math.hypot(rx, ry, rz) || 1;
+    return {
+      p: [cx, cyW, cz],
+      n: [rx / rLen, ry / rLen, rz / rLen],
+      s,
+      t,
+    };
   };
-  // 4 outer frustum walls + 2 internal diagonal volumetric ray sheets terminating on the hologram!
-  pushSheet(eTL, eTR, tr, tl, 0.95);
-  pushSheet(eBL, eBR, br, bl, 0.95);
-  pushSheet(eTL, eBL, bl, tl, 0.85);
-  pushSheet(eTR, eBR, br, tr, 0.85);
-  pushSheet(eTL, eBR, br, tl, 1.10);
-  pushSheet(eTR, eBL, bl, tr, 1.10);
+
+  const emitVert = (v) => {
+    pos.push(v.p[0], v.p[1], v.p[2]);
+    nrm.push(v.n[0], v.n[1], v.n[2]);
+    uvs.push(v.s, v.t);
+    meta.push(4.0, 0.92, 1.0, phase);
+    tints.push(tint[0], tint[1], tint[2]);
+  };
+
+  for (let i = 0; i < segs; i++) {
+    const b0 = ringPoint(i, 0);
+    const b1 = ringPoint(i + 1, 0);
+    const t1 = ringPoint(i + 1, 1);
+    const t0 = ringPoint(i, 1);
+    emitVert(b0); emitVert(b1); emitVert(t1);
+    emitVert(b0); emitVert(t1); emitVert(t0);
+  }
 
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nrm), 3));
   g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
   g.setAttribute('aBeamMeta', new THREE.BufferAttribute(new Float32Array(meta), 4));
   g.setAttribute('aBeamTint', new THREE.BufferAttribute(new Float32Array(tints), 3));
@@ -2582,7 +2656,7 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
-    side: THREE.DoubleSide,
+    side: THREE.FrontSide,
   });
 
   // Store integer indices into `lanes` so rail-loop, orbital-ring & street-intersection `L.outs` handoffs stay O(1)!
@@ -4943,11 +5017,13 @@ export const WEATHER_NAMES = [
 
 export function makeWeather(U) {
   const group = new THREE.Group();
-  const mk = (count, w, h, d, hex, k, speed, sway, windX = 12) => {
-    const geo = new THREE.BoxGeometry(w, h, d);
+  const mk = (count, w, h, kind, hex, k, speed, sway, windX = 12) => {
+    // Camera-billboarded 2-triangle PlaneGeometry (never 6-sided BoxGeometry cubes!)
+    const geo = new THREE.PlaneGeometry(1, 1);
     const off = new Float32Array(count);
     const spd = new Float32Array(count);
     const swy = new Float32Array(count);
+    const seedArr = new Float32Array(count);
     const mat = new THREE.ShaderMaterial({
       vertexShader: WEATHER_VERT,
       fragmentShader: WEATHER_FRAG,
@@ -4956,11 +5032,15 @@ export function makeWeather(U) {
         uFallH: { value: 720 },
         uSwayAmp: { value: sway },
         uWindX: { value: windX },
+        uWeatherKind: { value: kind },
+        uFlakeSize: { value: new THREE.Vector2(w, h) },
         uWeatherCol: { value: col(hex) },
         uWeatherK: { value: k },
+        uWeatherFade: { value: 1.0 },
       },
       transparent: true,
       depthWrite: false,
+      side: THREE.DoubleSide,
     });
     const mesh = new THREE.InstancedMesh(geo, mat, count);
     mesh.frustumCulled = false;
@@ -4969,21 +5049,23 @@ export function makeWeather(U) {
       m.makeTranslation((Math.random() - 0.5) * 900, 0, (Math.random() - 0.5) * 900);
       mesh.setMatrixAt(i, m);
       off[i] = Math.random() * 720;
-      spd[i] = speed * (0.82 + Math.random() * 0.45);
+      spd[i] = speed * (0.78 + Math.random() * 0.50);
       swy[i] = 0.4 + Math.random() * 1.8;
+      seedArr[i] = (i * 0.6180339887 + Math.random() * 0.15) % 1;
     }
     mesh.instanceMatrix.needsUpdate = true;
     geo.setAttribute('aOff', new THREE.InstancedBufferAttribute(off, 1));
     geo.setAttribute('aSpeed', new THREE.InstancedBufferAttribute(spd, 1));
     geo.setAttribute('aSway', new THREE.InstancedBufferAttribute(swy, 1));
+    geo.setAttribute('aFlakeSeed', new THREE.InstancedBufferAttribute(seedArr, 1));
     mesh.visible = false;
     group.add(mesh);
     return mesh;
   };
 
-  const rain = mk(1600, 0.45, 27, 0.45, '#b6cce6', 0.44, 340, 0.55, 26);
-  const snow = mk(900, 1.8, 1.8, 1.8, '#eef4ff', 0.85, 26, 6.5, 16);
-  const ash = mk(850, 1.35, 1.35, 1.35, '#d4b494', 0.62, 19, 9.0, 22);
+  const rain = mk(1800, 0.18, 26.0, 0, '#b6cce6', 0.46, 340, 0.55, 26);
+  const snow = mk(2400, 0.74, 0.74, 1, '#eef4ff', 0.92, 24, 6.2, 16);
+  const ash = mk(1300, 0.58, 0.58, 2, '#d4b494', 0.68, 19, 9.0, 22);
 
   // Ambient 3D floating dust motes (active even in clear weather, scaled by dustLevel)
   const dustCount = 1100;
@@ -5025,30 +5107,66 @@ export function makeWeather(U) {
   group.add(dust);
 
   let mode = 0; // 0 clear · 1 rain · 2 storm · 3 snow · 4 ash · 5 dust haze · 6 old-film storm
+  let prevMode = 0;
+  let fadeProgress = 1.0;
+  let fadeDuration = 4.5;
   let dustLevel = 0.6;
   let nextFlash = 2.5;
 
-  function syncDust() {
-    const modeBoost = mode === 5 ? 2.1 : mode === 4 ? 1.45 : mode === 6 ? 1.35 : (mode === 1 || mode === 2 ? 0.55 : 1.0);
-    const k = dustLevel * modeBoost * 0.55;
+  const modeWetness = (m) => (m === 2 ? 1.0 : m === 6 ? 0.9 : m === 1 ? 0.78 : m === 3 ? 0.25 : 0.0);
+  const modeDustBoost = (m) => (m === 5 ? 2.1 : m === 4 ? 1.45 : m === 6 ? 1.35 : (m === 1 || m === 2 ? 0.55 : 1.0));
+  const modeHasRain = (m) => (m === 1 || m === 2 || m === 6) ? 1.0 : 0.0;
+  const modeHasSnow = (m) => (m === 3 ? 1.0 : 0.0);
+  const modeHasAsh = (m) => (m === 4 ? 1.0 : 0.0);
+  const modeStormBoost = (m) => (m === 2 || m === 6 ? 1.0 : 0.0);
+
+  function applyBlendState() {
+    const s = fadeProgress >= 1 ? 1 : (fadeProgress * fadeProgress * (3 - 2 * fadeProgress));
+    const rFade = modeHasRain(prevMode) * (1 - s) + modeHasRain(mode) * s;
+    const sFade = modeHasSnow(prevMode) * (1 - s) + modeHasSnow(mode) * s;
+    const aFade = modeHasAsh(prevMode) * (1 - s) + modeHasAsh(mode) * s;
+
+    rain.material.uniforms.uWeatherFade.value = rFade;
+    snow.material.uniforms.uWeatherFade.value = sFade;
+    ash.material.uniforms.uWeatherFade.value = aFade;
+    rain.visible = rFade > 0.005;
+    snow.visible = sFade > 0.005;
+    ash.visible = aFade > 0.005;
+
+    const rainTargetMode = modeHasRain(mode) > 0 ? mode : prevMode;
+    rain.material.uniforms.uWeatherK.value = rainTargetMode === 2 ? 0.65 : rainTargetMode === 6 ? 0.56 : 0.46;
+    rain.material.uniforms.uWindX.value = rainTargetMode === 2 ? 78 : rainTargetMode === 6 ? 48 : 26;
+    rain.rotation.z = rainTargetMode === 2 ? -0.11 : rainTargetMode === 6 ? -0.07 : -0.035;
+
+    if (U && U.uWetness) {
+      U.uWetness.value = modeWetness(prevMode) * (1 - s) + modeWetness(mode) * s;
+    }
+    const dBoost = modeDustBoost(prevMode) * (1 - s) + modeDustBoost(mode) * s;
+    const k = dustLevel * dBoost * 0.55;
     dustMat.uniforms.uDustK.value = k;
     dust.visible = k > 0.01;
   }
 
+  function syncDust() {
+    applyBlendState();
+  }
+
   function setMode(w) {
     mode = Math.max(0, Math.min(6, Math.round(w)));
-    rain.visible = mode === 1 || mode === 2 || mode === 6;
-    snow.visible = mode === 3;
-    ash.visible = mode === 4;
-    if (rain.material.uniforms) {
-      rain.material.uniforms.uWeatherK.value = mode === 2 ? 0.65 : mode === 6 ? 0.56 : 0.44;
-      rain.material.uniforms.uWindX.value = mode === 2 ? 78 : mode === 6 ? 48 : 26;
-      rain.rotation.z = mode === 2 ? -0.11 : mode === 6 ? -0.07 : -0.035;
-    }
-    if (U && U.uWetness) {
-      U.uWetness.value = mode === 2 ? 1.0 : mode === 6 ? 0.9 : mode === 1 ? 0.78 : mode === 3 ? 0.25 : 0.0;
-    }
-    syncDust();
+    prevMode = mode;
+    fadeProgress = 1.0;
+    applyBlendState();
+  }
+
+  function transitionTo(w, duration = 4.5) {
+    const next = Math.max(0, Math.min(6, Math.round(w)));
+    if (next === mode && fadeProgress >= 1.0) return mode;
+    prevMode = mode;
+    mode = next;
+    fadeDuration = Math.max(0.25, Number(duration) || 4.5);
+    fadeProgress = 0.0;
+    applyBlendState();
+    return mode;
   }
 
   function setDust(v) {
@@ -5063,15 +5181,21 @@ export function makeWeather(U) {
     dustMat.uniforms.uDustCol.value.set(lampHex);
     if (s.billMono > 0.5) {
       rain.material.uniforms.uWeatherCol.value.set(s.beam || '#dfd5be');
+      snow.material.uniforms.uWeatherCol.value.set(s.beam || '#ebe5d5');
       ash.material.uniforms.uWeatherCol.value.set(s.billA || '#d8ccb4');
     } else {
       rain.material.uniforms.uWeatherCol.value.set('#b6cce6');
+      snow.material.uniforms.uWeatherCol.value.set('#eef4ff');
       ash.material.uniforms.uWeatherCol.value.set('#d4b494');
     }
   }
 
   function update(dt, cameraPos) {
     if (cameraPos) group.position.set(cameraPos.x, cameraPos.y - 40, cameraPos.z);
+    if (fadeProgress < 1.0) {
+      fadeProgress = Math.min(1.0, fadeProgress + Math.max(0, dt) / fadeDuration);
+      applyBlendState();
+    }
     if (U.uFlash.value > 0) U.uFlash.value = Math.max(0, U.uFlash.value - dt * 1.9);
     if (mode === 2 || mode === 6) {
       nextFlash -= dt;
@@ -5086,7 +5210,12 @@ export function makeWeather(U) {
   return {
     group, rain, snow, ash, dust,
     get mode() { return mode; },
-    setMode, setDust, setTint, update,
+    get stormBlend() {
+      const s = fadeProgress >= 1 ? 1 : (fadeProgress * fadeProgress * (3 - 2 * fadeProgress));
+      return modeStormBoost(prevMode) * (1 - s) + modeStormBoost(mode) * s;
+    },
+    get isTransitioning() { return fadeProgress < 1.0; },
+    setMode, transitionTo, setDust, setTint, update,
   };
 }
 
@@ -5232,6 +5361,7 @@ export function applyLook(U, look, tune = { win: 1, glow: 1, fog: 1 }) {
   if (tune.cloudLac !== undefined && U.uCloudLac) U.uCloudLac.value = tune.cloudLac;
   if (tune.cloudElev !== undefined && U.uCloudElev) U.uCloudElev.value = tune.cloudElev;
   if (tune.cloudRange !== undefined && U.uCloudRange) U.uCloudRange.value = tune.cloudRange;
+  if (tune.cloudPuffs !== undefined && U.uCloudPuffs) U.uCloudPuffs.value = Math.max(0, tune.cloudPuffs);
   if (Array.isArray(tune.cloudLayerElev) && U.uCloudLayerElev) U.uCloudLayerElev.value.set(tune.cloudLayerElev[0], tune.cloudLayerElev[1], tune.cloudLayerElev[2]);
   if (Array.isArray(tune.cloudLayerThick) && U.uCloudLayerThick) U.uCloudLayerThick.value.set(tune.cloudLayerThick[0], tune.cloudLayerThick[1], tune.cloudLayerThick[2]);
   if (Array.isArray(tune.cloudLayerDens) && U.uCloudLayerDens) U.uCloudLayerDens.value.set(tune.cloudLayerDens[0], tune.cloudLayerDens[1], tune.cloudLayerDens[2]);
@@ -5494,6 +5624,7 @@ export function applyTime(U, look, hours = 12, tune = { lights: 1, glow: 1 }) {
   if (tune.cloudLac !== undefined && U.uCloudLac) U.uCloudLac.value = tune.cloudLac;
   if (tune.cloudElev !== undefined && U.uCloudElev) U.uCloudElev.value = tune.cloudElev;
   if (tune.cloudRange !== undefined && U.uCloudRange) U.uCloudRange.value = tune.cloudRange;
+  if (tune.cloudPuffs !== undefined && U.uCloudPuffs) U.uCloudPuffs.value = Math.max(0, tune.cloudPuffs);
   if (Array.isArray(tune.cloudLayerElev) && U.uCloudLayerElev) U.uCloudLayerElev.value.set(tune.cloudLayerElev[0], tune.cloudLayerElev[1], tune.cloudLayerElev[2]);
   if (Array.isArray(tune.cloudLayerThick) && U.uCloudLayerThick) U.uCloudLayerThick.value.set(tune.cloudLayerThick[0], tune.cloudLayerThick[1], tune.cloudLayerThick[2]);
   if (Array.isArray(tune.cloudLayerDens) && U.uCloudLayerDens) U.uCloudLayerDens.value.set(tune.cloudLayerDens[0], tune.cloudLayerDens[1], tune.cloudLayerDens[2]);

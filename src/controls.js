@@ -50,6 +50,15 @@ export const CAMERA_STYLE_NAMES = [
   'Silk Airship (Slow Turns)',
 ];
 
+export const CINEMATIC_GAZE_MODES = [
+  'Off (Locked Forward Nose)',
+  'Cinematic Director (Sites, Projections & Canyons)',
+  'Sites & Landmarks Tracking',
+  'Holograms, Neon & Projections',
+  'Vertigo Canyon & Spire Tilt (Up / Down)',
+  'Gentle Horizon Drift',
+];
+
 const STYLE_PRESETS = [
   { lookRate: 10.5, velRate: 3.8, maxTurnRate: 1.05, glideTurnRate: 0.30, turnAccel: 2.6, maxBank: 0.12, glideBank: 0.26, bankGain: 0.065, glideBankGain: 0.16, avoidRate: 2.65 },
   { lookRate: 22.0, velRate: 9.5, maxTurnRate: 2.20, glideTurnRate: 0.62, turnAccel: 6.8, maxBank: 0.22, glideBank: 0.40, bankGain: 0.10,  glideBankGain: 0.22, avoidRate: 4.20 },
@@ -90,12 +99,19 @@ export class FlyControls {
     this._loopU = 0;            // continuous parameter in [0, autopilotLoop.length)
     this._loopInitialized = false;
 
-    // Autopilot POI Auto-Look gimbal mode (gazes smoothly at nearby landmarks/POIs while slowly moving or hovering!)
+    // Strategic Cinematic Gaze gimbal modes (looks realistically at nearby landmarks, projections, street canyons & spires!)
     this.autoLook = false;
+    this.gazeMode = 0;          // 0=Off, 1=Director, 2=Sites, 3=Projections, 4=Vertigo Up/Down, 5=Gentle Drift
+    this._lastActiveGazeMode = 1;
     this.poiList = [];
+    this.projectionList = [];   // 3D holograms, media screens, mega-wraps & searchlight crowns
+    this.getLiveProjections = null; // optional callback returning dynamic director projections
     this._autoLookPoi = null;
     this._autoLookTimer = 0;
+    this._autoLookDuration = 6.0;
     this._autoLookPhase = 0;
+    this._gazeBeatCount = 0;
+    this._gazeKind = 'forward';
 
     this.freelook = false;      // separate Look-Around mode decoupled from travel heading
     this.moveYaw = 0;
@@ -260,6 +276,7 @@ export class FlyControls {
       this._autoLookTimer = 0;
       this._freeYawOff = 0;
       this._freePitchOff = 0;
+      if (this.gazeMode <= 0) this.gazeMode = this._lastActiveGazeMode || 1;
     } else if (!next && this.autoLook && !this.freelook) {
       // Smoothly converge view back to travel direction with zero snap
       this._targetYaw = this.moveYaw;
@@ -267,13 +284,32 @@ export class FlyControls {
       this._freeYawOff = 0;
       this._freePitchOff = 0;
     }
+    if (!next) this.gazeMode = 0;
     this.autoLook = next;
   }
 
+  setGazeMode(mode) {
+    const m = Math.max(0, Math.min(CINEMATIC_GAZE_MODES.length - 1, Math.round(Number(mode) || 0)));
+    if (m > 0) {
+      this._lastActiveGazeMode = m;
+      this.gazeMode = m;
+      if (!this.autoLook) {
+        this.setAutoLook(true);
+      } else {
+        this._autoLookPoi = null;
+        this._autoLookTimer = 0;
+      }
+    } else {
+      this.gazeMode = 0;
+      this.setAutoLook(false);
+    }
+    return this.gazeMode;
+  }
+
   /**
-   * Queue or set a smooth flight route to `(x, y, z)` (used by Minimap click & WebMCP).
-   * Automatically inserts an elevated cruise arc waypoint if distant towers sit between
-   * the camera and destination so the camera flies gracefully there instead of teleporting!
+   * Queue or set a smooth flight route to `(x, y, z)` (used by Landmark dropdown, Minimap click & WebMCP).
+   * Preserves the camera's current cruise speed and inserts an elevated cruise arc waypoint if
+   * distant towers sit between the camera and destination so the camera flies gracefully there!
    */
   enqueueWaypoint(spot, { append = false, stopOnArrive = false } = {}) {
     if (!spot || !Number.isFinite(spot.x) || !Number.isFinite(spot.z)) return [];
@@ -325,13 +361,18 @@ export class FlyControls {
     });
     this._routeStopOnArrive = !!stopOnArrive;
     this._manualCourseSteered = false;
+    // Preserve current camera speed! Only initialize glideSpeed if <= 0.
+    if (!Number.isFinite(this.glideSpeed) || this.glideSpeed <= 0) {
+      this.glideSpeed = 120;
+    }
     if (!this.glide) {
-      if (this.glideSpeed < 85) this.glideSpeed = 165;
       this.setGlide(true);
-    } else if (this.glideSpeed < 45) {
-      this.glideSpeed = 145;
     }
     this._idle = 2.5;
+    // Let Strategic Gaze anticipate the newly selected destination landmark when within visual range
+    if (this.autoLook && dist < 950) {
+      this._autoLookTimer = Math.min(this._autoLookTimer, 0.8);
+    }
     return this.routeQueue;
   }
 
@@ -664,27 +705,188 @@ export class FlyControls {
     return cur + this[velField] * dt;
   }
 
-  _pickNextAutoLookPoi(p) {
-    if (!Array.isArray(this.poiList) || !this.poiList.length) return null;
-    const candidates = [];
-    for (const poi of this.poiList) {
-      if (!poi || !Number.isFinite(poi.x) || !Number.isFinite(poi.z)) continue;
-      if (poi === this._autoLookPoi && this.poiList.length > 1) continue;
-      const dx = poi.x - p.x;
-      const dz = poi.z - p.z;
-      const dist = Math.hypot(dx, dz);
-      if (dist < 45 || dist > 3400) continue;
-      // Prefer nearby dramatic landmarks & forward-hemisphere vistas
-      const brg = Math.atan2(-dx, -dz);
-      const fwdCos = Math.cos(wrapAngleDelta(brg - this.moveYaw));
-      const score = (1.0 / (160 + dist)) * (1.15 + 0.55 * fwdCos) * (poi.priority || 1.0);
-      candidates.push({ poi, score });
+  _hasGazeSightline(p, tx, ty, tz) {
+    if (!this.collider || this.worldCurve >= 0.05) return true;
+    const dx = tx - p.x;
+    const dy = ty - p.y;
+    const dz = tz - p.z;
+    const dist = Math.hypot(dx, dy, dz);
+    if (dist < 18) return true;
+    const checkLen = Math.min(dist * 0.76, 310);
+    const inv = 1 / dist;
+    const ux = dx * inv;
+    const uy = dy * inv;
+    const uz = dz * inv;
+    for (let s = 1; s <= 5; s++) {
+      const d = (s / 5) * checkLen;
+      if (this.collider.hitsPoint(p.x + ux * d, p.y + uy * d, p.z + uz * d, 1.4, this.heightScale)) {
+        return false;
+      }
     }
-    if (!candidates.length) return this.poiList[Math.floor(Math.random() * this.poiList.length)] || null;
+    return true;
+  }
+
+  _pickNextAutoLookPoi(p) {
+    const gMode = this.gazeMode || 1;
+    this._gazeBeatCount = (this._gazeBeatCount || 0) + 1;
+
+    // Mode 5: Pure gentle meditative horizon drift (no discrete point lock)
+    if (gMode === 5) {
+      this._gazeKind = 'drift';
+      this._autoLookDuration = 7.5;
+      return null;
+    }
+
+    // Composed Cinematography Rhythm: every 3rd beat in Director/Sites/Projections modes,
+    // rest smoothly along the upcoming flight avenue for ~2.6s so head turns feel motivated & human!
+    const finalRouteStop = this.routeQueue.length > 0 ? this.routeQueue[this.routeQueue.length - 1] : null;
+    const nearRouteDest = finalRouteStop && Math.hypot((finalRouteStop.lookX ?? finalRouteStop.x) - p.x, (finalRouteStop.lookZ ?? finalRouteStop.z) - p.z) < 720;
+    if (!nearRouteDest && gMode !== 4 && (this._gazeBeatCount % 3 === 0)) {
+      this._gazeKind = 'forward';
+      this._autoLookDuration = 2.5 + Math.abs(Math.sin(this._autoLookPhase * 2.1)) * 1.4;
+      return null;
+    }
+
+    const candidates = [];
+    const maxNeckYaw = gMode === 3 ? 1.48 : 1.32; // ~75-85 deg comfortable human neck turn
+
+    // 1. Active Route Destination Landmark (admire selected landmark on approach!)
+    if (finalRouteStop && gMode !== 4) {
+      const tx = finalRouteStop.lookX ?? finalRouteStop.x;
+      const ty = finalRouteStop.lookY ?? (finalRouteStop.y * 0.62);
+      const tz = finalRouteStop.lookZ ?? finalRouteStop.z;
+      const dist = Math.hypot(tx - p.x, tz - p.z);
+      if (dist > 25 && dist < 1100) {
+        const clear = this._hasGazeSightline(p, tx, ty, tz) ? 1.0 : 0.25;
+        candidates.push({
+          poi: { name: finalRouteStop.name, x: tx, lookY: ty, z: tz, kind: 'destination' },
+          score: (3.2 / (140 + dist)) * clear,
+          dur: 5.5,
+        });
+      }
+    }
+
+    // 2. Landmarks, Architecture, Bridges, Harbor & Park (`poiList`)
+    if ((gMode === 1 || gMode === 2) && Array.isArray(this.poiList)) {
+      for (const poi of this.poiList) {
+        if (!poi || !Number.isFinite(poi.x) || !Number.isFinite(poi.z)) continue;
+        if (this._autoLookPoi && poi.name === this._autoLookPoi.name && this.poiList.length > 1) continue;
+        const dx = poi.x - p.x;
+        const dz = poi.z - p.z;
+        const dist = Math.hypot(dx, dz);
+        if (dist < 42 || dist > 2600) continue;
+        const brg = Math.atan2(-dx, -dz);
+        const relYaw = Math.abs(wrapAngleDelta(brg - this.moveYaw));
+        if (relYaw > maxNeckYaw) continue;
+        const lookY = poi.lookY ?? ((poi.y || 80) * 0.65);
+        const clear = this._hasGazeSightline(p, poi.x, lookY, poi.z) ? 1.0 : 0.10;
+        // Favor ~20-65 deg oblique pass-by tracking angles for classic aerial cinema parallax!
+        const parallaxBonus = 1.0 + 0.45 * Math.sin(Math.min(Math.PI, relYaw * 1.8));
+        const score = (1.25 / (145 + dist)) * parallaxBonus * (poi.priority || 1.0) * clear * (gMode === 2 ? 1.6 : 1.0);
+        candidates.push({ poi: { ...poi, lookY, gazeKind: 'site' }, score, dur: 5.2 + (dist < 380 ? 1.8 : 0.8) });
+      }
+    }
+
+    // 3. 3D Holograms, Live Director Projections, Hero Billboards & Searchlight Crowns
+    if (gMode === 1 || gMode === 3) {
+      const liveProjs = typeof this.getLiveProjections === 'function' ? (this.getLiveProjections() || []) : [];
+      const allProjs = liveProjs.concat(Array.isArray(this.projectionList) ? this.projectionList : []);
+      for (const pr of allProjs) {
+        if (!pr || !Number.isFinite(pr.x) || !Number.isFinite(pr.z)) continue;
+        if (this._autoLookPoi && pr.name && pr.name === this._autoLookPoi.name && allProjs.length > 1) continue;
+        const dx = pr.x - p.x;
+        const dz = pr.z - p.z;
+        const dist = Math.hypot(dx, dz);
+        const minD = pr.live ? 8 : 24;
+        const maxD = pr.live ? 650 : 920;
+        if (dist < minD || dist > maxD) continue;
+        const brg = Math.atan2(-dx, -dz);
+        const relYaw = Math.abs(wrapAngleDelta(brg - this.moveYaw));
+        if (relYaw > maxNeckYaw) continue;
+        const lookY = pr.lookY ?? pr.y ?? 65;
+        const clear = pr.live || this._hasGazeSightline(p, pr.x, lookY, pr.z) ? 1.0 : 0.08;
+        const liveBoost = pr.live ? 4.2 : 1.0;
+        const modeBoost = gMode === 3 ? 2.4 : 1.28;
+        const score = (1.55 / (95 + dist)) * (pr.priority || 1.15) * liveBoost * modeBoost * clear;
+        candidates.push({
+          poi: { name: pr.name || 'Hologram Projection', x: pr.x, lookY, z: pr.z, gazeKind: 'projection' },
+          score,
+          dur: pr.live ? 5.8 : 4.4,
+        });
+      }
+    }
+
+    // 4. Strategic Vertical Shots: Street Canyons / Plazas Below & Skyscraper Spires / Clouds Above!
+    if ((gMode === 1 || gMode === 4) && this.worldCurve < 0.08) {
+      const terrY = (this.collider && this.collider.groundHeightAt) ? this.collider.groundHeightAt(p.x, p.z) : 0;
+      const altAGL = p.y - terrY;
+      const fwdX = -Math.sin(this.moveYaw);
+      const fwdZ = -Math.cos(this.moveYaw);
+      const rightX = -fwdZ;
+      const rightZ = fwdX;
+      const sideSign = (this._gazeBeatCount % 2 === 0) ? 1 : -1;
+
+      // 4A. Vertigo Street Canyon / Traffic River Glance Below (when flying above 45m AGL)
+      if (altAGL > 45 && this._gazeKind !== 'canyon_down') {
+        const lookAheadD = Math.max(55, Math.min(135, altAGL * 0.92));
+        const cx = p.x + fwdX * lookAheadD + rightX * sideSign * 18;
+        const cz = p.z + fwdZ * lookAheadD + rightZ * sideSign * 18;
+        const floorY = ((this.collider && this.collider.groundHeightAt) ? this.collider.groundHeightAt(cx, cz) : terrY) + 8;
+        if (this._hasGazeSightline(p, cx, floorY + 12, cz)) {
+          const vertWeight = gMode === 4 ? 0.022 : 0.0046;
+          candidates.push({
+            poi: { name: 'Street Canyon Vista', x: cx, lookY: floorY, z: cz, gazeKind: 'canyon_down' },
+            score: vertWeight * Math.min(1.6, altAGL / 95),
+            dur: 4.1,
+          });
+        }
+      }
+
+      // 4B. Towering Spire Crown / Volumetric Cloud Canopy Glance Above
+      if (this._gazeKind !== 'spire_up') {
+        let bestSpire = null;
+        if (this.collider && altAGL < 185) {
+          for (const lat of [-46, 46, 0]) {
+            const sx = p.x + fwdX * 88 + rightX * lat;
+            const sz = p.z + fwdZ * 88 + rightZ * lat;
+            const top = this.collider.maxHeightNear(sx, sz, 22) * this.heightScale;
+            if (top > p.y + 38 && (!bestSpire || top > bestSpire.top)) {
+              bestSpire = { x: sx, z: sz, top };
+            }
+          }
+        }
+        const skyTarget = bestSpire
+          ? { name: 'Skyscraper Crown', x: bestSpire.x, lookY: bestSpire.top + 8, z: bestSpire.z, gazeKind: 'spire_up' }
+          : { name: 'Cloud & Sky Canopy', x: p.x + fwdX * 190 + rightX * sideSign * 42, lookY: p.y + 135, z: p.z + fwdZ * 190 + rightZ * sideSign * 42, gazeKind: 'spire_up' };
+        const upWeight = gMode === 4 ? 0.020 : (bestSpire ? 0.0048 : 0.0026);
+        candidates.push({
+          poi: skyTarget,
+          score: upWeight,
+          dur: 4.3,
+        });
+      }
+    }
+
+    if (!candidates.length) {
+      this._gazeKind = 'drift';
+      this._autoLookDuration = 5.0;
+      return null;
+    }
     candidates.sort((a, b) => b.score - a.score);
-    const topK = Math.min(4, candidates.length);
-    const idx = Math.floor(Math.abs(Math.sin((this._autoLookPhase + 1.7) * 19.31)) * topK) % topK;
-    return candidates[idx].poi;
+    const bestScore = candidates[0].score;
+    const pool = candidates.slice(0, 3).filter((c) => c.score >= bestScore * 0.38);
+    let totalW = 0;
+    for (const c of pool) totalW += c.score;
+    const pickU = Math.abs(Math.sin((this._autoLookPhase + this._gazeBeatCount * 1.37) * 19.31)) * totalW;
+    let acc = 0;
+    let chosen = pool[0];
+    for (const c of pool) {
+      acc += c.score;
+      if (pickU <= acc) { chosen = c; break; }
+    }
+    this._gazeKind = chosen.poi.gazeKind || 'site';
+    this._autoLookDuration = chosen.dur || 5.4;
+    return chosen.poi;
   }
 
   /**
@@ -1121,32 +1323,56 @@ export class FlyControls {
         if (!decoupled) this._targetPitch = this._targetMovePitch;
       }
 
-      // Autopilot POI Auto-Look Gimbal: smoothly gazes around at nearby POIs while moving slowly or hovering!
+      // Strategic Cinematic Gaze Gimbal: realistically turns head to admire nearby landmarks,
+      // 3D projections, street canyons below & skyscraper spires above with S-curve holds!
       if (this.autoLook && !this.freelook) {
         this._autoLookPhase += clampedDt;
         this._autoLookTimer -= clampedDt;
         if (!this._drag) {
-          // Decay temporary drag offset gently back toward POI framing
           this._freeYawOff *= Math.exp(-clampedDt * 0.45);
           this._freePitchOff *= Math.exp(-clampedDt * 0.45);
         }
-        if (this._autoLookTimer <= 0 || !this._autoLookPoi) {
+        if (this._autoLookTimer <= 0) {
           this._autoLookPoi = this._pickNextAutoLookPoi(p);
-          this._autoLookTimer = 5.8 + (Math.abs(Math.sin(this._autoLookPhase * 3.7)) * 4.4);
+          this._autoLookTimer = Math.max(2.2, this._autoLookDuration || 5.4);
         }
-        if (this._autoLookPoi) {
+
+        // Organic cinema handheld micro-breathing (keeps frame alive without wobble)
+        const breathYaw = Math.sin(this._autoLookPhase * 0.62) * 0.012 + Math.sin(this._autoLookPhase * 0.27) * 0.018;
+        const breathPitch = Math.cos(this._autoLookPhase * 0.51) * 0.009 + Math.sin(this._autoLookPhase * 0.21) * 0.012;
+
+        // Narrow head-turn excursion automatically when threading a tight obstacle gap (`_avoidActive`)
+        const safetyFocus = Math.max(0.22, 1.0 - 0.68 * (this._avoidActive || 0));
+
+        if (this._gazeKind === 'forward' || (this.gazeMode === 5 && !this._autoLookPoi)) {
+          const driftAmp = this.gazeMode === 5 ? 0.34 : 0.08;
+          const driftPitch = this.gazeMode === 5 ? 0.11 : 0.03;
+          this._targetYaw = this.moveYaw + (Math.sin(this._autoLookPhase * 0.23) * driftAmp + breathYaw) * safetyFocus + this._freeYawOff;
+          this._targetPitch = this.movePitch * 0.65 - 0.04 + (Math.cos(this._autoLookPhase * 0.18) * driftPitch + breathPitch) * safetyFocus + this._freePitchOff;
+        } else if (this._autoLookPoi && this.gazeMode !== 5) {
           const lx = this._autoLookPoi.x - p.x;
           const ly = (this._autoLookPoi.lookY ?? ((this._autoLookPoi.y || 80) * 0.68)) - p.y;
           const lz = this._autoLookPoi.z - p.z;
           const lh = Math.hypot(lx, lz) || 1;
-          const poiYaw = Math.atan2(-lx, -lz) + Math.sin(this._autoLookPhase * 0.28) * 0.08 + this._freeYawOff;
-          const poiPitch = Math.max(-0.65, Math.min(0.55, Math.atan2(ly, lh) + Math.cos(this._autoLookPhase * 0.22) * 0.04 + this._freePitchOff));
-          this._targetYaw = poiYaw;
-          this._targetPitch = poiPitch;
+          const rawYaw = Math.atan2(-lx, -lz);
+          const rawPitch = Math.atan2(ly, lh);
+
+          // S-curve ease-in / hold / ease-out across the shot duration + comfortable human neck clamp
+          const dur = Math.max(2.2, this._autoLookDuration || 5.4);
+          const prog = 1.0 - Math.max(0, Math.min(1, this._autoLookTimer / dur));
+          const easeIn = Math.min(1, prog / 0.22);
+          const easeOut = Math.min(1, (1 - prog) / 0.20);
+          const shotEnv = (easeIn * easeIn * (3 - 2 * easeIn)) * (easeOut * easeOut * (3 - 2 * easeOut));
+          const weight = shotEnv * safetyFocus;
+
+          const clampedRelYaw = Math.max(-1.38, Math.min(1.38, wrapAngleDelta(rawYaw - this.moveYaw)));
+          const clampedPitch = Math.max(-1.08, Math.min(0.88, rawPitch));
+          this._targetYaw = this.moveYaw + clampedRelYaw * weight + breathYaw + this._freeYawOff;
+          this._targetPitch = this.movePitch * (1 - weight) + clampedPitch * weight + breathPitch + this._freePitchOff;
         } else {
-          // Gentle scenic horizon sweep if poiList is empty
-          this._targetYaw = this.moveYaw + Math.sin(this._autoLookPhase * 0.24) * 0.55 + this._freeYawOff;
-          this._targetPitch = -0.08 + Math.cos(this._autoLookPhase * 0.19) * 0.10 + this._freePitchOff;
+          // Gentle scenic horizon drift
+          this._targetYaw = this.moveYaw + (Math.sin(this._autoLookPhase * 0.24) * 0.36 + breathYaw) * safetyFocus + this._freeYawOff;
+          this._targetPitch = -0.05 + (Math.cos(this._autoLookPhase * 0.19) * 0.12 + breathPitch) * safetyFocus + this._freePitchOff;
         }
       }
     }
@@ -1241,12 +1467,16 @@ export class FlyControls {
       this._resolveAt(p);
     }
 
-    // Smooth aerodynamic banking into travel turns
+    // Smooth aerodynamic banking into travel turns (+ subtle cinema horizon poise during strategic gaze)
     const curMoveYaw = decoupled ? this.moveYaw : this.yaw;
     const yawRate = wrapAngleDelta(curMoveYaw - prevMoveYaw) / Math.max(clampedDt, 1e-3);
     const maxBank = this.glide ? preset.glideBank : preset.maxBank;
     const bankGain = this.glide ? preset.glideBankGain : preset.bankGain;
-    const targetRoll = decoupled ? 0 : Math.max(-maxBank, Math.min(maxBank, yawRate * bankGain));
+    const targetRoll = this.freelook
+      ? 0
+      : (decoupled
+        ? Math.max(-maxBank * 0.62, Math.min(maxBank * 0.62, yawRate * bankGain * 0.55 + this._yawVel * 0.04))
+        : Math.max(-maxBank, Math.min(maxBank, yawRate * bankGain)));
     this.roll += (targetRoll - this.roll) * (1 - Math.exp(-clampedDt * (6.5 / Math.sqrt(smoothK * turnK))));
 
     this.camera.quaternion.setFromEuler(

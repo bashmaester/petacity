@@ -22,6 +22,7 @@ import {
   CELL, evalCoastSignedDist, evalRiverSignedDist, isPointInWater,
 } from './city.js';
 import { projectorFrustumGeometry } from './scene.js';
+import { BEAM_VERT, BEAM_FRAG } from './shaders.js';
 
 /* =========================================================================
  * PURE-CODE 5x7 BITMAP GLYPH FONT (ASCII 32..95, zero external fonts/DOM)
@@ -1182,13 +1183,22 @@ export class MovieSetDirector {
       0.5,
       [colObj.r, colObj.g, colObj.b],
     );
-    const frustumMat = new THREE.MeshBasicMaterial({
-      color: colObj,
+    const U = this.U || {};
+    const frustumMat = new THREE.ShaderMaterial({
+      vertexShader: BEAM_VERT,
+      fragmentShader: BEAM_FRAG,
+      uniforms: {
+        uBeamCol: { value: colObj.clone() },
+        uBeamK: { value: 0.42 },
+        uTime: U.uTime || { value: 0 },
+        uLightK: U.uLightK || { value: 1 },
+        uWorldCurve: U.uWorldCurve || { value: 0 },
+        uPlanetR: U.uPlanetR || { value: 2100 },
+      },
       transparent: true,
-      opacity: 0.22,
-      blending: THREE.AdditiveBlending,
       depthWrite: false,
-      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+      side: THREE.FrontSide,
     });
     const frustumMesh = new THREE.Mesh(frustumGeo, frustumMat);
     frustumMesh.renderOrder = 6;

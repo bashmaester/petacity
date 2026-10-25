@@ -310,6 +310,36 @@ test('Phase-18 UI contract: glyph-only buttons, minimized hover-only startup, 0.
   assert.ok(main.includes('exportStandaloneDemoHTML'), 'main.js wires standalone single-HTML demo exporter');
 });
 
+test('Phase-19 UI contract: landmark destination routing at current speed, cinematic gaze modes, controllable cumulus & auto weather cycle', () => {
+  for (const id of [
+    'sel-gaze-mode',
+    'sl-cloud-puffs', 'cloud-puffs-label',
+    'sel-weather-auto', 'sl-weather-interval', 'weather-interval-label',
+  ]) {
+    assert.ok(html.includes(`id="${id}"`), `#${id} exists in index.html`);
+  }
+
+  // Landmark dropdown (#sel-poi) & button (#b-poi-go) route smoothly via enqueueSpotRoute instead of quick-jumping via flyToLandmark
+  const poiChangeBlock = main.match(/\$?\(['"]#sel-poi['"]\)\.onchange\s*=\s*\([^)]*\)\s*=>\s*\{([\s\S]*?)\};/);
+  assert.ok(poiChangeBlock && poiChangeBlock[1].includes('enqueueSpotRoute'), '#sel-poi onchange sets smooth autopilot destination via enqueueSpotRoute');
+  assert.equal(poiChangeBlock[1].includes('flyToLandmark'), false, '#sel-poi onchange does not quick-jump via flyToLandmark');
+
+  const poiGoBlock = main.match(/\$?\(['"]#b-poi-go['"]\)\.onclick\s*=\s*\([^)]*\)\s*=>\s*\{([\s\S]*?)\};/);
+  assert.ok(poiGoBlock && poiGoBlock[1].includes('enqueueSpotRoute'), '#b-poi-go onclick sets smooth autopilot destination via enqueueSpotRoute');
+  assert.equal(poiGoBlock[1].includes('flyToLandmark'), false, '#b-poi-go onclick does not quick-jump via flyToLandmark');
+
+  // Cumulus & cloud layers can be lowered down to street canyons (5m / 0.05x) or turned completely off (min="0")
+  assert.match(html, /id="sl-cloud-puffs"[^>]*min="0"/, '3D cumulus puffs slider goes down to 0 (off)');
+  assert.match(html, /id="sl-clayer-elev"[^>]*min="5"/, 'cloud layer elevation slider lowers down to 5m street canyons');
+  assert.match(html, /id="sl-cloudelev"[^>]*min="0\.05"/, 'master cloud elevation multiplier lowers down to 0.05x');
+
+  // Auto weather cycle offers Hold, Auto-Cycle, Shuffle & Cinematic Arc
+  for (const modeVal of ['off', 'seq', 'shuffle', 'cinematic']) {
+    assert.match(html, new RegExp(`<select[^>]*id="sel-weather-auto"[\\s\\S]*?<option[^>]*value="${modeVal}"`), `#sel-weather-auto includes ${modeVal}`);
+  }
+});
+
+
 
 
 

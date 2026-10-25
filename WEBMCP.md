@@ -180,13 +180,21 @@ await window.petacity.callTool('petacity_run_camera_script', {
 });
 ```
 
-### Recipe 7 — Hovering Contemplative Autopilot with POI Auto-Look & Slow Turns
+### Recipe 7 — Strategic Cinematic Gaze Modes & Smooth Landmark Routing at Current Speed
 ```js
 await window.petacity.callTool('petacity_autopilot_route', {
   enabled: true,
-  speed: 0,                     // stationary aerial hover (or 22 for slow airship drift)
-  autoLook: true,               // smoothly pans & contemplates nearby landmarks/vistas
-  turnSmooth: 2.2,              // ultra-silky 2nd-order angular rate damping
+  gazeMode: 1,                  // 0=Off, 1=Cinematic Director, 2=Sites, 3=Projections, 4=Vertigo Up/Down, 5=Gentle Drift
+  destination: 'Babylon',       // smoothly routes to landmark at current camera speed (omit speed to preserve current speed!)
+  turnSmooth: 1.8,              // silky 2nd-order angular rate damping
+});
+
+// Auto-cycle weather with smooth 4.6s crossfades & lower cumulus into street canyons (or set cloudPuffs: 0 to disable):
+await window.petacity.callTool('petacity_set_environment', {
+  weatherAutoMode: 'cinematic', // 'off' | 'seq' | 'shuffle' | 'cinematic'
+  weatherInterval: 45,          // seconds per weather mood
+  cloudPuffs: 0.8,              // 0 = turn off 3D cumulus puffs completely .. 2.0 = dense cumulus
+  cloudElev: 0.15,              // 0.05..2.4x master cloud altitude (lowers clouds right down between towers)
 });
 ```
 
