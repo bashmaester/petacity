@@ -2152,10 +2152,12 @@ test('Phase-16 scene: camera lens distortion, Panini wide, 6-face 360/Fisheye/Li
 
     const encoded = encodeExactState({
       seed: 4417,
+      bookmarks: DEFAULT_BOOKMARKS,
       post: { lensMode: 6, lensDistort: 0.35, lensZoom: 0.82, anamorphic: 0.45, tiltShift: 0.7 },
       camera: { ...pose, fov: 132 },
     });
-    const decoded = decodeExactState(encoded);
+    assert.ok(encoded.length < 180, `compact v2 share token is ultra-short (got ${encoded.length} chars)`);
+    const decoded = decodeExactState(`https://bashmaester.github.io/petacity/?seed=4417&look=bladerunner#s=${encoded}`);
     assert.equal(decoded.post.lensMode, 6);
     assert.equal(decoded.post.lensDistort, 0.35);
     assert.equal(decoded.post.lensZoom, 0.82);

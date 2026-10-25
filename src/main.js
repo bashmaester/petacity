@@ -109,7 +109,9 @@ window.addEventListener('error', (e) => fatal(e.error || e.message));
 window.addEventListener('unhandledrejection', (e) => fatal(e.reason));
 
 const params = new URLSearchParams(location.search);
-const initialExact = params.get('s') ? decodeExactState(params.get('s')) : null;
+const hashParams = new URLSearchParams((location.hash || '').replace(/^#/, ''));
+const initialStateToken = hashParams.get('s') || params.get('s');
+const initialExact = initialStateToken ? decodeExactState(initialStateToken) : null;
 
 if (initialExact && initialExact.custom) {
   syncCustomLook(initialExact.custom);
@@ -1029,7 +1031,12 @@ function boot() {
       p.set('pal', [strip(c.zen), strip(c.hor), strip(c.base), strip(c.win), strip(c.accent), strip(c.sec), c.style, c.mono ? '1' : '0'].join(','));
     }
     if (includeExactToken) {
-      p.set('s', encodeExactState(captureExactState()));
+      const hashToken = buildCompactShareToken();
+      const shortP = new URLSearchParams();
+      shortP.set('seed', String(seed));
+      shortP.set('look', lookId);
+      history.replaceState(null, '', `${location.pathname}?${shortP}#s=${hashToken}`);
+      return;
     }
     history.replaceState(null, '', `${location.pathname}?${p}`);
   }
@@ -1362,6 +1369,38 @@ function boot() {
 
   /* -------------------------------------- Exact-state export / sharing */
 
+  function subsampleFrames(frames, maxCount) {
+    if (!Array.isArray(frames) || frames.length <= maxCount) return frames;
+    const out = [];
+    for (let i = 0; i < maxCount; i++) {
+      const idx = Math.round((i / (maxCount - 1)) * (frames.length - 1));
+      out.push(frames[idx]);
+    }
+    return out;
+  }
+
+  function buildCompactShareToken() {
+    const st = captureExactState();
+    let token = encodeExactState(st);
+    // Keep share URLs well under ~1,400 chars for chat apps, SMS, QR & proxies
+    if (token.length > 1250 && st.path && Array.isArray(st.path.frames)) {
+      const sub = { ...st, path: { ...st.path, frames: subsampleFrames(st.path.frames, 20) } };
+      token = encodeExactState(sub);
+    }
+    if (token.length > 1350 && st.path) {
+      const noPath = { ...st };
+      delete noPath.path;
+      token = encodeExactState(noPath);
+    }
+    if (token.length > 1350 && st.bookmarks) {
+      const minimal = { ...st };
+      delete minimal.path;
+      delete minimal.bookmarks;
+      token = encodeExactState(minimal);
+    }
+    return token;
+  }
+
   function buildExactShareURL() {
     syncURL(true);
     return location.href;
@@ -1372,14 +1411,14 @@ function boot() {
     $('#export-text').value = url;
     try {
       await navigator.clipboard.writeText(url);
-      flash('Exact state URL copied');
+      flash(`Share URL copied (${url.length} chars)`);
     } catch {
       $('#export-box').classList.add('on');
       $('#b-export').classList.add('on');
       $('#b-export').setAttribute('aria-pressed', 'true');
       $('#export-text').focus();
       $('#export-text').select();
-      flash('Exact state URL ready');
+      flash('Share URL ready');
     }
   }
 
@@ -1432,16 +1471,7 @@ function boot() {
         /* fall through to full state decode */
       }
     }
-    let token = raw;
-    try {
-      if (raw.includes('?')) {
-        const u = new URL(raw, location.origin);
-        token = u.searchParams.get('s') || raw;
-      }
-    } catch {
-      /* treat as raw token or JSON */
-    }
-    const decoded = decodeExactState(token);
+    const decoded = decodeExactState(raw);
     if (!decoded) {
       flash('Could not parse state');
       return;
@@ -1449,6 +1479,17 @@ function boot() {
     applyStateObject(decoded, { applyCamera: true, applyBookmarks: true });
     flash('Exact state restored');
   };
+
+  window.addEventListener('hashchange', () => {
+    const hp = new URLSearchParams((location.hash || '').replace(/^#/, ''));
+    const tok = hp.get('s');
+    if (!tok) return;
+    const decoded = decodeExactState(tok);
+    if (decoded) {
+      applyStateObject(decoded, { applyCamera: true, applyBookmarks: true });
+      flash('Exact state restored from URL');
+    }
+  });
 
   $('#b-new').onclick = () => {
     seed = 1 + Math.floor(Math.random() * 999999998);
@@ -1475,7 +1516,7 @@ function boot() {
     const panels = Array.from(document.querySelectorAll('details.subpanel'));
     const anyOpen = panels.some((d) => d.open);
     panels.forEach((d) => { d.open = !anyOpen; });
-    $('#b-fold-all').textContent = anyOpen ? '\u229E' : '\u229F';
+    $('#b-fold-all').textContent = anyOpen ? '\u229E Open' : '\u229F Fold';
     flash(anyOpen ? 'Collapsed subpanels' : 'Expanded all subpanels');
   };
   const toggleTimeCycle = () => {
@@ -2242,7 +2283,7 @@ function boot() {
     controls.syncFromCamera();
     controls.setGlide(glideOn);
     const b = $('#b-glide');
-    b.textContent = '\u2708\uFE0E';
+    b.textContent = '\u2708\uFE0E Auto';
     b.classList.toggle('on', glideOn);
     b.setAttribute('aria-pressed', String(glideOn));
     b.title = (glideOn ? 'Stop' : 'Start') + ' Glide mode — drag to steer, wheel for speed (G)';
@@ -2273,7 +2314,7 @@ function boot() {
     controls.collision = collideOn;
     if (vehicles) vehicles.setCollision(collideOn);
     const b = $('#b-collide');
-    b.textContent = collideOn ? '\u2B21' : '\u25CC';
+    b.textContent = collideOn ? '\u2B21 Solid' : '\u25CC Noclip';
     b.classList.toggle('on', collideOn);
     b.setAttribute('aria-pressed', String(collideOn));
     b.title = (collideOn ? 'Collision: on — toggle noclip' : 'Collision: off (noclip) — enable collision') + ' (C)';

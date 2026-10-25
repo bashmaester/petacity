@@ -254,6 +254,24 @@ test('Phase-16 UI contract: camera optics, wide-angle, 360 projections, Dutch ro
   }
   assert.match(html, /id="sl-cam-fov"[^>]*min="15"[^>]*max="150"/, 'FOV slider spans 15 deg telephoto to 150 deg hyper-wide');
   assert.match(html, /id="sl-cam-roll"[^>]*min="-180"[^>]*max="180"/, 'Roll slider spans -180 to +180 deg');
+
+  // Top header simplified: no Petacity brand heading, only 5 buttons (Autopilot, Music, Collapse, Share, Minimize)
+  assert.equal(/class="brand"/.test(html), false, 'Petacity brand heading removed from top header');
+  const headMatch = html.match(/<div class="panel-head">([\s\S]*?)<\/div>\s*<div class="panel-body">/);
+  assert.ok(headMatch, '.panel-head found');
+  const headBtnIds = [...headMatch[1].matchAll(/<button[^>]*id="([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(
+    headBtnIds,
+    ['b-glide', 'b-radio', 'b-fold-all', 'b-export', 'b-ui'],
+    'top header keeps only Autopilot, Music, Collapse, Share & Minimize',
+  );
+
+  // Camera collider, moved camera toggles & camera optics live together in one combined subpanel
+  const combinedMatch = html.match(/<details class="subpanel"[^>]*>\s*<summary>Camera, Collider, Optics &amp; Minimap<\/summary>([\s\S]*?)<\/details>/);
+  assert.ok(combinedMatch, 'combined Camera, Collider, Optics & Minimap subpanel exists');
+  for (const id of ['b-autolook', 'b-freelook', 'b-avoid', 'b-collide', 'sl-camrad', 'sel-lens-mode', 'sl-cam-fov', 'sl-cam-roll']) {
+    assert.ok(combinedMatch[1].includes(`id="${id}"`), `#${id} lives inside the combined Camera, Collider, Optics & Minimap subpanel`);
+  }
 });
 
 

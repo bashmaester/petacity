@@ -69,12 +69,32 @@ body {
 }
 
 .panel-head {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  display: flex; align-items: center; width: 100%;
 }
-.brand { font-weight: 800; letter-spacing: 0.14em; font-size: 13px; text-transform: uppercase; }
-.brand b { color: var(--accent); }
 .head-actions {
-  display: inline-flex; align-items: center; gap: 5px; margin-left: auto;
+  display: flex; align-items: center; gap: 5px; width: 100%;
+}
+.head-actions .head-pill {
+  flex: 1; min-width: 0; width: auto; height: 29px; padding: 0 5px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 3.5px;
+  font-size: 10.5px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap;
+}
+.head-actions #b-ui {
+  width: 29px; height: 29px; flex: none;
+}
+.cam-toggles {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin: 2px 0 6px;
+}
+.cam-toggles .icon-btn {
+  width: 100%; height: 27px; padding: 0 4px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 3px;
+  font-size: 10px; font-weight: 600; white-space: nowrap;
+}
+.subsec-sep {
+  margin: 8px 2px 5px; padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  font-size: 9px; font-weight: 700; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--mute);
 }
 .icon-btn {
   display: inline-grid; place-items: center;
@@ -105,13 +125,12 @@ body.ui-off .panel {
   -webkit-backdrop-filter: none;
   overflow: visible;
 }
+body.ui-off .head-actions {
+  width: auto;
+}
 body.ui-off .panel-body,
-body.ui-off .brand,
 body.ui-off #b-glide,
-body.ui-off #b-autolook,
-body.ui-off #b-freelook,
-body.ui-off #b-avoid,
-body.ui-off #b-collide,
+body.ui-off #b-radio,
 body.ui-off #b-fold-all,
 body.ui-off #b-export {
   display: none;
@@ -479,17 +498,12 @@ button.icon-btn.rec-on, button.action.rec-on {
 
 <aside class="panel">
   <div class="panel-head">
-    <div class="brand" title="One seed grows the whole city — swap the look or bend the world into a globe">Peta<b>city</b></div>
     <div class="head-actions">
-      <button id="b-glide" class="icon-btn" type="button" aria-pressed="false" aria-label="Glide mode" title="Start Autopilot Glide — drag or A/D to steer course smoothly, wheel for speed (G)">&#x2708;&#xFE0E;</button>
-      <button id="b-autolook" class="icon-btn" type="button" aria-pressed="false" aria-label="Autopilot POI auto-look" title="Autopilot POI Auto-Look — automatically gaze at nearby landmarks &amp; vistas while cruising slowly or hovering (O)">&#x29BF;</button>
-      <button id="b-freelook" class="icon-btn" type="button" aria-pressed="false" aria-label="Free look-around mode" title="Free look-around mode — decouple head gaze from flight travel direction (L)">&#x25CE;</button>
-      <button id="b-radio" class="icon-btn" type="button" aria-pressed="false" aria-label="Toggle synth radio" title="Play / mute pure-code evolving generative synth radio (M)">&#x266B;</button>
-      <button id="b-avoid" class="icon-btn on" type="button" aria-pressed="true" aria-label="Anticipatory obstacle avoidance" title="Anticipatory shallow-angle obstacle &amp; terrain avoidance: on (V)">&#x2934;</button>
-      <button id="b-collide" class="icon-btn on" type="button" aria-pressed="true" aria-label="Toggle collision detection" title="Collision: on — toggle noclip (C)">&#x2B21;</button>
-      <button id="b-fold-all" class="icon-btn" type="button" aria-label="Collapse or expand all subpanels" title="Collapse / expand all control subpanels">&#x229F;</button>
-      <button id="b-export" class="icon-btn" type="button" aria-pressed="false" aria-label="Export or share exact state" title="Export / share exact state (URL &amp; JSON)">&#x2912;</button>
-      <button id="b-ui" class="icon-btn" type="button" aria-pressed="true" aria-label="Toggle interface" title="Hide interface (H)">&#x25E7;</button>
+      <button id="b-glide" class="icon-btn head-pill" type="button" aria-pressed="false" aria-label="Autopilot glide mode" title="Start Autopilot Glide — drag or A/D to steer course smoothly, wheel for speed (G)">&#x2708;&#xFE0E; Auto</button>
+      <button id="b-radio" class="icon-btn head-pill" type="button" aria-pressed="false" aria-label="Toggle synth radio" title="Play / mute pure-code evolving generative synth radio (M)">&#x266B; Music</button>
+      <button id="b-fold-all" class="icon-btn head-pill" type="button" aria-label="Collapse or expand all subpanels" title="Collapse / expand all control subpanels">&#x229F; Fold</button>
+      <button id="b-export" class="icon-btn head-pill" type="button" aria-pressed="false" aria-label="Export or share exact state" title="Share compact URL or export JSON state">&#x2912; Share</button>
+      <button id="b-ui" class="icon-btn" type="button" aria-pressed="true" aria-label="Minimize interface" title="Minimize interface (H)">&#x25E7;</button>
     </div>
   </div>
 
@@ -574,9 +588,9 @@ button.icon-btn.rec-on, button.action.rec-on {
       </div>
     </details>
 
-    <!-- 2B. Camera, Small Collider, Freelook & Interactive Minimap -->
+    <!-- 2B. Combined Camera, Collider, Optics, Wide-Angle/360° & Interactive Minimap -->
     <details class="subpanel" open>
-      <summary>Camera, Collider &amp; Minimap</summary>
+      <summary>Camera, Collider, Optics &amp; Minimap</summary>
       <div class="subpanel-body">
         <div id="minimap-wrap">
           <canvas id="minimap" width="276" height="176" aria-label="Interactive city minimap showing sites and recorded camera path"></canvas>
@@ -584,6 +598,12 @@ button.icon-btn.rec-on, button.action.rec-on {
             <span id="minimap-label">Click a site to fly · Path &amp; keys live</span>
             <button id="b-minimap-zoom" type="button" class="mini-btn" aria-label="Cycle minimap zoom" title="Cycle minimap zoom (1× / 2× / 3.5×)">1×</button>
           </div>
+        </div>
+        <div class="cam-toggles" role="group" aria-label="Camera gaze and collision toggles">
+          <button id="b-autolook" class="icon-btn" type="button" aria-pressed="false" aria-label="Autopilot POI auto-look" title="Autopilot POI Auto-Look — automatically gaze at nearby landmarks &amp; vistas while cruising slowly or hovering (O)">&#x29BF; Gaze</button>
+          <button id="b-freelook" class="icon-btn" type="button" aria-pressed="false" aria-label="Free look-around mode" title="Free look-around mode — decouple head gaze from flight travel direction (L)">&#x25CE; Free</button>
+          <button id="b-avoid" class="icon-btn on" type="button" aria-pressed="true" aria-label="Anticipatory obstacle avoidance" title="Anticipatory shallow-angle obstacle &amp; terrain avoidance: on (V)">&#x2934; Avoid</button>
+          <button id="b-collide" class="icon-btn on" type="button" aria-pressed="true" aria-label="Toggle collision detection" title="Collision: on — toggle noclip (C)">&#x2B21; Solid</button>
         </div>
         <div class="slider-grid">
           <div class="slider-row wide" title="Camera flight physics &amp; motion style">
@@ -617,13 +637,8 @@ button.icon-btn.rec-on, button.action.rec-on {
             <em id="turnsmooth-label">1.25×</em>
           </div>
         </div>
-      </div>
-    </details>
 
-    <!-- 2C. Camera Optics, Wide-Angle, 360° & Strange Angles -->
-    <details class="subpanel" open>
-      <summary>Camera Optics, Wide-Angle &amp; 360°</summary>
-      <div class="subpanel-body">
+        <div class="subsec-sep">Optics, Wide-Angle &amp; 360°</div>
         <div class="drop-row" style="margin-bottom: 5px;" title="Optical lens projection model (rectilinear, Panini wide, anamorphic, fisheye, 360° sphere, Little Planet, Inception fold &amp; kaleidoscope)">
           <select id="sel-lens-mode" aria-label="Camera optical projection mode" title="Camera optical projection mode">
             <option value="0" selected>Optics · Rectilinear Cinema Lens</option>
