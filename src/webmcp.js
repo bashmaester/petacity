@@ -399,13 +399,13 @@ export function buildPetacityTools(ctx) {
 
     {
       name: 'petacity_project_hologram',
-      description: 'Project a glowing volumetric hologram (with physical emitter drone pod and terminating volumetric projector light cone!) directly in front of the camera — either world-anchored or tracking the camera as you fly.',
+      description: 'Project a glowing single-sided planar or 3D Archimedean/abstract hologram (with physical emitter drone pod and terminating volumetric projector light cone!) directly in front of the camera — either world-anchored or tracking the camera as you fly.',
       inputSchema: {
         type: 'object',
         properties: {
           text: { type: 'string', description: 'Primary hologram message', default: 'INCOMING TRANSMISSION' },
           subtext: { type: 'string', description: 'Secondary hologram subtitle', default: 'SIGNAL LOCKED' },
-          shape: { type: 'string', enum: ['billboard', 'diamond', 'prism', 'ring'], default: 'billboard' },
+          shape: { type: 'string', enum: ['billboard', 'disc', 'diamond', 'cuboctahedron', 'icosahedron', 'knot', 'prism', 'ring'], default: 'billboard' },
           color: { type: 'string', default: '#44f2ff' },
           subColor: { type: 'string', default: '#ff6ad5' },
           distance: { type: 'number', description: 'Distance ahead of camera in meters', default: 36 },
@@ -478,6 +478,11 @@ export function buildPetacityTools(ctx) {
           fog: { type: 'number' },
           lightning: { type: 'number' },
           trafficCount: { type: 'number', description: '0..20000 active vehicles' },
+          trailMode: { description: 'Moving-object motion trails mode: 0/"off", 1/"subtle", 2/"some" (~30% fast), 3/"transit" (air/rail/ships/rockets), 4/"traffic" (all street+skyway), 5/"all" (city-wide)' },
+          trailLength: { type: 'number', description: 'Motion trail length & luminous intensity multiplier (0..2.5)' },
+          holoDensity: { type: 'number', description: 'Hologram projection number/density (0 = off .. 2.5 = dense citywide projections)' },
+          holoScale: { type: 'number', description: 'Hologram projection scale multiplier (0.35..2.2)' },
+          holoScan: { type: 'number', description: 'Hologram scanline & Archimedean facet wireframe intensity (0..2.5)' },
           seed: { type: 'number' },
           radius: { type: 'number', description: '3..13 city grid radius' },
         },

@@ -803,6 +803,41 @@ test('Phase-16 city: 16 futuristic & creative PoI buildings (hanging gardens, br
   }
 });
 
+test('Phase-20 city: zero crossed portal holos, 7+ planar/Archimedean/abstract holo archetypes, wide scaleMul range & extraHolos density pool', () => {
+  const c = generateCity({ seed: 4417, radius: 5, signAmt: 1.15 });
+  const c2 = generateCity({ seed: 1984, radius: 5, signAmt: 1.35 });
+  const all = [...c.holos, ...(c.extraHolos || []), ...c2.holos, ...(c2.extraHolos || [])];
+  assert.ok(c.holos.length >= 10, `base holos populated (${c.holos.length})`);
+  assert.ok(Array.isArray(c.extraHolos) && c.extraHolos.length >= 18, `extraHolos street/plaza/mid-tower pool populated (${c.extraHolos?.length})`);
+
+  // Strictly zero 'portal' crossed double-plane holograms anywhere
+  for (const H of all) {
+    assert.notEqual(H.kind, 'portal', 'never generates crossed portal double-plane holos');
+    assert.equal(H.shape, H.kind, 'H.shape matches H.kind for director raycast');
+    assert.ok(Number.isFinite(H.scaleMul) && H.scaleMul >= 0.2 && H.scaleMul <= 1.8, `valid scaleMul=${H.scaleMul}`);
+  }
+
+  // Archetype diversity across planar cones, Archimedean solids & 3D abstract sculptures
+  const kinds = new Set(all.map((H) => H.kind));
+  for (const expected of [
+    'panel', 'disc', 'cuboctahedron', 'truncated_octahedron',
+    'rhombicuboctahedron', 'trefoil_knot', 'astrolabe', 'cylinder',
+  ]) {
+    assert.ok(kinds.has(expected), `holo pool includes archetype "${expected}"`);
+  }
+
+  // Wide scale variation from street/plaza (< 0.55x) up to monumental sky crowns (> 1.25x)
+  const scales = all.map((H) => H.scaleMul);
+  assert.ok(Math.min(...scales) < 0.55, `intimate street/plaza holo scaleMul=${Math.min(...scales).toFixed(2)}`);
+  assert.ok(Math.max(...scales) > 1.25, `monumental sky-crown holo scaleMul=${Math.max(...scales).toFixed(2)}`);
+
+  // Bare signage city (signAmt = 0) produces 0 holos and 0 extraHolos
+  const bare = generateCity({ seed: 4417, radius: 5, signAmt: 0 });
+  assert.equal(bare.holos.length, 0);
+  assert.equal(bare.extraHolos.length, 0);
+});
+
+
 
 
 

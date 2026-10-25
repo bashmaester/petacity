@@ -950,13 +950,29 @@ button.icon-btn.rec-on, button.action.rec-on {
             <input id="sl-air" type="range" min="0" max="2.5" step="0.05" value="1" aria-label="Air and spaceport amount">
             <em id="air-label">100%</em>
           </div>
+          <div class="slider-row wide" title="Moving-Object Motion Trails Mode (Off, Subtle Taillights, Some Fast &amp; Express ~30%, Air/Rail/Ships/Rockets, All Traffic, or All Moving Objects City-Wide)">
+            <span>&#x21DD;</span>
+            <select id="sel-trail-mode" aria-label="Moving object motion trails mode">
+              <option value="0">Trails · Off (No Trails)</option>
+              <option value="1" selected>Trails · Subtle Taillights (Default)</option>
+              <option value="2">Trails · Some · Fast &amp; Express (~30%)</option>
+              <option value="3">Trails · Some · Air, Rail, Ships &amp; Rockets</option>
+              <option value="4">Trails · All Traffic (Streets + Skyways)</option>
+              <option value="5">Trails · All Moving Objects (City-Wide)</option>
+            </select>
+          </div>
+          <div class="slider-row wide" title="Motion Trail Length &amp; Luminous Intensity across vehicles, trains, aircraft, ships &amp; rockets (0 = off … 2.5× long exposure)">
+            <span>&#x223F;</span>
+            <input id="sl-trail-len" type="range" min="0" max="2.5" step="0.05" value="1" aria-label="Motion trail length and intensity">
+            <em id="trail-len-label">1.0×</em>
+          </div>
         </div>
       </div>
     </details>
 
     <!-- 6. Signage, Mega-Wraps & Glyph Script -->
     <details class="subpanel">
-      <summary>Signage, Mega-Wraps &amp; Glyphs</summary>
+      <summary>Signage, Holograms &amp; Glyphs</summary>
       <div class="subpanel-body">
         <div class="slider-grid">
           <div class="slider-row wide" title="Billboards, Holograms &amp; Street Signage Amount (0 = completely off … 2.5 = neon saturation)">
@@ -981,6 +997,21 @@ button.icon-btn.rec-on, button.action.rec-on {
             <span>&#x27F3;</span>
             <input id="sl-sign-anim" type="range" min="0" max="2.5" step="0.05" value="1" aria-label="Signage animation speed">
             <em id="sign-anim-label">1.0×</em>
+          </div>
+          <div class="slider-row wide" title="Holographic Projection Number / Density across street plazas, mid-towers &amp; sky crowns (0 = off … 2.5 = dense citywide projections)">
+            <span>&#x25C7;</span>
+            <input id="sl-holo-density" type="range" min="0" max="2.5" step="0.05" value="1" aria-label="Hologram projection density">
+            <em id="holo-density-label">100%</em>
+          </div>
+          <div class="slider-row wide" title="Holographic Projection Scale Multiplier across planar cones, Archimedean solids &amp; abstract 3D sculptures (0.35× … 2.2×)">
+            <span>&#x2922;</span>
+            <input id="sl-holo-scale" type="range" min="0.35" max="2.2" step="0.05" value="1" aria-label="Hologram projection scale">
+            <em id="holo-scale-label">1.0×</em>
+          </div>
+          <div class="slider-row wide" title="Holographic Scanline &amp; Archimedean Facet Wireframe Intensity (0 = smooth … 2.5 = crisp scanlines)">
+            <span>&#x2261;</span>
+            <input id="sl-holo-scan" type="range" min="0" max="2.5" step="0.05" value="1" aria-label="Hologram scanline intensity">
+            <em id="holo-scan-label">1.0×</em>
           </div>
         </div>
       </div>

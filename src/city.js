@@ -864,36 +864,42 @@ export function generateCity(
   }
   if (mediaZone) {
     mediaZone.towerCount = Math.max(mediaTowers.length, 2);
-    // 2 spaced street-level holographic portals spanning avenues in the Media Ward (restrained scale, no whiteout)
+    // 2 spaced street-level holographic sculptures & single-plane cones in the Media Ward (zero crossed planes!)
     for (let k = 0; k < 2; k++) {
       const ang = (k / 2) * Math.PI * 0.5 + hash2i(k, 907, seed) * 0.4;
       const off = (k === 0 ? -1 : 1) * 72;
+      const mKind = k === 0 ? 'truncated_octahedron' : 'trefoil_knot';
       holos.push({
         x: mediaZone.x + Math.cos(ang) * off,
-        y: 38 + k * 22,
-        baseY: 12,
+        y: 34 + k * 22,
+        baseY: 10,
         z: mediaZone.z + Math.sin(ang) * off,
         w: 44 + hash2i(k, 911, seed) * 20,
-        h: 26 + hash2i(k, 919, seed) * 12,
+        h: 28 + hash2i(k, 919, seed) * 14,
+        scaleMul: 0.48 + hash2i(k, 923, seed) * 0.44,
         rot: ang,
         seed: hash2i(k, 929, seed),
-        kind: 'portal',
+        kind: mKind,
+        shape: mKind,
       });
     }
     // Also place 2 distant civic/plaza sky-holograms elsewhere in the city so holo landmarks feel city-wide
     for (let k = 0; k < 2; k++) {
       const pl = places[k % Math.max(1, places.length)];
       if (!pl) break;
+      const pKind = k === 0 ? 'astrolabe' : 'disc';
       holos.push({
         x: pl.x,
-        y: 52 + k * 24,
-        baseY: 16,
+        y: 48 + k * 24,
+        baseY: 14,
         z: pl.z,
         w: 38 + hash2i(k + 5, 937, seed) * 18,
-        h: 26 + hash2i(k + 5, 941, seed) * 12,
+        h: 28 + hash2i(k + 5, 941, seed) * 12,
+        scaleMul: 0.52 + hash2i(k + 5, 943, seed) * 0.56,
         rot: hash2i(k + 5, 947, seed) * Math.PI,
         seed: hash2i(k + 5, 953, seed),
-        kind: k === 0 ? 'cylinder' : 'panel',
+        kind: pKind,
+        shape: pKind,
       });
     }
   }
@@ -1095,44 +1101,104 @@ export function generateCity(
   // hovering crowns over the arena & stadium, and portal banners over avenues.
   const holoCount = Math.max(2, Math.min(9, radius + Math.floor(hash2i(19, 23, seed) * 3)));
   const tall = [];
+  const midTowers = [];
   const nItems = items.length / 10;
   for (let k = 0; k < nItems; k++) {
-    if (items[k * 10 + 4] > 210 && items[k * 10 + 7] === KIND.WALL) tall.push(k);
+    if (items[k * 10 + 7] !== KIND.WALL) continue;
+    const bh = items[k * 10 + 4];
+    if (bh > 210) tall.push(k);
+    else if (bh > 65 && bh <= 210) midTowers.push(k);
   }
-  const holoKinds = ['panel', 'cylinder', 'portal'];
+  const holoKinds = [
+    'panel', 'disc', 'cuboctahedron', 'truncated_octahedron',
+    'rhombicuboctahedron', 'trefoil_knot', 'astrolabe',
+  ];
   for (let k = 0; k < holoCount && tall.length; k++) {
     const pickIdx = tall[Math.floor(hash2i(k * 7 + 3, 29, seed) * tall.length) % tall.length];
     const hx = items[pickIdx * 10 + 0];
     const hz = items[pickIdx * 10 + 2];
     const hTop = items[pickIdx * 10 + 1] + items[pickIdx * 10 + 4] / 2;
     const hKind = holoKinds[Math.floor(hash2i(k, 61, seed) * holoKinds.length) % holoKinds.length];
+    const scMul = 0.46 + Math.pow(hash2i(k, 67, seed), 1.35) * 1.18;
     holos.push({
-      x: hx + (hash2i(k, 31, seed) - 0.5) * 36,
-      y: hTop + 52 + hash2i(k, 37, seed) * 85,
+      x: hx + (hash2i(k, 31, seed) - 0.5) * 32,
+      y: hTop + 34 + scMul * 46 + hash2i(k, 37, seed) * 42,
       baseY: hTop,
-      z: hz + (hash2i(k, 41, seed) - 0.5) * 36,
+      z: hz + (hash2i(k, 41, seed) - 0.5) * 32,
       w: 68 + hash2i(k, 43, seed) * 78,
       h: 42 + hash2i(k, 47, seed) * 56,
+      scaleMul: scMul,
       rot: hash2i(k, 53, seed) * Math.PI * 2,
       seed: hash2i(k, 59, seed),
       kind: hKind,
+      shape: hKind,
     });
   }
   // Venue holograms hovering above every arena, stadium and theatre
   for (let k = 0; k < places.length; k++) {
     const pl = places[k];
     if (pl.kind !== 'arena' && pl.kind !== 'stadium' && pl.kind !== 'theatre') continue;
+    const vKind = pl.kind === 'theatre' ? 'panel' : (pl.kind === 'arena' ? 'rhombicuboctahedron' : 'cylinder');
     holos.push({
       x: pl.x,
-      y: pl.kind === 'theatre' ? 76 + pl.seed * 18 : 92 + pl.seed * 28,
+      y: pl.kind === 'theatre' ? 74 + pl.seed * 18 : 92 + pl.seed * 28,
       baseY: 38,
       z: pl.z,
       w: pl.r * (pl.kind === 'theatre' ? 0.95 : 1.25),
       h: pl.kind === 'theatre' ? 38 : 48,
+      scaleMul: pl.kind === 'theatre' ? 0.68 : 0.92,
       rot: pl.rot,
       seed: (pl.seed + 0.37) % 1,
-      kind: pl.kind === 'theatre' ? 'panel' : 'cylinder',
+      kind: vKind,
+      shape: vKind,
     });
+  }
+
+  // Extra street-canyon, plaza, avenue & mid-rooftop holographic projections for live density scaling (>100% up to 250%)
+  const extraHolos = [];
+  if (signAmt > 0.008) {
+    const extraTarget = Math.max(18, Math.min(48, Math.round(holos.length * 2.1)));
+    const towerPool = midTowers.length ? midTowers : tall;
+    for (let k = 0; k < extraTarget; k++) {
+      const eKind = holoKinds[Math.floor(hash2i(k, 701, seed) * holoKinds.length) % holoKinds.length];
+      const tierRoll = hash2i(k, 709, seed);
+      let ex = 0, ez = 0, ey = 28, eBaseY = 6, eScale = 0.42;
+      if (tierRoll < 0.38 && places.length) {
+        // Intimate street/plaza/park micro-to-medium hologram
+        const pl = places[Math.floor(hash2i(k, 719, seed) * places.length) % places.length];
+        const ang = hash2i(k, 727, seed) * Math.PI * 2;
+        const rad = (pl.r || 42) * (0.25 + 0.45 * hash2i(k, 733, seed));
+        ex = pl.x + Math.cos(ang) * rad;
+        ez = pl.z + Math.sin(ang) * rad;
+        eScale = 0.24 + hash2i(k, 739, seed) * 0.34;
+        eBaseY = 3.5;
+        ey = 16 + eScale * 38;
+      } else if (towerPool.length) {
+        // Mid-tower rooftop or street-canyon projection
+        const pickIdx = towerPool[Math.floor(hash2i(k * 5 + 1, 743, seed) * towerPool.length) % towerPool.length];
+        ex = items[pickIdx * 10 + 0] + (hash2i(k, 751, seed) - 0.5) * 26;
+        ez = items[pickIdx * 10 + 2] + (hash2i(k, 757, seed) - 0.5) * 26;
+        const top = items[pickIdx * 10 + 1] + items[pickIdx * 10 + 4] * 0.5;
+        eScale = 0.32 + Math.pow(hash2i(k, 761, seed), 1.4) * 1.12;
+        eBaseY = tierRoll < 0.62 ? 8 : top;
+        ey = tierRoll < 0.62 ? (24 + eScale * 36) : (top + 22 + eScale * 48);
+      }
+      if (!inWater(ex, ez, 14)) {
+        extraHolos.push({
+          x: ex,
+          y: ey,
+          baseY: eBaseY,
+          z: ez,
+          w: 44 + hash2i(k, 769, seed) * 42,
+          h: 32 + hash2i(k, 773, seed) * 32,
+          scaleMul: eScale,
+          rot: hash2i(k, 787, seed) * Math.PI * 2,
+          seed: hash2i(k, 797, seed),
+          kind: eKind,
+          shape: eKind,
+        });
+      }
+    }
   }
 
   const n = items.length / 10;
@@ -1219,7 +1285,7 @@ export function generateCity(
     count: n, towers, maxY, x, y, z, w, h, d, s, kind, style, rot,
     districts, landmarks, places, suburbPOIs, mediaZone, lanes, transit,
     harbor, bridges, spaceport, streetInfra,
-    beacons, lamps, primaryLampCount, sites, water, boulevards, trees, treeLinks, bills, signs, holos,
+    beacons, lamps, primaryLampCount, sites, water, boulevards, trees, treeLinks, bills, signs, holos, extraHolos,
   };
 }
 
@@ -3883,19 +3949,25 @@ function addMediaTower(push, pushBeacon, pushBill, pushSign, pushHolo, rand, x0,
     pushSign({ x: fx, y: H * 0.38, z: fz, w: 2.6, h: Math.min(48, H * 0.34), d: 6.5, rot: rot + Math.PI * 0.25 * priSide * secSide, seed: rand() });
   }
 
-  // Restrained holographic accent on ~55% of media towers (compact scale, never enveloping whole blocks!)
+  // Restrained holographic accent on ~55% of media towers (varied 3D Archimedean/abstract & single-plane cones!)
   if (rand() < 0.58) {
     const onRoof = rand() < 0.55;
+    const hSeed = rand();
+    const mtKinds = ['panel', 'disc', 'cuboctahedron', 'truncated_octahedron', 'rhombicuboctahedron', 'trefoil_knot', 'astrolabe'];
+    const mtKind = mtKinds[Math.floor(((hSeed * 19.37) % 1) * mtKinds.length) % mtKinds.length];
+    const scMul = 0.38 + ((hSeed * 31.7) % 1) * 0.76;
     pushHolo({
       x: cx,
-      y: onRoof ? H + 20 + rand() * 14 : H * (0.55 + rand() * 0.2),
+      y: onRoof ? H + 18 + scMul * 18 : H * (0.55 + ((hSeed * 7.3) % 1) * 0.2),
       baseY: onRoof ? H : 14,
       z: cz,
       w: Math.max(38, Math.max(w, dp) * (onRoof ? 0.96 : 1.16)),
-      h: onRoof ? 26 + rand() * 12 : 28 + rand() * 16,
+      h: onRoof ? 28 + ((hSeed * 11.1) % 1) * 12 : 30 + ((hSeed * 13.7) % 1) * 14,
+      scaleMul: scMul,
       rot: rot + (onRoof ? Math.PI * 0.25 : 0),
-      seed: rand(),
-      kind: onRoof ? 'panel' : 'cylinder',
+      seed: hSeed,
+      kind: mtKind,
+      shape: mtKind,
     });
   }
   pushBeacon(cx, H + 6, cz, rand());

@@ -216,3 +216,25 @@ await window.petacity.callTool('petacity_set_camera_pose', {
   anamorphic: 0.55,
 });
 ```
+
+### Recipe 9 — Single-Sided Cone/Pyramid & 3D Archimedean Holograms + City-Wide Moving-Object Trails
+```js
+// Project a 3D Archimedean Cuboctahedron or Trefoil Knot hologram directly ahead of the camera:
+await window.petacity.callTool('petacity_project_hologram', {
+  text: 'ARCHIMEDEAN CORE',
+  subtext: 'SECTOR 04',
+  shape: 'cuboctahedron',       // 'billboard' | 'disc' | 'diamond' | 'cuboctahedron' | 'icosahedron' | 'knot' | 'prism' | 'ring'
+  color: '#3cf5ff',
+  followCamera: false,
+});
+
+// Dial city-wide hologram density, scale, scanline crispness & luminous trails on all moving objects:
+await window.petacity.callTool('petacity_set_environment', {
+  holoDensity: 2.2,             // 0 = off .. 1.0 = base .. 2.5 = dense street, plaza & sky projections
+  holoScale: 1.35,              // 0.35..2.2x hologram projection scale
+  holoScan: 1.5,                // 0..2.5x scanlines & Archimedean facet wireframe interference
+  trailMode: 'all',             // 0/'off' | 1/'subtle' | 2/'some' | 3/'transit' | 4/'traffic' | 5/'all'
+  trailLength: 1.6,             // 0..2.5x trail length & luminous intensity
+});
+```
+

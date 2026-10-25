@@ -268,6 +268,11 @@ const DEF_TUNE = {
   haze: 1, sun: 1, vib: 1,
   moon: 1, moonsz: 1, moonph: 0.85,
   cloudPuffs: 1,
+  holoDensity: 1,
+  holoScale: 1,
+  holoScan: 1,
+  trailMode: 1,
+  trailLength: 1,
 };
 
 const DEF_RADIO = {
@@ -295,9 +300,23 @@ function makeShortKeyTable(keys) {
 }
 
 const TOP_TABLE = makeShortKeyTable(Object.keys(DEF_TOP));
-const TUNE_TABLE = makeShortKeyTable([
-  ...Object.keys(DEF_TUNE),
+const TUNE_TABLE_LEGACY_PREFIX = [
+  'tint',
+  'win', 'glow', 'fog', 'lights', 'traffic',
+  'searchLight', 'searchCount', 'trafficLight', 'sigDensity', 'vehLight', 'lampDensity',
+  'waterShader', 'waterScale', 'waterChop', 'waterFoam', 'waterRefl', 'waterContrast', 'waterWarp',
+  'clouds', 'cloudType', 'cloudStyle', 'cloudSeed', 'cloudEvol', 'cloudLac',
+  'cloudElev', 'cloudRange', 'cloudLayersMode',
+  'windAngle', 'windStrength',
+  'glyphStyle', 'signAnim',
+  'haze', 'sun', 'vib',
+  'moon', 'moonsz', 'moonph',
+  'cloudPuffs',
   'cloudLayerElev', 'cloudLayerThick', 'cloudLayerDens',
+];
+const TUNE_TABLE = makeShortKeyTable([
+  ...TUNE_TABLE_LEGACY_PREFIX,
+  ...Object.keys(DEF_TUNE).filter((k) => !TUNE_TABLE_LEGACY_PREFIX.includes(k)),
 ]);
 const POST_TABLE = makeShortKeyTable(Object.keys(DEF_POST));
 const RADIO_TABLE = makeShortKeyTable(Object.keys(DEF_RADIO));

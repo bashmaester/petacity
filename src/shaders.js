@@ -2894,6 +2894,84 @@ void main() {
 }
 `;
 
+/* ------------------------------------------- 3D curved moving-object trail ribbons */
+
+export const RIBBON_TRAIL_VERT = /* glsl */ `
+attribute vec3 aRibbonDir;
+attribute vec2 aRibbonUv;
+attribute vec3 aColor;
+attribute float aRibbonStyle;
+varying vec3 vColor;
+varying float vAlong;
+varying float vAcross;
+varying float vStyle;
+${GLSL_CURVE}
+void main() {
+  vColor = aColor;
+  vAlong = aRibbonUv.x;
+  vAcross = aRibbonUv.y >= 0.0 ? 1.0 : -1.0;
+  vStyle = aRibbonStyle;
+  float halfW = abs(aRibbonUv.y);
+  if (halfW <= 0.0005) {
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    return;
+  }
+  vec3 toCam = cameraPosition - position;
+  float tcLen = length(toCam);
+  vec3 viewDir = tcLen > 1e-4 ? toCam / tcLen : vec3(0.0, 1.0, 0.0);
+  vec3 dirN = length(aRibbonDir) > 1e-4 ? normalize(aRibbonDir) : vec3(1.0, 0.0, 0.0);
+  vec3 side = cross(dirN, viewDir);
+  float sLen = length(side);
+  side = sLen > 1e-4 ? side / sLen : vec3(0.0, 1.0, 0.0);
+  float taper = mix(1.0, 0.32, clamp(vAlong, 0.0, 1.0));
+  vec3 wp = position + side * (vAcross * halfW * taper);
+  wp = bendWorld(wp);
+  gl_Position = projectionMatrix * viewMatrix * vec4(wp, 1.0);
+}
+`;
+
+export const RIBBON_TRAIL_FRAG = /* glsl */ `
+uniform float uLightK;
+uniform float uVehLight;
+uniform float uBillMono;
+varying vec3 vColor;
+varying float vAlong;
+varying float vAcross;
+varying float vStyle;
+void main() {
+  if (uVehLight <= 0.005 || vAlong >= 0.995) discard;
+  float u = clamp(vAlong, 0.0, 1.0);
+  float headJoin = smoothstep(0.0, 0.045, u);
+  float tailFade = pow(1.0 - u, 1.65);
+  float ay = abs(vAcross);
+
+  float profile = 0.0;
+  if (vStyle < 0.5) {
+    // Twin taillight / wingtip neon filaments + warm inner aura
+    float twin = exp(-pow((ay - 0.58) / 0.22, 2.0));
+    float core = exp(-pow(ay / 0.62, 2.0)) * 0.38;
+    profile = twin + core;
+  } else if (vStyle < 1.5) {
+    // Express Maglev rail / Orbital rocket plasma ribbon
+    float rail = exp(-pow((ay - 0.66) / 0.20, 2.0)) * 0.72;
+    float plasma = exp(-pow(ay / 0.48, 2.0));
+    profile = max(plasma, rail);
+  } else {
+    // Harbor ship luminous stern wake & navigation ribbon
+    float vWake = exp(-pow((ay - (0.28 + 0.52 * u)) / 0.22, 2.0)) * 0.85;
+    float stern = exp(-pow(ay / 0.42, 2.0)) * (1.0 - 0.55 * u);
+    profile = vWake + stern * 0.65;
+  }
+
+  float a = profile * headJoin * tailFade * (0.42 + 0.58 * max(uLightK, 0.35)) * clamp(uVehLight, 0.0, 2.2) * 0.82;
+  if (a < 0.006) discard;
+  vec3 col = vColor * (0.85 + 0.95 * (1.0 - u) * max(uVehLight, 0.55));
+  float lum = dot(col, vec3(0.299, 0.587, 0.114));
+  col = mix(col, vec3(lum), clamp(uBillMono, 0.0, 1.0));
+  gl_FragColor = vec4(col, clamp(a, 0.0, 0.95));
+}
+`;
+
 /* ------------------------------------------- GPU multi-strata swarm */
 // Evaluates smooth 3D quadratic Bezier + coordinated banking + portal taper
 // directly on the GPU so 18,000+ vehicles across 6 vertical strata cost 0ms CPU!
@@ -3078,6 +3156,159 @@ void main() {
   float lum = dot(col, vec3(0.299, 0.587, 0.114));
   col = mix(col, vec3(lum), clamp(uBillMono, 0.0, 1.0));
   gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+export const SWARM_TRAIL_VERT = /* glsl */ `
+attribute vec4 aCurveA;
+attribute vec4 aCurveB;
+attribute vec4 aCurveC;
+attribute vec3 aColor;
+uniform float uTime;
+uniform float uTrafficSpeed;
+uniform float uHeightScale;
+uniform float uTrailMode;
+uniform float uTrailLen;
+varying vec3 vColor;
+varying float vAlong;
+varying float vAcross;
+varying float vFade;
+${GLSL_CURVE}
+
+vec3 evalSwarmTrailPos(float tt) {
+  float mode = aCurveC.w;
+  float px;
+  float pz;
+  float py;
+  float hover = sin(uTime * 1.46607657 + aCurveB.w * 25.0) * 0.14;
+
+  if (mode > 0.5) {
+    vec2 pStart = aCurveA.xy;
+    vec2 pCorner = aCurveB.xy;
+    vec2 pEnd = aCurveC.xy;
+    vec2 v1 = pCorner - pStart;
+    vec2 v2 = pEnd - pCorner;
+    float L1 = max(length(v1), 1.0);
+    float L2 = max(length(v2), 1.0);
+    float turnR = min(max(mode, 44.0), min(L1, L2) * 0.46);
+    vec2 cEnter = pCorner - (v1 / L1) * turnR;
+    vec2 cExit = pCorner + (v2 / L2) * turnR;
+
+    float s1 = max(1.0, L1 - turnR);
+    float sTurn = max(1.0, 2.35 * turnR);
+    float s2 = max(1.0, L2 - turnR);
+    float arcS = clamp(tt, 0.0, 1.0) * (s1 + sTurn + s2);
+
+    vec2 xz;
+    if (arcS < s1) {
+      xz = mix(pStart, cEnter, arcS / s1);
+      py = aCurveA.z;
+    } else if (arcS < s1 + sTurn) {
+      float uTurn = (arcS - s1) / sTurn;
+      float omT = 1.0 - uTurn;
+      xz = omT * omT * cEnter + 2.0 * omT * uTurn * pCorner + uTurn * uTurn * cExit;
+      float hRamp = uTurn * uTurn * (3.0 - 2.0 * uTurn);
+      py = mix(aCurveA.z, aCurveB.z, hRamp);
+    } else {
+      xz = mix(cExit, pEnd, (arcS - s1 - sTurn) / s2);
+      py = aCurveB.z;
+    }
+    px = xz.x;
+    pz = xz.y;
+  } else if (mode < -0.5) {
+    vec2 xz = mix(aCurveA.xy, aCurveC.xy, tt);
+    px = xz.x;
+    pz = xz.y;
+    float rampU = smoothstep(0.28, 0.72, tt);
+    py = mix(aCurveA.z, aCurveB.z, rampU);
+  } else {
+    float om = 1.0 - tt;
+    px = om * om * aCurveA.x + 2.0 * om * tt * aCurveB.x + tt * tt * aCurveC.x;
+    pz = om * om * aCurveA.y + 2.0 * om * tt * aCurveB.y + tt * tt * aCurveC.y;
+    py = mix(aCurveA.z, aCurveB.z, tt * tt * (3.0 - 2.0 * tt));
+  }
+  return vec3(px, (py + hover) * uHeightScale, pz);
+}
+
+void main() {
+  vColor = aColor;
+  float uSeg = clamp(position.x, 0.0, 1.0);
+  float sideSign = position.y >= 0.0 ? 1.0 : -1.0;
+  vAlong = uSeg;
+  vAcross = sideSign;
+
+  // Modes: 0=Off, 1=Subtle Taillights, 2=Some (~30% fast), 3=Air/Rail/Ships/Rockets, 4=All Traffic, 5=All Moving Objects
+  bool allowMode = (uTrailMode > 1.5 && uTrailMode < 2.5) || (uTrailMode > 3.5);
+  bool subsetKeep = (uTrailMode > 3.5) || (fract(aCurveB.w * 37.19) < 0.30);
+  float sp = max(uTrafficSpeed, 0.0);
+  if (!allowMode || !subsetKeep || uTrailLen <= 0.02 || aCurveC.z <= 0.01 || sp <= 0.01) {
+    vFade = 0.0;
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    return;
+  }
+
+  float driverMul = 0.76 + 0.52 * fract(aCurveB.w * 29.17);
+  float rawT = aCurveB.w + uTime * aCurveA.w * sp * driverMul;
+  float platoonAmp = (aCurveA.z < 55.0) ? 0.036 : 0.018;
+  float warpedT = rawT + platoonAmp * sin(6.2831853 * (3.0 * rawT - uTime * 0.08 * max(sp, 0.25)) + aCurveA.x * 0.008);
+  float ttHead = fract(warpedT);
+  bool isRing = abs(aCurveC.w) <= 0.5;
+
+  // Arc-length-consistent parameter lag (0.85s at trailLen=1.0 -> ~50..130m of curved light trail!)
+  float maxLag = min(0.28, aCurveA.w * max(sp, 0.25) * driverMul * 0.88 * uTrailLen + 0.006);
+  float availLag = isRing ? maxLag : min(maxLag, max(0.0, ttHead - 0.004));
+  float ttSample = isRing ? fract(ttHead - uSeg * availLag) : max(0.0, ttHead - uSeg * availLag);
+
+  float portal = isRing ? 1.0 : smoothstep(0.0, 0.045, ttHead) * smoothstep(1.0, 0.955, ttHead) * smoothstep(0.008, 0.05, availLag / max(maxLag, 1e-4));
+  vFade = portal;
+  if (portal <= 0.01) {
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    return;
+  }
+
+  float eps = 0.005;
+  float tAhead = isRing ? fract(ttSample + eps) : min(1.0, ttSample + eps);
+  vec3 pS = evalSwarmTrailPos(ttSample);
+  vec3 pA = evalSwarmTrailPos(tAhead);
+  vec3 vel = pA - pS;
+  vec3 fwd = length(vel) > 1e-4 ? normalize(vel) : vec3(1.0, 0.0, 0.0);
+
+  // Start right behind the rear taillight deck (-5.5m * scale)
+  vec3 sternPos = pS - fwd * (5.2 * aCurveC.z * (1.0 - uSeg * 0.35));
+  vec3 toCam = cameraPosition - sternPos;
+  vec3 viewDir = length(toCam) > 1e-4 ? normalize(toCam) : vec3(0.0, 1.0, 0.0);
+  vec3 side = cross(fwd, viewDir);
+  side = length(side) > 1e-4 ? normalize(side) : vec3(0.0, 1.0, 0.0);
+
+  float halfW = (1.65 * aCurveC.z) * mix(1.0, 0.35, uSeg);
+  vec3 wp = sternPos + side * (sideSign * halfW);
+  wp = bendWorld(wp);
+  gl_Position = projectionMatrix * viewMatrix * vec4(wp, 1.0);
+}
+`;
+
+export const SWARM_TRAIL_FRAG = /* glsl */ `
+uniform float uLightK;
+uniform float uVehLight;
+uniform float uBillMono;
+varying vec3 vColor;
+varying float vAlong;
+varying float vAcross;
+varying float vFade;
+void main() {
+  if (vFade <= 0.015 || uVehLight <= 0.005) discard;
+  float u = clamp(vAlong, 0.0, 1.0);
+  float ay = abs(vAcross);
+  float twin = exp(-pow((ay - 0.56) / 0.24, 2.0));
+  float core = exp(-pow(ay / 0.58, 2.0)) * 0.34;
+  float fade = pow(1.0 - u, 1.7) * smoothstep(0.0, 0.04, u);
+  float a = (twin + core) * fade * vFade * (0.38 + 0.62 * max(uLightK, 0.3)) * clamp(uVehLight, 0.0, 2.0) * 0.68;
+  if (a < 0.006) discard;
+  vec3 tailTint = mix(vec3(1.0, 0.16, 0.22), vColor * 1.25 + vec3(0.18, 0.06, 0.10), 0.46);
+  vec3 col = tailTint * (0.85 + 0.90 * (1.0 - u) * max(uVehLight, 0.5));
+  float lum = dot(col, vec3(0.299, 0.587, 0.114));
+  col = mix(col, vec3(lum), clamp(uBillMono, 0.0, 1.0));
+  gl_FragColor = vec4(col, clamp(a, 0.0, 0.90));
 }
 `;
 
@@ -3913,17 +4144,58 @@ void main() {
 
 export const HOLO_VERT = /* glsl */ `
 attribute float aSeed;
+attribute float aHoloKind;
+attribute float aEdgeDist;
+uniform float uTime;
+uniform float uSignAnim;
+uniform float uHoloScale;
 varying vec2 vUv;
 varying float vSeed;
+varying float vHoloKind;
+varying float vEdgeDist;
+varying float vLocalY;
+varying float vViewDot;
+${GLSL_NOISE}
 ${GLSL_CURVE}
 void main() {
   vUv = uv;
   vSeed = aSeed;
-  vec4 wp = vec4(position, 1.0);
+  vHoloKind = aHoloKind;
+  vEdgeDist = aEdgeDist;
+
+  float scMul = max(0.2, uHoloScale);
+  vec3 pLoc = position * scMul;
+  vec3 nLoc = normal;
+
+  // 3D Archimedean Solids (kind=2) & Abstract Sculptures (kind=3) precess smoothly in space
+  if (aHoloKind > 1.5 && aHoloKind < 3.5) {
+    float animRate = max(uSignAnim, 0.0);
+    float spinDir = aSeed > 0.5 ? 1.0 : -1.0;
+    float angY = loopPhase(uTime * animRate, 2.0) * 6.2831853 * spinDir + aSeed * 6.2831853;
+    float angX = 0.28 * loopSin(uTime * animRate, 1.0, aSeed * 19.0);
+    float cy = cos(angY);
+    float sy = sin(angY);
+    float cx = cos(angX);
+    float sx = sin(angX);
+    // Rotate X then Y
+    vec3 p1 = vec3(pLoc.x, pLoc.y * cx - pLoc.z * sx, pLoc.y * sx + pLoc.z * cx);
+    pLoc = vec3(p1.x * cy + p1.z * sy, p1.y, -p1.x * sy + p1.z * cy);
+    vec3 n1 = vec3(nLoc.x, nLoc.y * cx - nLoc.z * sx, nLoc.y * sx + nLoc.z * cx);
+    nLoc = vec3(n1.x * cy + n1.z * sy, n1.y, -n1.x * sy + n1.z * cy);
+  }
+  vLocalY = pLoc.y / max(scMul, 1e-3);
+
+  vec4 wp = vec4(pLoc, 1.0);
+  vec3 wn = nLoc;
   #ifdef USE_INSTANCING
     wp = instanceMatrix * wp;
+    wn = mat3(instanceMatrix) * wn;
   #endif
   wp = modelMatrix * wp;
+  wn = normalize(mat3(modelMatrix) * wn);
+  vec3 viewDir = normalize(cameraPosition - wp.xyz + vec3(1e-5));
+  vViewDot = clamp(dot(wn, viewDir), 0.0, 1.0);
+
   wp.xyz = bendWorld(wp.xyz);
   gl_Position = projectionMatrix * viewMatrix * wp;
 }
@@ -3937,11 +4209,16 @@ uniform float uBillMono;
 uniform float uSignAmt;
 uniform float uGlyphStyle;
 uniform float uSignAnim;
+uniform float uHoloScan;
 uniform float uTime;
 uniform float uLightK;
 uniform float uSat;
 varying vec2 vUv;
 varying float vSeed;
+varying float vHoloKind;
+varying float vEdgeDist;
+varying float vLocalY;
+varying float vViewDot;
 ${GLSL_NOISE}
 ${GLSL_UTIL}
 ${GLSL_GLYPHS}
@@ -3950,36 +4227,102 @@ void main() {
   if (uSignAmt <= 0.008) discard;
   float animT = uTime * max(uSignAnim, 0.0);
   vec2 cUv = vUv - 0.5;
-  float r = length(cUv * vec2(1.35, 1.0));
-  float holoMode = fract(vSeed * 11.73);
   float motif = 0.0;
   float colorMix = 0.5;
-  if (holoMode < 0.48) {
-    vec4 simAd = evalSimulatedAd(vUv, vSeed * 23.1, uGlyphStyle, animT);
-    motif = clamp(simAd.x, 0.0, 1.0);
-    colorMix = clamp(simAd.y + simAd.z * 0.35, 0.0, 1.0);
+  float edgeMask = 1.0;
+
+  // Scanline & rolling CRT/laser refresh beam coordinate (planar UV or 3D local elevation slice)
+  float scanCoord = (vHoloKind > 1.5 && vHoloKind < 3.5) ? (vLocalY * 0.85 + 0.5) : vUv.y;
+  float scanAmt = clamp(uHoloScan, 0.0, 2.0);
+  float fineLines = 0.5 + 0.5 * sin(scanCoord * 215.0 + loopPhase(animT, 16.0) * 6.2831853 + vSeed * 12.0);
+  float subLines = 0.5 + 0.5 * sin(scanCoord * 48.0 - loopPhase(animT, 6.0) * 6.2831853);
+  float refreshSweep = pow(max(0.0, 1.0 - abs(fract(scanCoord * 1.25 - loopPhase(animT, 4.0) + vSeed) - 0.5) * 8.0), 2.0);
+  float scanMod = mix(1.0, (0.38 + 0.62 * fineLines) * (0.76 + 0.24 * subLines) + refreshSweep * 0.68, clamp(scanAmt * 0.72, 0.0, 1.0));
+
+  if (vHoloKind < 0.5) {
+    // Kind 0: Single-Plane Pyramid Projection Screen (FrontSide only — zero double-sided cross!)
+    float holoMode = fract(vSeed * 11.73);
+    if (holoMode < 0.54) {
+      vec4 simAd = evalSimulatedAd(vUv, vSeed * 23.1, uGlyphStyle, animT);
+      motif = clamp(simAd.x, 0.0, 1.0);
+      colorMix = clamp(simAd.y + simAd.z * 0.35, 0.0, 1.0);
+    } else {
+      float r = length(cUv * vec2(1.35, 1.0));
+      float rFlow = loopPhase(animT, 24.0);
+      float rings = smoothstep(0.022, 0.0, abs(fract(r * 4.2 - rFlow + vSeed * 4.0) - 0.5)) * smoothstep(0.50, 0.10, r);
+      float centerSigil = evalSynthGlyph(clamp((vUv - vec2(0.32, 0.26)) / vec2(0.36, 0.46), 0.0, 1.0), vSeed * 9.3, uGlyphStyle, animT, 0.055)
+        * step(0.32, vUv.x) * step(vUv.x, 0.68) * step(0.26, vUv.y) * step(vUv.y, 0.72);
+      float scrollArc = evalGlyphLine(vec2(vUv.x, clamp((vUv.y - 0.10) / 0.15, 0.0, 1.0)), 10.0, loopPhase(animT, 7.0) * 10.0, vSeed * 17.0, uGlyphStyle, animT)
+        * step(0.10, vUv.y) * step(vUv.y, 0.25);
+      motif = clamp(rings * 0.85 + centerSigil * 0.95 + scrollArc * 0.88, 0.0, 1.0);
+      colorMix = clamp(rings * 0.55 + centerSigil * 0.65 + fract(vSeed * 5.3) * 0.35, 0.0, 1.0);
+    }
+    // Crisp HUD corner reticles + scanline field backing so the projection plane reads clearly
+    float borderX = smoothstep(0.49, 0.465, abs(cUv.x)) * (1.0 - smoothstep(0.455, 0.43, abs(cUv.x))) * step(0.32, abs(cUv.y));
+    float borderY = smoothstep(0.49, 0.465, abs(cUv.y)) * (1.0 - smoothstep(0.455, 0.43, abs(cUv.y))) * step(0.34, abs(cUv.x));
+    float frameHud = clamp(borderX + borderY, 0.0, 1.0) * 0.78;
+    motif = clamp(motif + frameHud + 0.10 * fineLines * clamp(scanAmt, 0.2, 1.5), 0.0, 1.0);
+    edgeMask = smoothstep(0.0, 0.045, vUv.x) * smoothstep(1.0, 0.955, vUv.x)
+             * smoothstep(0.0, 0.055, vUv.y) * smoothstep(1.0, 0.945, vUv.y);
+  } else if (vHoloKind < 1.5) {
+    // Kind 1: Single-Plane Conical Aperture Disc (FrontSide circular radar/astrolabe disc)
+    float rad = length(cUv);
+    if (rad > 0.492) discard;
+    float ang = atan(cUv.y, cUv.x);
+    float rotA = ang + loopPhase(animT, 3.0) * 6.2831853 * (vSeed > 0.5 ? 1.0 : -1.0);
+    float rings = smoothstep(0.016, 0.002, abs(rad - 0.455))
+                + smoothstep(0.013, 0.002, abs(rad - 0.33)) * 0.85
+                + smoothstep(0.012, 0.002, abs(rad - 0.19)) * 0.75;
+    float ticks = step(0.65, cos(rotA * 24.0)) * smoothstep(0.04, 0.0, abs(rad - 0.395));
+    float sweepWedge = pow(fract((ang / 6.2831853) - loopPhase(animT, 5.0) + vSeed), 4.0) * smoothstep(0.47, 0.08, rad);
+    float sigil = evalSynthGlyph(clamp((vUv - vec2(0.34, 0.34)) / 0.32, 0.0, 1.0), vSeed * 13.7, uGlyphStyle, animT, 0.06)
+      * smoothstep(0.20, 0.15, rad);
+    motif = clamp(rings * 0.92 + ticks * 0.72 + sweepWedge * 0.48 + sigil * 0.98, 0.0, 1.0);
+    colorMix = clamp(0.25 + 0.55 * sweepWedge + 0.45 * sigil + fract(vSeed * 7.1) * 0.25, 0.0, 1.0);
+    edgeMask = smoothstep(0.492, 0.455, rad);
+  } else if (vHoloKind < 2.5) {
+    // Kind 2: 3D Archimedean Solid (Cuboctahedron, Truncated Octahedron, Rhombicuboctahedron, Buckyball)
+    // Exact outer polygon edges glow brightly with zero internal diagonal triangulation seams!
+    float polyEdge = smoothstep(0.115, 0.016, vEdgeDist);
+    float innerRing = smoothstep(0.032, 0.006, abs(vEdgeDist - 0.30)) * 0.52;
+    float fresnel = pow(1.0 - vViewDot, 1.75);
+    float faceSigil = evalSynthGlyph(clamp(vUv, 0.0, 1.0), vSeed * 19.3 + floor(vUv.x * 2.0), uGlyphStyle, animT, 0.07)
+      * smoothstep(0.16, 0.34, vEdgeDist) * 0.68;
+    float sliceBands = smoothstep(0.72, 0.98, sin(scanCoord * 68.0 - loopPhase(animT, 8.0) * 6.2831853)) * 0.45;
+    motif = clamp(polyEdge * 1.05 + innerRing + faceSigil + fresnel * 0.52 + sliceBands + 0.12, 0.0, 1.15);
+    colorMix = clamp(polyEdge * 0.62 + fresnel * 0.38 + fract(vSeed * 8.9) * 0.35, 0.0, 1.0);
+    edgeMask = 0.92;
+  } else if (vHoloKind < 3.5) {
+    // Kind 3: 3D Abstract Holographic Sculpture (Parametric Trefoil Knot & Gyroscopic Astrolabe)
+    float rim = smoothstep(0.26, 0.03, vEdgeDist);
+    float pulse = pow(0.5 + 0.5 * sin((vUv.x * 3.0 - loopPhase(animT, 5.0) * 3.0 + vSeed) * 6.2831853), 3.0);
+    float ticks = smoothstep(0.55, 0.92, cos(vUv.x * 110.0)) * 0.42;
+    float fresnel = pow(1.0 - vViewDot, 1.55);
+    motif = clamp(rim * 0.92 + pulse * 0.78 + ticks + fresnel * 0.58 + 0.16, 0.0, 1.15);
+    colorMix = clamp(pulse * 0.68 + rim * 0.32 + fract(vSeed * 6.7) * 0.30, 0.0, 1.0);
+    edgeMask = 0.94;
   } else {
-    float rFlow = loopPhase(animT, 29.0);
-    float rings = smoothstep(0.022, 0.0, abs(fract(r * 4.0 - rFlow + vSeed * 4.0) - 0.5)) * smoothstep(0.52, 0.12, r);
-    float centerSigil = evalSynthGlyph(clamp((vUv - vec2(0.32, 0.28)) / vec2(0.36, 0.44), 0.0, 1.0), vSeed * 9.3, uGlyphStyle, animT, 0.055)
-      * step(0.32, vUv.x) * step(vUv.x, 0.68) * step(0.28, vUv.y) * step(vUv.y, 0.72);
-    float scrollArc = evalGlyphLine(vec2(vUv.x, clamp((vUv.y - 0.12) / 0.16, 0.0, 1.0)), 10.0, loopPhase(animT, 7.0) * 10.0, vSeed * 17.0, uGlyphStyle, animT)
-      * step(0.12, vUv.y) * step(vUv.y, 0.28);
-    motif = clamp(rings * 0.85 + centerSigil * 0.95 + scrollArc * 0.85, 0.0, 1.0);
-    colorMix = clamp(rings * 0.55 + centerSigil * 0.65 + fract(vSeed * 5.3) * 0.35, 0.0, 1.0);
+    // Kind 4: Open Outer Cylindrical Crown (FrontSide outer ring over circular arenas/stadiums)
+    float bandY = abs(vUv.y - 0.5) * 2.0;
+    float rails = smoothstep(0.88, 0.96, bandY) * 0.85;
+    float ticker = evalGlyphLine(vec2(fract(vUv.x * 3.0), clamp((vUv.y - 0.22) / 0.56, 0.0, 1.0)), 12.0, loopPhase(animT, 6.0) * 12.0, vSeed * 15.0, uGlyphStyle, animT)
+      * step(0.22, vUv.y) * step(vUv.y, 0.78);
+    motif = clamp(ticker * 0.95 + rails + 0.12 * fineLines, 0.0, 1.0);
+    colorMix = clamp(ticker * 0.65 + rails * 0.35 + fract(vSeed * 4.3) * 0.35, 0.0, 1.0);
+    edgeMask = smoothstep(0.0, 0.10, vUv.y) * smoothstep(1.0, 0.90, vUv.y);
   }
-  if (motif < 0.03) discard;
+
+  if (motif < 0.025) discard;
 
   vec3 col = mix(uBillB, uBillA, colorMix);
+  // Subtle chromatic scanline accent on bright refresh sweeps when colorful
+  col += mix(uBillA, vec3(0.75, 0.96, 1.0), 0.45) * refreshSweep * 0.24 * clamp(scanAmt, 0.0, 1.5);
   float lum = dot(col, vec3(0.299, 0.587, 0.114));
   vec3 mono = mix(uBillB * 0.4, uBillA * 1.05, clamp(lum, 0.0, 1.2));
   col = mix(col, mono, clamp(uBillMono, 0.0, 1.0));
   col = saturate3(col, uSat * (1.0 - 0.85 * clamp(uBillMono, 0.0, 1.0)));
 
-  float scan = 0.68 + 0.32 * loopSin(animT, 1.25, vUv.y * 160.0);
-  float edge = smoothstep(0.0, 0.08, vUv.x) * smoothstep(1.0, 0.92, vUv.x)
-             * smoothstep(0.0, 0.14, vUv.y) * smoothstep(1.0, 0.86, vUv.y);
-  float a = motif * scan * edge * clamp(uBillK * min(uSignAmt, 1.5), 0.0, 1.4) * max(uLightK, 0.3) * 0.38;
-  gl_FragColor = vec4(col * 0.88, clamp(a, 0.0, 0.42));
+  float a = motif * scanMod * edgeMask * clamp(uBillK * min(uSignAmt, 1.6), 0.0, 1.5) * max(uLightK, 0.32) * 0.44;
+  gl_FragColor = vec4(col * 0.92, clamp(a, 0.0, 0.56));
 }
 `;

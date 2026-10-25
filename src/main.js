@@ -14,7 +14,7 @@ import {
   makeVehicles, makeSearchlights, makeLightPools,
   buildWater, buildBoulevards, buildBillboards, buildTrees, buildSculptures,
   makeWeather, WEATHER_NAMES, CLOUD_TYPE_NAMES, CLOUD_LAYER_PRESETS, GLYPH_STYLE_NAMES,
-  WATER_MODE_NAMES, WATER_SHADER_NAMES, TERRAIN_MODE_NAMES, TREE_MODE_NAMES, describeMoonPhase,
+  WATER_MODE_NAMES, WATER_SHADER_NAMES, TERRAIN_MODE_NAMES, TREE_MODE_NAMES, TRAIL_MODE_NAMES, describeMoonPhase,
   buildSigns, buildHolos,
   buildTransitInfrastructure, buildBridges, buildHarbor, buildSpaceport,
   buildStreetInfrastructure,
@@ -230,6 +230,8 @@ const tune = initialExact
       cloudLayerDens: [...defLayerPreset.dens],
       windAngle: 30, windStrength: 1,
       glyphStyle: 0, signAnim: 1,
+      holoDensity: 1, holoScale: 1, holoScan: 1,
+      trailMode: 1, trailLength: 1,
       ...initialExact.tune,
     }
   : {
@@ -265,6 +267,11 @@ const tune = initialExact
       windStrength: params.get('wstr') !== null ? clampFloat(params.get('wstr'), 0, 2.5, 1) : 1,
       glyphStyle: clampInt(params.get('gl'), 0, 2, 0),
       signAnim: params.get('sa') !== null ? clampFloat(params.get('sa'), 0, 2.5, 1) : 1,
+      holoDensity: params.get('hd') !== null ? clampFloat(params.get('hd'), 0, 2.5, 1) : 1,
+      holoScale: params.get('hs') !== null ? clampFloat(params.get('hs'), 0.35, 2.2, 1) : 1,
+      holoScan: params.get('hsc') !== null ? clampFloat(params.get('hsc'), 0, 2.5, 1) : 1,
+      trailMode: clampInt(params.get('trm'), 0, 5, 1),
+      trailLength: params.get('trl') !== null ? clampFloat(params.get('trl'), 0, 2.5, 1) : 1,
       haze: 1, sun: 1, vib: 1,
       moon: 1, moonsz: 1, moonph: 0.85,
     };
@@ -733,6 +740,10 @@ function boot() {
       transitAmt,
       trafficSpeed,
       U,
+      ribbonTrailMat: world.ribbonTrailMat,
+      swarmTrailMat: world.swarmTrailMat,
+      trailMode: tune.trailMode ?? 1,
+      trailLength: tune.trailLength ?? 1,
     });
     vehicles.setCollision(collideOn);
     vehicles.setPalette(look);
@@ -740,13 +751,23 @@ function boot() {
     boulevardGroup = buildBoulevards(city, U);
     billboards = buildBillboards(city, world.billMat);
     signGroup = buildSigns(city, world.billMat);
-    holoGroup = buildHolos(city, world.holoMat, world.beamMat);
+    holoGroup = buildHolos(city, world.holoMat, world.beamMat, {
+      density: signAmt <= 0.01 ? 0 : (tune.holoDensity ?? 1),
+    });
     trees = buildTrees(city, U);
     sculptures = buildSculptures(city, world.beaconMat, world.lampMat);
     transitGroup = buildTransitInfrastructure(city, U, world.lampMat);
     bridgeGroup = buildBridges(city, U, world.beaconMat, world.lampMat);
-    harborObj = buildHarbor(city, U, world.beaconMat, world.lampMat);
-    spaceportObj = buildSpaceport(city, U, world.beaconMat, world.lampMat, world.beamMat);
+    harborObj = buildHarbor(city, U, world.beaconMat, world.lampMat, {
+      ribbonTrailMat: world.ribbonTrailMat,
+      trailMode: tune.trailMode ?? 1,
+      trailLength: tune.trailLength ?? 1,
+    });
+    spaceportObj = buildSpaceport(city, U, world.beaconMat, world.lampMat, world.beamMat, {
+      ribbonTrailMat: world.ribbonTrailMat,
+      trailMode: tune.trailMode ?? 1,
+      trailLength: tune.trailLength ?? 1,
+    });
     streetInfraObj = buildStreetInfrastructure(city, U);
     streetInfraObj.setSignalGlow(tune.trafficLight ?? 1);
     if (streetInfraObj.setDensity) streetInfraObj.setDensity(tune.sigDensity ?? 1);
@@ -963,9 +984,19 @@ function boot() {
     $('#transit-label').textContent = transitAmt <= 0.01 ? 'Off' : `${Math.round(transitAmt * 100)}%`;
     $('#maritime-label').textContent = maritimeAmt <= 0.01 ? 'Off' : `${Math.round(maritimeAmt * 100)}%`;
     $('#air-label').textContent = airAmt <= 0.01 ? 'Off' : `${Math.round(airAmt * 100)}%`;
+    const trMode = tune.trailMode ?? 1;
+    const trLen = tune.trailLength ?? 1;
+    $('#trail-len-label').textContent = (trMode === 0 || trLen <= 0.01) ? 'Off' : `${trLen.toFixed(1)}\u00D7`;
     $('#signs-label').textContent = signAmt <= 0.01 ? 'Off' : `${Math.round(signAmt * 100)}%`;
     $('#megawrap-label').textContent = megaWrap <= 0.01 ? 'Off' : `${Math.round(megaWrap * 100)}%`;
     $('#sign-anim-label').textContent = (tune.signAnim ?? 1) <= 0.01 ? 'Static' : `${(tune.signAnim ?? 1).toFixed(1)}\u00D7`;
+    const hDens = tune.holoDensity ?? 1;
+    const actHolos = holoGroup && holoGroup.userData ? holoGroup.userData.activeHoloCount : null;
+    $('#holo-density-label').textContent = (hDens <= 0.01 || signAmt <= 0.01)
+      ? 'Off'
+      : (Number.isFinite(actHolos) ? `${actHolos} holos` : `${Math.round(hDens * 100)}%`);
+    $('#holo-scale-label').textContent = `${(tune.holoScale ?? 1).toFixed(2)}\u00D7`;
+    $('#holo-scan-label').textContent = (tune.holoScan ?? 1) <= 0.01 ? 'Smooth' : `Scan ${(tune.holoScan ?? 1).toFixed(1)}\u00D7`;
     $('#win-density-label').textContent = (tune.win ?? 1) <= 0.01 ? 'Blackout' : `Win # ${Math.round((tune.win ?? 1) * 100)}%`;
     $('#glow-label').textContent = (tune.glow ?? 1) <= 0.01 ? 'Off' : `Glow ${Math.round((tune.glow ?? 1) * 100)}%`;
     const activeBeams = searchlights ? searchlights.activeCount : Math.round(34 * (tune.searchCount ?? 1));
@@ -1021,10 +1052,15 @@ function boot() {
     $('#sl-transit').value = String(transitAmt);
     $('#sl-maritime').value = String(maritimeAmt);
     $('#sl-air').value = String(airAmt);
+    $('#sel-trail-mode').value = String(tune.trailMode ?? 1);
+    $('#sl-trail-len').value = String(tune.trailLength ?? 1);
     $('#sl-signs').value = String(signAmt);
     $('#sl-megawrap').value = String(megaWrap);
     $('#sel-glyph').value = String(tune.glyphStyle ?? 0);
     $('#sl-sign-anim').value = String(tune.signAnim ?? 1);
+    $('#sl-holo-density').value = String(tune.holoDensity ?? 1);
+    $('#sl-holo-scale').value = String(tune.holoScale ?? 1);
+    $('#sl-holo-scan').value = String(tune.holoScan ?? 1);
     $('#sl-searchlights').value = String(tune.searchLight ?? 1);
     $('#sl-search-count').value = String(tune.searchCount ?? 1);
     $('#sl-lamp-density').value = String(tune.lampDensity ?? 1);
@@ -1147,7 +1183,19 @@ function boot() {
     }
     if (billboards) billboards.visible = signAmt > 0.01;
     if (signGroup) signGroup.visible = signAmt > 0.01;
-    if (holoGroup) holoGroup.visible = signAmt > 0.01;
+    if (holoGroup) {
+      if (holoGroup.setHoloDensity) holoGroup.setHoloDensity(signAmt <= 0.01 ? 0 : (tune.holoDensity ?? 1));
+      else holoGroup.visible = signAmt > 0.01 && (tune.holoDensity ?? 1) > 0.005;
+    }
+    if (vehicles && vehicles.setTrailConfig) {
+      vehicles.setTrailConfig(tune.trailMode ?? 1, tune.trailLength ?? 1);
+    }
+    if (harborObj && harborObj.setTrailConfig) {
+      harborObj.setTrailConfig(tune.trailMode ?? 1, tune.trailLength ?? 1);
+    }
+    if (spaceportObj && spaceportObj.setTrailConfig) {
+      spaceportObj.setTrailConfig(tune.trailMode ?? 1, tune.trailLength ?? 1);
+    }
     if (landmarkGroup && landmarkGroup.setLook) landmarkGroup.setLook(look);
     if (placeGroup && placeGroup.setLook) placeGroup.setLook(look);
     if (transitGroup && transitGroup.setLook) transitGroup.setLook(look);
@@ -2048,12 +2096,25 @@ function boot() {
     airAmt = clampFloat($('#sl-air').value, 0, 2.5, 1);
     rebuild();
   };
+  $('#sel-trail-mode').value = String(tune.trailMode ?? 1);
+  $('#sel-trail-mode').onchange = (ev) => {
+    tune.trailMode = clampInt(ev.target.value, 0, 5, 1);
+    refreshLook();
+    flash(`Trails \u00B7 ${TRAIL_MODE_NAMES[tune.trailMode] || 'Classic'}`);
+  };
+  bindSlider($('#sl-trail-len'), (v) => {
+    tune.trailLength = clampFloat(v, 0, 2.5, 1);
+    refreshLook();
+  });
   bindSlider($('#sl-signs'), (v) => {
     signAmt = clampFloat(v, 0, 2.5, 1);
     U.uSignAmt.value = signAmt;
     if (billboards) billboards.visible = signAmt > 0.01;
     if (signGroup) signGroup.visible = signAmt > 0.01;
-    if (holoGroup) holoGroup.visible = signAmt > 0.01;
+    if (holoGroup) {
+      if (holoGroup.setHoloDensity) holoGroup.setHoloDensity(signAmt <= 0.01 ? 0 : (tune.holoDensity ?? 1));
+      else holoGroup.visible = signAmt > 0.01;
+    }
     syncFeatureLabels();
   });
   $('#sl-signs').onchange = () => {
@@ -2077,6 +2138,22 @@ function boot() {
   };
   bindSlider($('#sl-sign-anim'), (v) => {
     tune.signAnim = clampFloat(v, 0, 2.5, 1);
+    refreshLook();
+  });
+  bindSlider($('#sl-holo-density'), (v) => {
+    tune.holoDensity = clampFloat(v, 0, 2.5, 1);
+    if (holoGroup && holoGroup.setHoloDensity) {
+      holoGroup.setHoloDensity(signAmt <= 0.01 ? 0 : tune.holoDensity);
+    }
+    syncFeatureLabels();
+    syncURL();
+  });
+  bindSlider($('#sl-holo-scale'), (v) => {
+    tune.holoScale = clampFloat(v, 0.35, 2.2, 1);
+    refreshLook();
+  });
+  bindSlider($('#sl-holo-scan'), (v) => {
+    tune.holoScan = clampFloat(v, 0, 2.5, 1);
     refreshLook();
   });
   bindSlider($('#sl-searchlights'), (v) => {
@@ -2839,18 +2916,19 @@ function boot() {
 
     // Populate 3D Hologram & Hero Projection targets for Strategic Cinematic Gaze!
     const projTargets = [];
-    if (Array.isArray(city.holos)) {
-      city.holos.forEach((H, idx) => {
-        projTargets.push({
-          name: H.label || `Hologram #${idx + 1}`,
-          x: H.x,
-          y: (H.y || 55) * heightScale,
-          lookY: (H.y || 55) * heightScale,
-          z: H.z,
-          priority: H.kind === 'portal' || H.kind === 'cylinder' ? 1.85 : 1.55,
-        });
+    const activeHolosPool = holoGroup && holoGroup.userData && Array.isArray(holoGroup.userData.allHolos)
+      ? holoGroup.userData.allHolos.slice(0, holoGroup.userData.activeHoloCount ?? (city.holos ? city.holos.length : 0))
+      : (Array.isArray(city.holos) ? city.holos : []);
+    activeHolosPool.forEach((H, idx) => {
+      projTargets.push({
+        name: H.label || `Hologram #${idx + 1}`,
+        x: H.x,
+        y: (H.y || 55) * heightScale,
+        lookY: (H.y || 55) * heightScale,
+        z: H.z,
+        priority: (H.kind !== 'panel' && H.kind !== 'disc') ? 1.85 : 1.55,
       });
-    }
+    });
     if (Array.isArray(city.bills)) {
       const step = Math.max(1, Math.floor(city.bills.length / 24));
       for (let bi = 0; bi < city.bills.length && projTargets.length < 48; bi += step) {
@@ -3158,6 +3236,31 @@ function boot() {
       tune.traffic = Math.max(0, Math.min(MAX_TRAFFIC_DENSITY, Number(patch.trafficCount) / 320));
       if (vehicles) vehicles.update(0, tune.traffic, heightScale);
       syncTrafficLabel();
+    }
+    if (patch.holoDensity !== undefined) {
+      tune.holoDensity = clampFloat(patch.holoDensity, 0, 2.5, 1);
+      needRefreshLook = true;
+    }
+    if (patch.holoScale !== undefined) {
+      tune.holoScale = clampFloat(patch.holoScale, 0.35, 2.2, 1);
+      needRefreshLook = true;
+    }
+    if (patch.holoScan !== undefined) {
+      tune.holoScan = clampFloat(patch.holoScan, 0, 2.5, 1);
+      needRefreshLook = true;
+    }
+    if (patch.trailMode !== undefined) {
+      const tm = typeof patch.trailMode === 'string'
+        ? { off: 0, classic: 1, subtle: 1, some: 2, express: 2, transit: 3, ships: 3, maritime: 3, traffic: 4, all: 5 }[patch.trailMode.toLowerCase()]
+        : Number(patch.trailMode);
+      if (Number.isFinite(tm)) {
+        tune.trailMode = clampInt(tm, 0, 5, 1);
+        needRefreshLook = true;
+      }
+    }
+    if (patch.trailLength !== undefined) {
+      tune.trailLength = clampFloat(patch.trailLength, 0, 2.5, 1);
+      needRefreshLook = true;
     }
     if (patch.seed !== undefined) { seed = clampInt(patch.seed, 1, 999999999, seed); needRebuild = true; }
     if (patch.radius !== undefined) { cityRadius = clampInt(patch.radius, 1, 15, cityRadius); needRebuild = true; }

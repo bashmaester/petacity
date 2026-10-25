@@ -148,6 +148,6 @@ To prevent open-ocean blotchiness and screen-space Moiré shimmer at grazing ang
 # Start local static server on port 8000
 npm run serve   # or: python3 -m http.server 8000 --bind 0.0.0.0
 
-# Run full 85-test Node verification suite (city, scene, shaders, optics, gaze, weather, PoIs, UI contract & JSDOM boot)
+# Run full 88-test Node verification suite (city, scene, shaders, holos, trails, optics, gaze, weather, PoIs, UI contract & JSDOM boot)
 npm test
 ```

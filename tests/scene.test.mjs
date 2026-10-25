@@ -18,7 +18,8 @@ import {
   makeVehicles, makeSearchlights, makeLightPools,
   buildWater, buildBoulevards, buildBillboards, buildTrees, buildSculptures,
   makeWeather, WEATHER_NAMES, CLOUD_TYPE_NAMES, CLOUD_LAYER_PRESETS,
-  WATER_MODE_NAMES, WATER_SHADER_NAMES, TERRAIN_MODE_NAMES, TREE_MODE_NAMES, GLYPH_STYLE_NAMES, describeMoonPhase,
+  WATER_MODE_NAMES, WATER_SHADER_NAMES, TERRAIN_MODE_NAMES, TREE_MODE_NAMES, GLYPH_STYLE_NAMES,
+  TRAIL_MODE_NAMES, HOLO_ARCHETYPE_NAMES, createTrailRibbonBatch, describeMoonPhase,
   buildSigns, buildHolos, projectorFrustumGeometry, beamGeometry,
   buildTransitInfrastructure, buildBridges, buildHarbor, buildSpaceport,
   buildStreetInfrastructure, evalTrafficSignalState,
@@ -2663,6 +2664,195 @@ test('Phase-19 landmark destination at current speed, strategic cinematic gaze m
     globalThis.window = prevWin;
   }
 });
+
+test('Phase-20 single-sided cone/pyramid planar holos, Archimedean & abstract 3D solids, holo density/scale/scanlines & moving-object trails', () => {
+  const U = makeUniforms();
+  const world = makeWorld(U);
+  assert.equal(TRAIL_MODE_NAMES.length, 6, '6 trail modes (0..5)');
+  assert.ok(HOLO_ARCHETYPE_NAMES.length >= 8, '8 holo archetypes');
+
+  // 1) Holo material is strictly FrontSide (never DoubleSide!) with live scale & scanline uniforms
+  assert.equal(world.holoMat.side, THREE.FrontSide, 'world.holoMat is strictly FrontSide (no double-sided backfaces)');
+  assert.ok(world.holoMat.uniforms.uHoloScale && world.holoMat.uniforms.uHoloScan, 'holoMat carries uHoloScale & uHoloScan');
+  assert.match(SHADERS.HOLO_FRAG, /uHoloScan/, 'HOLO_FRAG drives scanline & facet wireframe interference via uHoloScan');
+  assert.match(SHADERS.HOLO_VERT, /uHoloScale/, 'HOLO_VERT scales instances live via uHoloScale');
+
+  // 2) Build city holos and verify planar cones/pyramids vs 3D Archimedean & abstract solids
+  const grown = growCity(4417, 5, world.towerMat, 1.0, { waterMode: 1, signAmt: 1.35, maritimeAmt: 1.2, airAmt: 1.2, transitAmt: 1.0, U });
+  const city = grown.city;
+  const holoGroup = buildHolos(city, world.holoMat, world.beamMat, { density: 2.5 });
+  assert.equal(holoGroup.userData.activeHoloCount, city.holos.length + city.extraHolos.length, 'density=2.5 activates full base + extra holo pool');
+
+  const holoInstMeshes = [];
+  let frustumCount = 0;
+  holoGroup.traverse((m) => {
+    if (m.isInstancedMesh && m.material === world.holoMat) holoInstMeshes.push(m);
+    if (m.isMesh && m.material === world.beamMat) {
+      frustumCount++;
+      // Verify outward CCW winding on every projector frustum (pyramid, circle & vertical)
+      const pos = m.geometry.getAttribute('position');
+      assert.ok(pos.count >= 24, 'frustum has multi-triangle hull');
+    }
+  });
+  assert.equal(frustumCount, city.holos.length + city.extraHolos.length, 'exact 1:1 projector frustum per holo (zero duplicate crossed portal frustums)');
+  assert.ok(holoInstMeshes.length >= 6, `distinct instanced archetype buckets built (${holoInstMeshes.length})`);
+
+  let sawPlanarPlane = false;
+  let sawArchimedean = false;
+  let sawAbstract3D = false;
+  for (const im of holoInstMeshes) {
+    const g = im.geometry;
+    const kdAttr = g.getAttribute('aHoloKind');
+    const edAttr = g.getAttribute('aEdgeDist');
+    const posAttr = g.getAttribute('position');
+    const nrmAttr = g.getAttribute('normal');
+    assert.ok(kdAttr && edAttr, 'every holo archetype geometry carries aHoloKind and aEdgeDist');
+    const kd = Math.round(kdAttr.getX(0));
+    if (kd === 0 || kd === 1) {
+      sawPlanarPlane = true;
+      // Planar 'panel' & 'disc' MUST be a single PlaneGeometry(1, 1) = 6 non-indexed vertices (2 triangles), +Z normal — NEVER a 36-vertex Box!
+      assert.equal(posAttr.count, 6, `planar holo (kind=${kd}) is a single 2-triangle plane (6 verts), never a double-sided Box`);
+      for (let v = 0; v < 6; v++) {
+        assert.ok(Math.abs(posAttr.getZ(v)) < 1e-6 && nrmAttr.getZ(v) > 0.99, 'planar holo faces strictly +Z outward');
+      }
+    } else if (kd === 2) {
+      sawArchimedean = true;
+      // Convex Archimedean polyhedron: every outward triangle normal satisfies dot(pos, normal) > 0, and centroid vertex has aEdgeDist = 1, outer edge vertices = 0
+      assert.ok(posAttr.count >= 48 * 3, `Archimedean solid has rich polyhedral facets (${posAttr.count / 3} tris)`);
+      for (let t = 0; t < posAttr.count; t += 3) {
+        const nx = nrmAttr.getX(t), ny = nrmAttr.getY(t), nz = nrmAttr.getZ(t);
+        const cx = posAttr.getX(t), cy = posAttr.getY(t), cz = posAttr.getZ(t);
+        assert.ok(cx * nx + cy * ny + cz * nz > 0.05, 'Archimedean facet normal points strictly outward (FrontSide)');
+        assert.equal(edAttr.getX(t), 1.0, 'centroid vertex has aEdgeDist = 1.0 (no internal diagonal wireframe)');
+        assert.equal(edAttr.getX(t + 1), 0.0, 'outer polygon edge vertex A has aEdgeDist = 0.0');
+        assert.equal(edAttr.getX(t + 2), 0.0, 'outer polygon edge vertex B has aEdgeDist = 0.0');
+      }
+    } else if (kd === 3) {
+      sawAbstract3D = true;
+      assert.ok(posAttr.count >= 200, `abstract 3D sculpture (knot/astrolabe) has smooth 3D tube geometry (${posAttr.count} verts)`);
+    }
+  }
+  assert.ok(sawPlanarPlane && sawArchimedean && sawAbstract3D, 'planar cones, Archimedean solids & abstract 3D holo sculptures all built');
+
+  // 3) Live hologram projection density control (`setHoloDensity`: 0 = off .. 1.0 = base .. 2.5 = dense)
+  assert.equal(holoGroup.setHoloDensity(0), 0, 'density=0 turns off all holos');
+  assert.equal(holoGroup.visible, false, 'holoGroup hidden at density=0');
+  const halfCnt = holoGroup.setHoloDensity(0.5);
+  assert.ok(halfCnt > 0 && halfCnt < city.holos.length, `density=0.5 activates half of base holos (${halfCnt}/${city.holos.length})`);
+  assert.equal(holoGroup.visible, true);
+  assert.equal(holoGroup.setHoloDensity(1.0), city.holos.length, 'density=1.0 activates exact base holos');
+  assert.equal(holoGroup.setHoloDensity(2.5), city.holos.length + city.extraHolos.length, 'density=2.5 activates full base + street/plaza extraHolos');
+
+  // 4) MovieSetDirector `projectInFrontOfCamera` uses single-sided FrontSide + behind-screen cone + 3D Archimedean/knot shapes
+  const cam = new THREE.PerspectiveCamera(60, 16 / 9, 2, 20000);
+  cam.position.set(0, 140, 300);
+  cam.lookAt(0, 140, 0);
+  cam.updateMatrixWorld();
+  const scene = new THREE.Scene();
+  const director = new MovieSetDirector({ scene, camera: cam, uniforms: U, getCity: () => city });
+  const billProj = director.projectInFrontOfCamera({ text: 'CONE PLANE', shape: 'billboard', width: 20, height: 10 });
+  assert.equal(billProj.ok, true);
+  const bEntry = director._projectedHolos.get(billProj.projectionId);
+  assert.equal(bEntry.holoMat.side, THREE.FrontSide, 'Director planar hologram is strictly FrontSide');
+  assert.ok(bEntry.podMesh.position.z < -5, `Director planar emitter pod sits behind single-sided plane (z=${bEntry.podMesh.position.z})`);
+  for (const s3d of ['disc', 'cuboctahedron', 'icosahedron', 'knot']) {
+    const r3 = director.projectInFrontOfCamera({ text: s3d.toUpperCase(), shape: s3d });
+    assert.equal(r3.ok, true, `Director projects shape="${s3d}"`);
+    assert.equal(director._projectedHolos.get(r3.projectionId).holoMat.side, THREE.FrontSide);
+  }
+  director.clearProjections();
+
+  // 5) Moving-object trails across vehicles, GPU swarm, Maglev trains, aircraft, harbor ships & spaceport shuttles/rockets!
+  const veh = makeVehicles(city, world.trailMat, 320, grown.collider, {
+    swarmMat: world.swarmMat,
+    swarmCount: 2400,
+    transitAmt: 1.0,
+    trafficSpeed: 1.2,
+    U,
+    ribbonTrailMat: world.ribbonTrailMat,
+    swarmTrailMat: world.swarmTrailMat,
+    trailMode: 5,
+    trailLength: 1.5,
+  });
+  veh.setPalette(LOOK_BY_ID.bladerunner);
+  veh.update(0.25, 4.0, 1.0);
+  veh.update(0.35, 4.0, 1.0);
+  assert.equal(veh.trails.visible, true, 'classic twin trails visible in mode 5 (all)');
+  assert.ok(veh.ribbonBatch && veh.ribbonBatch.mesh.geometry.drawRange.count > 0, 'curved 3D vehicle/train/air ribbons emitted in mode 5');
+  assert.ok(veh.swarmTrailMesh && veh.swarmTrailMesh.visible && veh.swarmTrailMesh.geometry.instanceCount > 0, 'GPU multi-strata swarm trails visible in mode 5');
+
+  // Switch to mode 0 ('off'): all vehicle, ribbon & swarm trails cleanly turn off while vehicle bodies keep moving!
+  veh.setTrailConfig(0, 1.5);
+  veh.update(0.2, 4.0, 1.0);
+  assert.equal(veh.trails.visible, false, 'classic trails hidden when trailMode=0 (off)');
+  assert.equal(veh.ribbonBatch.mesh.visible, false, 'ribbon trails hidden when trailMode=0 (off)');
+  assert.equal(veh.swarmTrailMesh.visible, false, 'swarm trails hidden when trailMode=0 (off)');
+  assert.ok(veh.mesh.count > 0, 'vehicle hulls remain visible when trails are off');
+
+  // Harbor ships & boats trails (mode 3 = air/rail/ships/rockets, mode 5 = all moving objects, mode 0 = off)
+  const harbor = buildHarbor(city, U, world.beaconMat, world.lampMat, {
+    ribbonTrailMat: world.ribbonTrailMat,
+    trailMode: 3,
+    trailLength: 1.4,
+  });
+  harbor.setLook(LOOK_BY_ID.bladerunner);
+  harbor.update(0.5);
+  harbor.update(0.8);
+  assert.ok(harbor.ribbonBatch && harbor.ribbonBatch.mesh.geometry.drawRange.count > 0, 'cruising harbor ships emit luminous stern ribbons in mode 3');
+  harbor.setTrailConfig(0, 1.4);
+  harbor.update(0.2);
+  assert.equal(harbor.ribbonBatch.mesh.geometry.drawRange.count, 0, 'harbor ship trails clear when trailMode=0');
+
+  // Spaceport shuttles & launching orbital rocket trails (mode 2 = aircraft, mode 5 = all, mode 0 = off)
+  const sp = buildSpaceport(city, U, world.beaconMat, world.lampMat, world.beamMat, {
+    ribbonTrailMat: world.ribbonTrailMat,
+    trailMode: 2,
+    trailLength: 1.4,
+  });
+  sp.setLook(LOOK_BY_ID.bladerunner);
+  sp.update(20.0); // enters rocket liftoff window (rCyc ~ 0.22) + active shuttle flights!
+  sp.update(0.5);
+  assert.ok(sp.ribbonBatch && sp.ribbonBatch.mesh.geometry.drawRange.count > 0, 'spaceport shuttles & launching rocket emit exhaust ribbons in mode 2');
+  sp.setTrailConfig(0, 1.4);
+  sp.update(0.2);
+  assert.equal(sp.ribbonBatch.mesh.geometry.drawRange.count, 0, 'spaceport trails clear when trailMode=0');
+
+  // 6) ApplyLook & compact _v:2 #s= token round-trip all Phase-20 holo & trail parameters without shifting legacy short codes
+  applyLook(U, LOOK_BY_ID.bladerunner, { holoScale: 1.65, holoScan: 1.9, trailMode: 5, trailLength: 2.1 });
+  assert.equal(U.uHoloScale.value, 1.65);
+  assert.equal(U.uHoloScan.value, 1.9);
+  assert.equal(U.uTrailMode.value, 5);
+  assert.equal(U.uTrailLen.value, 2.1);
+
+  const prevWin = globalThis.window;
+  globalThis.window = { btoa: (s) => Buffer.from(s, 'binary').toString('base64'), atob: (s) => Buffer.from(s, 'base64').toString('binary') };
+  try {
+    const tok = encodeExactState(normalizeExactState({
+      seed: 4417,
+      tune: {
+        cloudLayerElev: [120, 640, 1580],
+        cloudPuffs: 0.4,
+        holoDensity: 2.15,
+        holoScale: 1.55,
+        holoScan: 1.85,
+        trailMode: 5,
+        trailLength: 1.9,
+      },
+    }));
+    assert.ok(tok.length < 320, `compact delta token stays tiny (${tok.length} chars)`);
+    const dec = decodeExactState(tok);
+    assert.deepEqual(dec.tune.cloudLayerElev, [120, 640, 1580], 'legacy cloudLayerElev short-code unaffected');
+    assert.equal(dec.tune.cloudPuffs, 0.4);
+    assert.equal(dec.tune.holoDensity, 2.15);
+    assert.equal(dec.tune.holoScale, 1.55);
+    assert.equal(dec.tune.holoScan, 1.85);
+    assert.equal(dec.tune.trailMode, 5);
+    assert.equal(dec.tune.trailLength, 1.9);
+  } finally {
+    globalThis.window = prevWin;
+  }
+});
+
 
 
 

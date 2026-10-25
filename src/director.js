@@ -1129,11 +1129,16 @@ export class MovieSetDirector {
       padCols: 2,
     });
 
-    // 1. Volumetric Hologram Mesh (additive glow + scanline alpha)
+    // 1. Volumetric Hologram Mesh (single-sided FrontSide planar projection or outward 3D solid)
+    const isPlanar = shape === 'billboard' || shape === 'disc' || shape === 'panel';
     let holoGeo;
     if (shape === 'diamond') holoGeo = new THREE.OctahedronGeometry(Math.max(width, height) * 0.42, 0);
+    else if (shape === 'cuboctahedron' || shape === 'dodecahedron') holoGeo = new THREE.DodecahedronGeometry(Math.max(width, height) * 0.38, 0);
+    else if (shape === 'icosahedron') holoGeo = new THREE.IcosahedronGeometry(Math.max(width, height) * 0.40, 0);
+    else if (shape === 'knot') holoGeo = new THREE.TorusKnotGeometry(Math.max(width, height) * 0.25, Math.max(0.45, Math.min(width, height) * 0.08), 56, 8, 2, 3);
     else if (shape === 'prism') holoGeo = new THREE.CylinderGeometry(width * 0.34, width * 0.34, height, 6, 1, true);
     else if (shape === 'ring') holoGeo = new THREE.TorusGeometry(width * 0.38, Math.max(0.6, height * 0.12), 10, 32);
+    else if (shape === 'disc') holoGeo = new THREE.CircleGeometry(Math.min(width, height) * 0.52, 32);
     else holoGeo = new THREE.PlaneGeometry(width, height);
 
     const holoMat = new THREE.MeshBasicMaterial({
@@ -1143,13 +1148,13 @@ export class MovieSetDirector {
       opacity: 0.92,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
-      side: THREE.DoubleSide,
+      side: THREE.FrontSide,
     });
     const holoMesh = new THREE.Mesh(holoGeo, holoMat);
     holoMesh.renderOrder = 7;
     group.add(holoMesh);
 
-    // Wireframe holo cage accent
+    // Wireframe holo cage accent (FrontSide only)
     const wireMat = new THREE.MeshBasicMaterial({
       color: colObj,
       wireframe: true,
@@ -1157,15 +1162,17 @@ export class MovieSetDirector {
       opacity: 0.28,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
+      side: THREE.FrontSide,
     });
     const wireMesh = new THREE.Mesh(holoGeo, wireMat);
     wireMesh.scale.setScalar(1.03);
     holoMesh.add(wireMesh);
 
     // 2. Physical Projector Drone Pod + Terminating Light Frustum (`projectorFrustumGeometry`)!
-    // Position emitter pod below and slightly forward of the projected hologram so its rays
-    // fan up and terminate cleanly onto the hologram's 4 corners!
-    const podOffset = new THREE.Vector3(0, -height * 0.95 - 5.5, 4.0);
+    // Planar projections place the emitter pod BEHIND and below the single FrontSide plane so
+    // emitter -> pyramid/cone frustum -> single plane face the viewer as one directional projector!
+    const podZ = isPlanar ? -Math.max(6.0, width * 0.42) : 0.0;
+    const podOffset = new THREE.Vector3(0, -height * 0.95 - 5.5, podZ);
     const podGeo = new THREE.CylinderGeometry(0.65, 0.95, 1.4, 8);
     const podMat = new THREE.MeshBasicMaterial({ color: 0x1a2434 });
     const podMesh = new THREE.Mesh(podGeo, podMat);
@@ -1177,9 +1184,10 @@ export class MovieSetDirector {
     podMesh.add(lensMesh);
     group.add(podMesh);
 
+    const frustumShape = shape === 'disc' ? 'circle' : (isPlanar ? 'pyramid' : 'vertical');
     const frustumGeo = projectorFrustumGeometry(
       podOffset.x, podOffset.y + 0.65, podOffset.z,
-      { x: 0, y: 0, z: 0, w: width * 1.12, h: height * 1.12 },
+      { x: 0, y: 0, z: 0, w: width * 1.08, h: height * 1.08, frustumShape },
       0.5,
       [colObj.r, colObj.g, colObj.b],
     );

@@ -11,7 +11,9 @@ import {
   GROUND_VERT, GROUND_FRAG, TOWER_VERT, TOWER_FRAG,
   LANDMARK_VERT, LANDMARK_FRAG, SOLID_CURVED_VERT, SOLID_CURVED_FRAG,
   VEHICLE_VERT, VEHICLE_FRAG,
-  BEACON_VERT, BEACON_FRAG, TRAIL_VERT, TRAIL_FRAG, SWARM_VERT, SWARM_FRAG,
+  BEACON_VERT, BEACON_FRAG, TRAIL_VERT, TRAIL_FRAG,
+  RIBBON_TRAIL_VERT, RIBBON_TRAIL_FRAG,
+  SWARM_VERT, SWARM_FRAG, SWARM_TRAIL_VERT, SWARM_TRAIL_FRAG,
   BEAM_VERT, BEAM_FRAG, POOL_VERT, POOL_FRAG,
   WATER_VERT, WATER_FRAG, TREE_LINK_VERT, TREE_LINK_FRAG,
   BILL_VERT, BILL_FRAG, WEATHER_VERT, WEATHER_FRAG,
@@ -20,6 +22,26 @@ import {
 } from './shaders.js';
 
 export { WATER_MODE_NAMES, TERRAIN_MODE_NAMES };
+
+export const TRAIL_MODE_NAMES = [
+  'Off (No Trails)',
+  'Subtle Taillights (Default)',
+  'Some · Fast & Express (~30%)',
+  'Some · Air, Rail, Ships & Rockets',
+  'All Traffic (Streets + Skyways)',
+  'All Moving Objects (City-Wide)',
+];
+
+export const HOLO_ARCHETYPE_NAMES = [
+  'panel',
+  'disc',
+  'cuboctahedron',
+  'truncated_octahedron',
+  'rhombicuboctahedron',
+  'trefoil_knot',
+  'astrolabe',
+  'cylinder',
+];
 
 export const WATER_SHADER_NAMES = [
   'Capillary Micro-Facet Sea (Default)',
@@ -170,8 +192,12 @@ export function makeUniforms() {
     uMegaWrap: { value: 1.0 },
     uGlyphStyle: { value: 0.0 },
     uSignAnim: { value: 1.0 },
+    uHoloScale: { value: 1.0 },
+    uHoloScan: { value: 1.0 },
     uVehLight: { value: 1.0 },
     uTrafficSpeed: { value: 1.0 },
+    uTrailMode: { value: 1.0 },
+    uTrailLen: { value: 1.0 },
     uShipWakes: { value: Array.from({ length: 8 }, () => new THREE.Vector4(0, 0, 0, 0)) },
   };
 }
@@ -487,9 +513,19 @@ export function makeWorld(U) {
     fragmentShader: HOLO_FRAG,
     uniforms: pick(U, [
       'uBillA', 'uBillB', 'uBillK', 'uBillMono',
-      'uSignAmt', 'uGlyphStyle', 'uSignAnim',
+      'uSignAmt', 'uGlyphStyle', 'uSignAnim', 'uHoloScale', 'uHoloScan',
       'uTime', 'uLightK', 'uSat', 'uWorldCurve', 'uPlanetR',
     ]),
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.FrontSide,
+  });
+
+  const ribbonTrailMat = new THREE.ShaderMaterial({
+    vertexShader: RIBBON_TRAIL_VERT,
+    fragmentShader: RIBBON_TRAIL_FRAG,
+    uniforms: pick(U, ['uLightK', 'uVehLight', 'uBillMono', 'uWorldCurve', 'uPlanetR']),
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
@@ -502,9 +538,22 @@ export function makeWorld(U) {
     uniforms: pick(U, ['uTime', 'uTrafficSpeed', 'uHeightScale', 'uLightK', 'uVehLight', 'uBillMono', 'uTint', 'uWorldCurve', 'uPlanetR']),
   });
 
+  const swarmTrailMat = new THREE.ShaderMaterial({
+    vertexShader: SWARM_TRAIL_VERT,
+    fragmentShader: SWARM_TRAIL_FRAG,
+    uniforms: pick(U, [
+      'uTime', 'uTrafficSpeed', 'uHeightScale', 'uTrailMode', 'uTrailLen',
+      'uLightK', 'uVehLight', 'uBillMono', 'uWorldCurve', 'uPlanetR',
+    ]),
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+  });
+
   return {
     sky, skyMat, ground, groundMat, clouds, cloudMat,
-    towerMat, beaconMat, lampMat, trailMat, swarmMat, beamMat, poolMat, waterMat, billMat, holoMat,
+    towerMat, beaconMat, lampMat, trailMat, ribbonTrailMat, swarmMat, swarmTrailMat, beamMat, poolMat, waterMat, billMat, holoMat,
   };
 }
 
@@ -2181,9 +2230,187 @@ function twinTrailGeometry() {
 }
 
 /**
+ * Dynamic batched 3D curved light-ribbon trail mesh (`RIBBON_TRAIL_VERT`/`FRAG`)
+ * for moving vehicles, Maglev trains, airships, helicopters, spaceport shuttles,
+ * orbital rockets, and harbor ships — 1 draw call per subsystem, teleport-safe.
+ */
+export function createTrailRibbonBatch(ribbonMat, maxSlots = 256, segs = 12) {
+  const slots = Math.max(1, maxSlots | 0);
+  const nodes = Math.max(3, (segs | 0) + 1);
+  const vertsPerSlot = nodes * 2;
+  const idxPerSlot = segs * 6;
+  const totalVerts = slots * vertsPerSlot;
+
+  const pos = new Float32Array(totalVerts * 3);
+  const dir = new Float32Array(totalVerts * 3);
+  const uv = new Float32Array(totalVerts * 2);
+  const colArr = new Float32Array(totalVerts * 3);
+  const styleArr = new Float32Array(totalVerts);
+  const indices = totalVerts > 65535 ? new Uint32Array(slots * idxPerSlot) : new Uint16Array(slots * idxPerSlot);
+
+  for (let s = 0; s < slots; s++) {
+    const vBase = s * vertsPerSlot;
+    const iBase = s * idxPerSlot;
+    for (let k = 0; k < segs; k++) {
+      const a = vBase + k * 2;
+      const b = a + 1;
+      const c = a + 2;
+      const d = a + 3;
+      const ptr = iBase + k * 6;
+      indices[ptr + 0] = a; indices[ptr + 1] = b; indices[ptr + 2] = c;
+      indices[ptr + 3] = b; indices[ptr + 4] = d; indices[ptr + 5] = c;
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  const posAttr = new THREE.BufferAttribute(pos, 3);
+  const dirAttr = new THREE.BufferAttribute(dir, 3);
+  const uvAttr = new THREE.BufferAttribute(uv, 2);
+  const colAttr = new THREE.BufferAttribute(colArr, 3);
+  const styleAttr = new THREE.BufferAttribute(styleArr, 1);
+  posAttr.setUsage(THREE.DynamicDrawUsage);
+  dirAttr.setUsage(THREE.DynamicDrawUsage);
+  uvAttr.setUsage(THREE.DynamicDrawUsage);
+  colAttr.setUsage(THREE.DynamicDrawUsage);
+  styleAttr.setUsage(THREE.DynamicDrawUsage);
+  geo.setAttribute('position', posAttr);
+  geo.setAttribute('aRibbonDir', dirAttr);
+  geo.setAttribute('aRibbonUv', uvAttr);
+  geo.setAttribute('aColor', colAttr);
+  geo.setAttribute('aRibbonStyle', styleAttr);
+  geo.setIndex(new THREE.BufferAttribute(indices, 1));
+  geo.setDrawRange(0, 0);
+
+  const mesh = new THREE.Mesh(geo, ribbonMat);
+  mesh.frustumCulled = false;
+  mesh.renderOrder = 4;
+
+  const histX = new Float32Array(slots * nodes);
+  const histY = new Float32Array(slots * nodes);
+  const histZ = new Float32Array(slots * nodes);
+  const prevHeadX = new Float32Array(slots);
+  const prevHeadY = new Float32Array(slots);
+  const prevHeadZ = new Float32Array(slots);
+  const inited = new Uint8Array(slots);
+  let writeSlot = 0;
+
+  function resetAll() {
+    inited.fill(0);
+    writeSlot = 0;
+    geo.setDrawRange(0, 0);
+  }
+
+  function beginFrame() {
+    writeSlot = 0;
+  }
+
+  function emitRibbon(idKey, x, y, z, halfW, r, g, b, style = 0, stepMeters = 3.2, jumpReset = 125) {
+    if (writeSlot >= slots) return;
+    const hSlot = Math.max(0, Math.min(slots - 1, idKey | 0));
+    const hBase = hSlot * nodes;
+
+    if (!inited[hSlot]) {
+      for (let k = 0; k < nodes; k++) {
+        histX[hBase + k] = x;
+        histY[hBase + k] = y;
+        histZ[hBase + k] = z;
+      }
+      prevHeadX[hSlot] = x;
+      prevHeadY[hSlot] = y;
+      prevHeadZ[hSlot] = z;
+      inited[hSlot] = 1;
+    } else {
+      const jumpD = Math.hypot(x - prevHeadX[hSlot], y - prevHeadY[hSlot], z - prevHeadZ[hSlot]);
+      if (jumpD > jumpReset) {
+        for (let k = 0; k < nodes; k++) {
+          histX[hBase + k] = x;
+          histY[hBase + k] = y;
+          histZ[hBase + k] = z;
+        }
+      } else {
+        const d1 = Math.hypot(x - histX[hBase + 1], y - histY[hBase + 1], z - histZ[hBase + 1]);
+        if (d1 >= Math.max(0.8, stepMeters)) {
+          for (let k = nodes - 1; k >= 2; k--) {
+            histX[hBase + k] = histX[hBase + k - 1];
+            histY[hBase + k] = histY[hBase + k - 1];
+            histZ[hBase + k] = histZ[hBase + k - 1];
+          }
+          histX[hBase + 1] = histX[hBase + 0];
+          histY[hBase + 1] = histY[hBase + 0];
+          histZ[hBase + 1] = histZ[hBase + 0];
+        }
+        histX[hBase + 0] = x;
+        histY[hBase + 0] = y;
+        histZ[hBase + 0] = z;
+      }
+      prevHeadX[hSlot] = x;
+      prevHeadY[hSlot] = y;
+      prevHeadZ[hSlot] = z;
+    }
+
+    const totalSpan = Math.hypot(
+      histX[hBase + 0] - histX[hBase + nodes - 1],
+      histY[hBase + 0] - histY[hBase + nodes - 1],
+      histZ[hBase + 0] - histZ[hBase + nodes - 1]
+    );
+    const effW = totalSpan > 0.35 ? halfW : 0.0;
+
+    const vOut = writeSlot * vertsPerSlot;
+    for (let k = 0; k < nodes; k++) {
+      const px = histX[hBase + k];
+      const py = histY[hBase + k];
+      const pz = histZ[hBase + k];
+      const kPrev = Math.max(0, k - 1);
+      const kNext = Math.min(nodes - 1, k + 1);
+      let tx = histX[hBase + kPrev] - histX[hBase + kNext];
+      let ty = histY[hBase + kPrev] - histY[hBase + kNext];
+      let tz = histZ[hBase + kPrev] - histZ[hBase + kNext];
+      const tLen = Math.hypot(tx, ty, tz);
+      if (tLen > 1e-4) {
+        tx /= tLen; ty /= tLen; tz /= tLen;
+      } else {
+        tx = 1; ty = 0; tz = 0;
+      }
+      const uAlong = k / segs;
+      for (let sideIdx = 0; sideIdx < 2; sideIdx++) {
+        const vi = vOut + k * 2 + sideIdx;
+        pos[vi * 3 + 0] = px;
+        pos[vi * 3 + 1] = py;
+        pos[vi * 3 + 2] = pz;
+        dir[vi * 3 + 0] = tx;
+        dir[vi * 3 + 1] = ty;
+        dir[vi * 3 + 2] = tz;
+        uv[vi * 2 + 0] = uAlong;
+        uv[vi * 2 + 1] = sideIdx === 0 ? -effW : effW;
+        colArr[vi * 3 + 0] = r;
+        colArr[vi * 3 + 1] = g;
+        colArr[vi * 3 + 2] = b;
+        styleArr[vi] = style;
+      }
+    }
+    writeSlot++;
+  }
+
+  function endFrame() {
+    geo.setDrawRange(0, writeSlot * idxPerSlot);
+    if (writeSlot > 0) {
+      posAttr.needsUpdate = true;
+      dirAttr.needsUpdate = true;
+      uvAttr.needsUpdate = true;
+      colAttr.needsUpdate = true;
+      styleAttr.needsUpdate = true;
+    }
+    mesh.visible = writeSlot > 0;
+  }
+
+  return { mesh, geo, beginFrame, emitRibbon, endFrame, resetAll, get activeCount() { return writeSlot; } };
+}
+
+/**
  * Smooth 3D optical projector frustum (`archetype = 4` in BEAM_FRAG) morphing
- * from a circular projector lens at `(ex, ey, ez)` (`vT = 0`) onto the rounded
- * hologram gate `H` (`vT = 1`) with smooth outward normals and ZERO internal X-cross sheets!
+ * from a circular projector lens at `(ex, ey, ez)` (`vT = 0`) onto a pyramid
+ * screen, circular disc, or vertical 3D hologram volume (`vT = 1`) with smooth
+ * outward CCW normals (`FrontSide`) and ZERO internal X-cross sheets!
  */
 export function projectorFrustumGeometry(ex, ey, ez, H, phase = 0, tint = [0.32, 0.88, 1.0]) {
   const cy = Math.cos(H.rot || 0);
@@ -2191,6 +2418,8 @@ export function projectorFrustumGeometry(ex, ey, ez, H, phase = 0, tint = [0.32,
   const hw = Math.max(0.5, (H.w || 24) * 0.48);
   const hh = Math.max(0.5, (H.h || 18) * 0.48);
   const ap = 0.42;
+  const shapeMode = H.frustumShape || 'rounded'; // 'pyramid' | 'circle' | 'vertical' | 'rounded'
+  const cornerExp = shapeMode === 'pyramid' ? 0.22 : (shapeMode === 'circle' || shapeMode === 'vertical' ? 1.0 : 0.48);
   const segs = 20;
 
   const axisX = H.x - ex;
@@ -2198,6 +2427,20 @@ export function projectorFrustumGeometry(ex, ey, ez, H, phase = 0, tint = [0.32,
   const axisZ = H.z - ez;
   const axisLen = Math.hypot(axisX, axisY, axisZ) || 1;
   const ax = [axisX / axisLen, axisY / axisLen, axisZ / axisLen];
+  const isVertical = shapeMode === 'vertical';
+
+  // Ensure consistent outward CCW winding regardless of whether emitter sits behind or in front of H
+  const e1x = isVertical ? 1 : cy;
+  const e1y = 0;
+  const e1z = isVertical ? 0 : -sy;
+  const e2x = 0;
+  const e2y = isVertical ? 0 : 1;
+  const e2z = isVertical ? -1 : 0;
+  // Cross(e1, e2) · axis
+  const cX = e1y * e2z - e1z * e2y;
+  const cY = e1z * e2x - e1x * e2z;
+  const cZ = e1x * e2y - e1y * e2x;
+  const windFlip = (cX * ax[0] + cY * ax[1] + cZ * ax[2]) < 0;
 
   const pos = [];
   const nrm = [];
@@ -2205,28 +2448,26 @@ export function projectorFrustumGeometry(ex, ey, ez, H, phase = 0, tint = [0.32,
   const meta = [];
   const tints = [];
 
-  const superPow = (v, exp) => Math.sign(v) * Math.pow(Math.abs(v), exp);
+  const superPow = (v, exp) => (exp === 1.0 ? v : Math.sign(v) * Math.pow(Math.abs(v), exp));
 
   const ringPoint = (segIdx, t) => {
     const s = segIdx / segs;
     const ang = s * Math.PI * 2;
     const cs = Math.cos(ang);
     const sn = Math.sin(ang);
-    // Morph smoothly from round optical lens (t=0) to rounded-rect hologram frame (t=1)
     const lx0 = cs * ap;
-    const ly0 = sn * ap * 0.72;
-    const lx1 = superPow(cs, 0.48) * hw;
-    const ly1 = superPow(sn, 0.48) * hh;
-    const locX = lx0 + (lx1 - lx0) * t;
-    const locY = ly0 + (ly1 - ly0) * t;
-    const cx = ex + axisX * t + cy * locX;
-    const cyW = ey + axisY * t + locY;
-    const cz = ez + axisZ * t - sy * locX;
+    const ly0 = sn * ap * (isVertical ? 1.0 : 0.72);
+    const lx1 = superPow(cs, cornerExp) * hw;
+    const ly1 = superPow(sn, cornerExp) * (isVertical ? hw : hh);
+    const locA = lx0 + (lx1 - lx0) * t;
+    const locB = ly0 + (ly1 - ly0) * t;
+    const cx = ex + axisX * t + e1x * locA + e2x * locB;
+    const cyW = ey + axisY * t + e1y * locA + e2y * locB;
+    const cz = ez + axisZ * t + e1z * locA + e2z * locB;
 
-    // Smooth outward radial vector in hologram screen plane, orthogonalized against frustum axis
-    let rx = cy * (cs / Math.max(hw, 1e-3));
-    let ry = sn / Math.max(hh, 1e-3);
-    let rz = -sy * (cs / Math.max(hw, 1e-3));
+    let rx = e1x * (cs / Math.max(hw, 1e-3)) + e2x * (sn / Math.max(isVertical ? hw : hh, 1e-3));
+    let ry = e1y * (cs / Math.max(hw, 1e-3)) + e2y * (sn / Math.max(isVertical ? hw : hh, 1e-3));
+    let rz = e1z * (cs / Math.max(hw, 1e-3)) + e2z * (sn / Math.max(isVertical ? hw : hh, 1e-3));
     const dotA = rx * ax[0] + ry * ax[1] + rz * ax[2];
     rx -= ax[0] * dotA;
     ry -= ax[1] * dotA;
@@ -2253,8 +2494,13 @@ export function projectorFrustumGeometry(ex, ey, ez, H, phase = 0, tint = [0.32,
     const b1 = ringPoint(i + 1, 0);
     const t1 = ringPoint(i + 1, 1);
     const t0 = ringPoint(i, 1);
-    emitVert(b0); emitVert(b1); emitVert(t1);
-    emitVert(b0); emitVert(t1); emitVert(t0);
+    if (windFlip) {
+      emitVert(b0); emitVert(t1); emitVert(b1);
+      emitVert(b0); emitVert(t0); emitVert(t1);
+    } else {
+      emitVert(b0); emitVert(b1); emitVert(t1);
+      emitVert(b0); emitVert(t1); emitVert(t0);
+    }
   }
 
   const g = new THREE.BufferGeometry();
@@ -2759,9 +3005,30 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
   trails.frustumCulled = false;
   group.add(trails);
 
+  const ribbonTrailMat = opts.ribbonTrailMat || (opts.world && opts.world.ribbonTrailMat) || new THREE.ShaderMaterial({
+    vertexShader: RIBBON_TRAIL_VERT,
+    fragmentShader: RIBBON_TRAIL_FRAG,
+    uniforms: {
+      uLightK: (curveU && curveU.uLightK) || { value: 1 },
+      uVehLight: (curveU && curveU.uVehLight) || { value: 1 },
+      uBillMono: (opts.U && opts.U.uBillMono) || { value: 0 },
+      uWorldCurve: (curveU && curveU.uWorldCurve) || { value: 0 },
+      uPlanetR: (curveU && curveU.uPlanetR) || { value: 2100 },
+    },
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+  });
+  const maxHeroRibbons = Math.min(total, 520);
+  const ribbonBatch = createTrailRibbonBatch(ribbonTrailMat, maxHeroRibbons, 12);
+  group.add(ribbonBatch.mesh);
+
   // ---- Tier 2: GPU-evaluated horizontal street-layer & corner-turning traffic swarm (18,600+ craft, 0ms CPU!) ----
   let swarmMesh = null;
   let swarmGeo = null;
+  let swarmTrailMesh = null;
+  let swarmTrailGeo = null;
   let swarmColors = null;
   if (swarmCap > 0 && swarmMat) {
     const baseHull = new THREE.BoxGeometry(1, 1, 1);
@@ -2984,14 +3251,70 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
       }
     }
 
-    swarmGeo.setAttribute('aCurveA', new THREE.InstancedBufferAttribute(curveA, 4));
-    swarmGeo.setAttribute('aCurveB', new THREE.InstancedBufferAttribute(curveB, 4));
-    swarmGeo.setAttribute('aCurveC', new THREE.InstancedBufferAttribute(curveC, 4));
-    swarmGeo.setAttribute('aColor', new THREE.InstancedBufferAttribute(swarmColors, 3));
+    const attrA = new THREE.InstancedBufferAttribute(curveA, 4);
+    const attrB = new THREE.InstancedBufferAttribute(curveB, 4);
+    const attrC = new THREE.InstancedBufferAttribute(curveC, 4);
+    const attrCol = new THREE.InstancedBufferAttribute(swarmColors, 3);
+    swarmGeo.setAttribute('aCurveA', attrA);
+    swarmGeo.setAttribute('aCurveB', attrB);
+    swarmGeo.setAttribute('aCurveC', attrC);
+    swarmGeo.setAttribute('aColor', attrCol);
     swarmMesh = new THREE.Mesh(swarmGeo, swarmMat);
     swarmMesh.frustumCulled = false;
     group.add(swarmMesh);
+
+    // Companion 0ms-CPU GPU analytical trail strip sharing the exact same curve attributes!
+    const swarmTrailMatUse = opts.swarmTrailMat || (opts.world && opts.world.swarmTrailMat) || new THREE.ShaderMaterial({
+      vertexShader: SWARM_TRAIL_VERT,
+      fragmentShader: SWARM_TRAIL_FRAG,
+      uniforms: {
+        uTime: swarmMat.uniforms.uTime,
+        uTrafficSpeed: swarmMat.uniforms.uTrafficSpeed,
+        uHeightScale: swarmMat.uniforms.uHeightScale,
+        uTrailMode: (opts.U && opts.U.uTrailMode) || { value: 1 },
+        uTrailLen: (opts.U && opts.U.uTrailLen) || { value: 1 },
+        uLightK: swarmMat.uniforms.uLightK,
+        uVehLight: swarmMat.uniforms.uVehLight,
+        uBillMono: swarmMat.uniforms.uBillMono,
+        uWorldCurve: swarmMat.uniforms.uWorldCurve,
+        uPlanetR: swarmMat.uniforms.uPlanetR,
+      },
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+    });
+    const stSegs = 9;
+    const stPos = new Float32Array((stSegs + 1) * 2 * 3);
+    const stIdx = [];
+    for (let sI = 0; sI <= stSegs; sI++) {
+      const u = sI / stSegs;
+      stPos[(sI * 2 + 0) * 3 + 0] = u;
+      stPos[(sI * 2 + 0) * 3 + 1] = -1;
+      stPos[(sI * 2 + 1) * 3 + 0] = u;
+      stPos[(sI * 2 + 1) * 3 + 1] = 1;
+      if (sI < stSegs) {
+        const a = sI * 2, b = a + 1, c2 = a + 2, d2 = a + 3;
+        stIdx.push(a, b, c2, b, d2, c2);
+      }
+    }
+    swarmTrailGeo = new THREE.InstancedBufferGeometry();
+    swarmTrailGeo.setIndex(stIdx);
+    swarmTrailGeo.setAttribute('position', new THREE.BufferAttribute(stPos, 3));
+    swarmTrailGeo.setAttribute('aCurveA', attrA);
+    swarmTrailGeo.setAttribute('aCurveB', attrB);
+    swarmTrailGeo.setAttribute('aCurveC', attrC);
+    swarmTrailGeo.setAttribute('aColor', attrCol);
+    swarmTrailGeo.instanceCount = 0;
+    swarmTrailMesh = new THREE.Mesh(swarmTrailGeo, swarmTrailMatUse);
+    swarmTrailMesh.frustumCulled = false;
+    swarmTrailMesh.renderOrder = 4;
+    swarmTrailMesh.visible = false;
+    group.add(swarmTrailMesh);
   }
+
+  let curTrailMode = opts.trailMode !== undefined ? Number(opts.trailMode) : 1;
+  let curTrailLen = opts.trailLength !== undefined ? Number(opts.trailLength) : 1.0;
 
   const laneIdx = new Int32Array(total);
   const prevLane = new Int32Array(total).fill(-1);
@@ -3476,10 +3799,18 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
       n = Math.min(n, targetTotal);
       swarmActive = Math.max(0, Math.min(swarmCap, targetTotal - n));
       if (swarmGeo) swarmGeo.instanceCount = swarmActive;
+      if (swarmTrailGeo && swarmTrailMesh) {
+        const useSwarmRibbons = (curTrailMode === 2 || curTrailMode >= 4) && curTrailLen > 0.02 && swarmActive > 0;
+        swarmTrailMesh.visible = useSwarmRibbons;
+        swarmTrailGeo.instanceCount = useSwarmRibbons ? Math.min(swarmActive, 8500) : 0;
+      }
     } else {
       n = Math.max(0, Math.min(total, Math.round(total * dClamped)));
     }
     lastActiveCount = n + swarmActive;
+
+    const useHeroRibbons = curTrailMode >= 2 && curTrailLen > 0.02;
+    ribbonBatch.beginFrame();
 
     const active = new Array(nCls).fill(0);
     if (collision && dt > 0) applyCollision(n);
@@ -3652,10 +3983,70 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
       }
       active[cc]++;
 
-      const trailLag = Math.min(0.024, 9.5 / Math.max(150, tmp.len));
-      composeAt(i, t[i] - dir[i] * trailLag, { bob: bob * 0.5, stretch: 2.2, wMul: 0.72 });
-      trails.setMatrixAt(i, m);
+      if (curTrailMode === 0) {
+        p.set(craftX, craftY, craftZ);
+        q.identity();
+        s.set(0, 0, 0);
+        m.compose(p, q, s);
+        trails.setMatrixAt(i, m);
+      } else {
+        const trailLag = Math.min(0.024, 9.5 / Math.max(150, tmp.len));
+        const stubLen = curTrailMode >= 2 ? 1.5 : 2.2;
+        composeAt(i, t[i] - dir[i] * trailLag, { bob: bob * 0.5, stretch: stubLen, wMul: 0.72 });
+        trails.setMatrixAt(i, m);
+      }
+
+      if (useHeroRibbons && i < maxHeroRibbons) {
+        let emitThis = false;
+        if (curTrailMode === 2) {
+          // Some: fast express trains, speeders & ~30% of spinners/cars
+          emitThis = (cc === 2) || (cc === 1 && h01(i, 93) < 0.58) || (h01(i, 93) < 0.28);
+        } else if (curTrailMode === 3) {
+          // Air, Rail, Ships & Rockets only: Maglev Sky-Trains (2), Helicopters (4) & Sky-Blimps (5)
+          emitThis = (cc === 2 || cc === 4 || cc === 5);
+        } else {
+          // Modes 4 & 5: all active street + skyway traffic!
+          emitThis = true;
+        }
+        if (emitThis) {
+          let rx = craftX, ry = craftY, rz = craftZ;
+          let halfW = 1.65 * craftScale;
+          let trR = aColor[i * 3 + 0];
+          let trG = aColor[i * 3 + 1];
+          let trB = aColor[i * 3 + 2];
+          let style = 0;
+          let stepM = Math.max(1.2, 3.8 * curTrailLen);
+          if (cc === 2) {
+            // Anchor rail ribbon behind the 5th tail coach (`m` currently holds `extraCoaches[1]`!)
+            rx = m.elements[12];
+            ry = m.elements[13] + 0.4;
+            rz = m.elements[14];
+            halfW = 2.6 * craftScale;
+            trR = 0.24; trG = 0.90; trB = 1.0;
+            style = 1;
+            stepM = Math.max(1.8, 5.6 * curTrailLen);
+          } else {
+            // Offset behind rear bumper along -X vehicle forward axis
+            const sternBack = (cc === 5 ? 54.0 : (cc === 3 ? 11.5 : 6.2)) * craftScale;
+            rx -= Math.cos(craftYaw) * sternBack;
+            rz += Math.sin(craftYaw) * sternBack;
+            if (cc === 5) {
+              halfW = 4.6 * craftScale;
+              trR = 0.42; trG = 0.86; trB = 1.0;
+              style = 1;
+              stepM = Math.max(2.2, 6.2 * curTrailLen);
+            } else if (cc === 4) {
+              halfW = 2.1 * craftScale;
+              trR = 1.0; trG = 0.42; trB = 0.22;
+              stepM = Math.max(1.5, 4.2 * curTrailLen);
+            }
+          }
+          ribbonBatch.emitRibbon(i, rx, ry, rz, halfW, trR, trG, trB, style, stepM, 145);
+        }
+      }
     }
+    ribbonBatch.endFrame();
+    trails.visible = curTrailMode !== 0;
     for (let cIdx = 0; cIdx < nCls; cIdx++) {
       bodies[cIdx].count = active[cIdx];
       bodies[cIdx].instanceMatrix.needsUpdate = true;
@@ -3792,8 +4183,12 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     trailers,
     extraCoaches,
     trails,
+    ribbonTrails: ribbonBatch,
+    ribbonBatch,
     swarm: swarmMesh,
     swarmGeo,
+    swarmTrails: swarmTrailMesh,
+    swarmTrailMesh,
     heroCount: total,
     beamReach,
     capacity: total + swarmCap,
@@ -3805,6 +4200,17 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     setVehicleOverride,
     clearVehicleOverride,
     setTransitAmt(amt) { curTransitAmt = Math.max(0, Number(amt) || 0); },
+    setTrailConfig(mode, len = curTrailLen) {
+      const nextM = Math.max(0, Math.min(5, Math.round(Number(mode) || 0)));
+      const nextL = Math.max(0, Math.min(4.0, Number.isFinite(Number(len)) ? Number(len) : 1.0));
+      if (nextL <= 0.01 || (nextM !== curTrailMode && (nextM < 2 || curTrailMode < 2))) ribbonBatch.resetAll();
+      curTrailMode = nextM;
+      curTrailLen = nextL;
+      if (opts.U && opts.U.uTrailMode) opts.U.uTrailMode.value = curTrailMode;
+      if (opts.U && opts.U.uTrailLen) opts.U.uTrailLen.value = curTrailLen;
+    },
+    get trailMode() { return curTrailMode; },
+    get trailLength() { return curTrailLen; },
     get trafficSpeed() { return curTrafficSpeed; },
     setTrafficSpeed(spdVal) {
       curTrafficSpeed = Math.max(0, Number(spdVal) ?? 1.0);
@@ -4383,63 +4789,380 @@ export function buildSigns(city, billMat) {
 }
 
 /**
- * Giant holographic displays — towering panels, 360-degree cylindrical drums
- * and crossed sky-portals, each fed by volumetric projector cones.
+ * Exact half-space convex polyhedron builder for Archimedean solids
+ * (`cuboctahedron`, `truncated_octahedron`, `rhombicuboctahedron`).
+ * Produces outward CCW (`FrontSide`) polygons with `aEdgeDist = 0` strictly on
+ * outer regular polygon edges and `1` at face centroids (zero diagonal seams!).
  */
-export function buildHolos(city, holoMat, beamMat) {
+function buildArchimedeanSolidGeometry(planes, holoKindVal = 2.0) {
+  const rawTris = [];
+  let maxR = 1e-4;
+  for (let i = 0; i < planes.length; i++) {
+    const [nx, ny, nz, d] = planes[i];
+    const ref = Math.abs(ny) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+    let t1x = ref[1] * nz - ref[2] * ny;
+    let t1y = ref[2] * nx - ref[0] * nz;
+    let t1z = ref[0] * ny - ref[1] * nx;
+    const l1 = Math.hypot(t1x, t1y, t1z) || 1;
+    t1x /= l1; t1y /= l1; t1z /= l1;
+    // T1 x T2 = +N => T2 = N x T1 (CCW when viewed from +N outside!)
+    const t2x = ny * t1z - nz * t1y;
+    const t2y = nz * t1x - nx * t1z;
+    const t2z = nx * t1y - ny * t1x;
+
+    let poly = [[-8, -8], [8, -8], [8, 8], [-8, 8]].map(([u, v]) => [
+      nx * d + t1x * u + t2x * v,
+      ny * d + t1y * u + t2y * v,
+      nz * d + t1z * u + t2z * v,
+    ]);
+    for (let j = 0; j < planes.length; j++) {
+      if (i === j) continue;
+      const [mx, my, mz, dj] = planes[j];
+      const out = [];
+      for (let k = 0; k < poly.length; k++) {
+        const A = poly[k];
+        const B = poly[(k + 1) % poly.length];
+        const da = mx * A[0] + my * A[1] + mz * A[2] - dj;
+        const db = mx * B[0] + my * B[1] + mz * B[2] - dj;
+        if (da <= 1e-5) out.push(A);
+        if ((da <= 1e-5) !== (db <= 1e-5)) {
+          const t = da / (da - db);
+          out.push([
+            A[0] + (B[0] - A[0]) * t,
+            A[1] + (B[1] - A[1]) * t,
+            A[2] + (B[2] - A[2]) * t,
+          ]);
+        }
+      }
+      poly = out;
+      if (poly.length < 3) break;
+    }
+    // Deduplicate near-coincident corner vertices
+    const clean = [];
+    for (let k = 0; k < poly.length; k++) {
+      const P = poly[k];
+      const prev = clean.length ? clean[clean.length - 1] : poly[poly.length - 1];
+      if (Math.hypot(P[0] - prev[0], P[1] - prev[1], P[2] - prev[2]) > 1e-4) {
+        clean.push(P);
+      }
+    }
+    if (clean.length < 3) continue;
+
+    let cx = 0, cy = 0, cz = 0;
+    for (const P of clean) {
+      cx += P[0]; cy += P[1]; cz += P[2];
+      maxR = Math.max(maxR, Math.hypot(P[0], P[1], P[2]));
+    }
+    cx /= clean.length; cy /= clean.length; cz /= clean.length;
+    let faceSpan = 1e-3;
+    for (const P of clean) {
+      faceSpan = Math.max(faceSpan, Math.hypot(P[0] - cx, P[1] - cy, P[2] - cz));
+    }
+    rawTris.push({ n: [nx, ny, nz], t1: [t1x, t1y, t1z], t2: [t2x, t2y, t2z], c: [cx, cy, cz], span: faceSpan, verts: clean });
+  }
+
+  const scale = 0.5 / maxR;
+  const pos = [];
+  const nrm = [];
+  const uvs = [];
+  const edgeD = [];
+  const kinds = [];
+
+  for (const f of rawTris) {
+    const [cx, cy, cz] = f.c;
+    const invSpan = 0.5 / f.span;
+    for (let k = 0; k < f.verts.length; k++) {
+      const A = f.verts[k];
+      const B = f.verts[(k + 1) % f.verts.length];
+      const tri = [[cx, cy, cz, 1.0], [A[0], A[1], A[2], 0.0], [B[0], B[1], B[2], 0.0]];
+      for (const [vx, vy, vz, ed] of tri) {
+        pos.push(vx * scale, vy * scale, vz * scale);
+        nrm.push(f.n[0], f.n[1], f.n[2]);
+        const du = (vx - cx) * f.t1[0] + (vy - cy) * f.t1[1] + (vz - cz) * f.t1[2];
+        const dv = (vx - cx) * f.t2[0] + (vy - cy) * f.t2[1] + (vz - cz) * f.t2[2];
+        uvs.push(0.5 + du * invSpan, 0.5 + dv * invSpan);
+        edgeD.push(ed);
+        kinds.push(holoKindVal);
+      }
+    }
+  }
+
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nrm), 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
+  g.setAttribute('aEdgeDist', new THREE.BufferAttribute(new Float32Array(edgeD), 1));
+  g.setAttribute('aHoloKind', new THREE.BufferAttribute(new Float32Array(kinds), 1));
+  return g;
+}
+
+function makeArchimedeanGeometryByName(kindName) {
+  const cubeN = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+  const s3 = 1 / Math.sqrt(3);
+  const s2 = Math.SQRT1_2;
+  const octN = [];
+  for (const sx of [-1, 1]) {
+    for (const sy of [-1, 1]) {
+      for (const sz of [-1, 1]) octN.push([sx * s3, sy * s3, sz * s3]);
+    }
+  }
+  if (kindName === 'truncated_octahedron') {
+    return buildArchimedeanSolidGeometry([
+      ...cubeN.map((n) => [...n, 2.0]),
+      ...octN.map((n) => [...n, Math.sqrt(3)]),
+    ], 2.0);
+  }
+  if (kindName === 'rhombicuboctahedron') {
+    const edgeN = [];
+    for (const a of [-1, 1]) {
+      for (const b of [-1, 1]) {
+        edgeN.push([a * s2, b * s2, 0], [0, a * s2, b * s2], [a * s2, 0, b * s2]);
+      }
+    }
+    const r = 1 + Math.SQRT2;
+    return buildArchimedeanSolidGeometry([
+      ...cubeN.map((n) => [...n, r]),
+      ...edgeN.map((n) => [...n, r]),
+      ...octN.map((n) => [...n, (3 + Math.SQRT2) * s3]),
+    ], 2.0);
+  }
+  // Default Archimedean: Cuboctahedron (8 equilateral triangles + 6 squares)
+  return buildArchimedeanSolidGeometry([
+    ...cubeN.map((n) => [...n, 1.0]),
+    ...octN.map((n) => [...n, 2 * s3]),
+  ], 2.0);
+}
+
+/** Parametric (2, 3) Trefoil Torus-Knot 3D Holographic Sculpture (`FrontSide`, `aHoloKind = 3`). */
+function buildTrefoilHoloGeometry() {
+  const segU = 76;
+  const segV = 8;
+  const R = 0.28;
+  const rTube = 0.058;
+  const curvePt = (u) => {
+    const a = u * Math.PI * 2;
+    const r = R * (1.25 + 0.48 * Math.cos(3 * a));
+    return [
+      r * Math.cos(2 * a),
+      R * 0.62 * Math.sin(3 * a),
+      r * Math.sin(2 * a),
+    ];
+  };
+  const pos = [];
+  const nrm = [];
+  const uvs = [];
+  const edgeD = [];
+  const kinds = [];
+
+  const ring = (uIdx) => {
+    const u = uIdx / segU;
+    const p0 = curvePt(u);
+    const p1 = curvePt(u + 0.002);
+    let tx = p1[0] - p0[0], ty = p1[1] - p0[1], tz = p1[2] - p0[2];
+    const tl = Math.hypot(tx, ty, tz) || 1;
+    tx /= tl; ty /= tl; tz /= tl;
+    const up = Math.abs(ty) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+    let nx = up[1] * tz - up[2] * ty;
+    let ny = up[2] * tx - up[0] * tz;
+    let nz = up[0] * ty - up[1] * tx;
+    const nl = Math.hypot(nx, ny, nz) || 1;
+    nx /= nl; ny /= nl; nz /= nl;
+    const bx = ty * nz - tz * ny;
+    const by = tz * nx - tx * nz;
+    const bz = tx * ny - ty * nx;
+    const pts = [];
+    for (let vIdx = 0; vIdx <= segV; vIdx++) {
+      const v = vIdx / segV;
+      const phi = v * Math.PI * 2;
+      const cs = Math.cos(phi), sn = Math.sin(phi);
+      const ox = nx * cs + bx * sn;
+      const oy = ny * cs + by * sn;
+      const oz = nz * cs + bz * sn;
+      pts.push({
+        p: [p0[0] + ox * rTube, p0[1] + oy * rTube, p0[2] + oz * rTube],
+        n: [ox, oy, oz],
+        u,
+        v,
+        ed: Math.abs(Math.sin(phi)),
+      });
+    }
+    return pts;
+  };
+
+  for (let i = 0; i < segU; i++) {
+    const r0 = ring(i);
+    const r1 = ring(i + 1);
+    for (let j = 0; j < segV; j++) {
+      const a = r0[j], b = r1[j], c = r1[j + 1], d = r0[j + 1];
+      for (const vtx of [a, b, c, a, c, d]) {
+        pos.push(vtx.p[0], vtx.p[1], vtx.p[2]);
+        nrm.push(vtx.n[0], vtx.n[1], vtx.n[2]);
+        uvs.push(vtx.u, vtx.v);
+        edgeD.push(vtx.ed);
+        kinds.push(3.0);
+      }
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nrm), 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
+  g.setAttribute('aEdgeDist', new THREE.BufferAttribute(new Float32Array(edgeD), 1));
+  g.setAttribute('aHoloKind', new THREE.BufferAttribute(new Float32Array(kinds), 1));
+  return g;
+}
+
+/** Gyroscopic 3-Ring Orbital Astrolabe + Archimedean Core (`FrontSide`, `aHoloKind = 3`). */
+function buildAstrolabeHoloGeometry() {
+  const parts = [];
+  const ringSpecs = [
+    { r: 0.45, tube: 0.024, rx: 0.32, rz: 0.12 },
+    { r: 0.36, tube: 0.022, rx: -0.92, rz: 0.68 },
+    { r: 0.27, tube: 0.020, rx: 1.18, rz: -0.54 },
+  ];
+  for (const rs of ringSpecs) {
+    const tg = new THREE.TorusGeometry(rs.r, rs.tube, 8, 36).toNonIndexed();
+    tg.rotateX(rs.rx);
+    tg.rotateZ(rs.rz);
+    const cnt = tg.getAttribute('position').count;
+    const uvAttr = tg.getAttribute('uv');
+    const ed = new Float32Array(cnt);
+    const kd = new Float32Array(cnt).fill(3.0);
+    for (let i = 0; i < cnt; i++) {
+      ed[i] = Math.abs(Math.sin(uvAttr.getY(i) * Math.PI * 2));
+    }
+    tg.setAttribute('aEdgeDist', new THREE.BufferAttribute(ed, 1));
+    tg.setAttribute('aHoloKind', new THREE.BufferAttribute(kd, 1));
+    parts.push(tg);
+  }
+  const core = makeArchimedeanGeometryByName('cuboctahedron');
+  core.scale(0.34, 0.34, 0.34);
+  parts.push(core);
+
+  let totalV = 0;
+  for (const pt of parts) totalV += pt.getAttribute('position').count;
+  const pos = new Float32Array(totalV * 3);
+  const nrm = new Float32Array(totalV * 3);
+  const uvs = new Float32Array(totalV * 2);
+  const ed = new Float32Array(totalV);
+  const kd = new Float32Array(totalV);
+  let off = 0;
+  for (const pt of parts) {
+    const cnt = pt.getAttribute('position').count;
+    pos.set(pt.getAttribute('position').array, off * 3);
+    nrm.set(pt.getAttribute('normal').array, off * 3);
+    uvs.set(pt.getAttribute('uv').array, off * 2);
+    ed.set(pt.getAttribute('aEdgeDist').array, off);
+    kd.set(pt.getAttribute('aHoloKind').array, off);
+    off += cnt;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  g.setAttribute('aEdgeDist', new THREE.BufferAttribute(ed, 1));
+  g.setAttribute('aHoloKind', new THREE.BufferAttribute(kd, 1));
+  return g;
+}
+
+function tagHoloGeometry(geo, holoKindVal) {
+  const ni = geo.index ? geo.toNonIndexed() : geo;
+  const cnt = ni.getAttribute('position').count;
+  const ed = new Float32Array(cnt).fill(0.5);
+  const kd = new Float32Array(cnt).fill(holoKindVal);
+  ni.setAttribute('aEdgeDist', new THREE.BufferAttribute(ed, 1));
+  ni.setAttribute('aHoloKind', new THREE.BufferAttribute(kd, 1));
+  return ni;
+}
+
+/**
+ * Holographic projections — single-sided (`FrontSide`) pyramid/cone projection
+ * planes, Archimedean 3D polyhedra (`cuboctahedron`, `truncated_octahedron`,
+ * `rhombicuboctahedron`), abstract 3D sculptures (`trefoil_knot`, `astrolabe`),
+ * and outer stadium crowns — with wide scale variation & live density control!
+ */
+export function buildHolos(city, holoMat, beamMat, opts = {}) {
   const group = new THREE.Group();
   const uRef = holoMat && holoMat.uniforms ? holoMat.uniforms : null;
   const podMat = makeCurvedBasicMaterial(uRef, '#232b3a');
   const lensMat = makeCurvedBasicMaterial(uRef, '#7bf2ff');
+
+  const baseHolos = Array.isArray(city.holos) ? city.holos : [];
+  const extraHolos = Array.isArray(city.extraHolos) ? city.extraHolos : [];
+  const allHolos = baseHolos.concat(extraHolos);
+  const baseCount = baseHolos.length;
+
+  const ARCH_BUCKETS = [
+    'panel', 'disc', 'cuboctahedron', 'truncated_octahedron',
+    'rhombicuboctahedron', 'trefoil_knot', 'astrolabe', 'cylinder',
+  ];
+  const bucketItems = new Map();
+  for (const k of ARCH_BUCKETS) bucketItems.set(k, []);
+
   const podBoxes = [];
   const lensBoxes = [];
-  const panels = [];
-  const drums = [];
-  for (const H of city.holos) {
-    if (H.kind === 'cylinder') drums.push(H);
-    else if (H.kind === 'portal') {
-      panels.push(H);
-      panels.push({ ...H, rot: H.rot + Math.PI * 0.5, seed: (H.seed + 0.41) % 1 });
-    } else {
-      panels.push(H);
-    }
-    // Physical Holo-Projector Emitter Rig + Volumetric Optical Frustum terminating directly on H!
+  const frustumMeshes = [];
+
+  for (let idx = 0; idx < allHolos.length; idx++) {
+    const H = allHolos[idx];
+    // Never create crossed double-planes: map any legacy 'portal' to 'truncated_octahedron'
+    let kind = H.kind || 'panel';
+    if (kind === 'portal') kind = 'truncated_octahedron';
+    if (!bucketItems.has(kind)) kind = 'panel';
+
+    const scMul = Math.max(0.20, Number.isFinite(H.scaleMul) ? H.scaleMul : 1.0);
+    const effW = (H.w || 42) * scMul;
+    const effH = (H.h || 30) * scMul;
+    const isPlanar = (kind === 'panel' || kind === 'disc');
+    const is3DSolid = !isPlanar && kind !== 'cylinder';
+
     const rot = H.rot || 0;
     const nrmX = Math.sin(rot);
     const nrmZ = Math.cos(rot);
-    const standOff = (H.kind === 'cylinder' || H.kind === 'portal') ? 0.0 : Math.min(19.0, Math.max(7.5, (H.w || 24) * 0.36));
-    const ey = Math.max(2.2, Math.min(H.y - (H.h || 18) * 0.62, H.baseY !== undefined ? H.baseY + 1.2 : H.y - (H.h || 18) * 0.95));
+    // Planar pyramid/cone projections place the emitter BEHIND and below the single FrontSide plane
+    // so emitter -> slanted frustum -> single projection plane form one outward-facing pyramid/cone!
+    const standOff = isPlanar ? -Math.min(28.0, Math.max(7.5, effW * 0.42)) : 0.0;
+    const ey = Math.max(2.2, Math.min(H.y - effH * 0.58, H.baseY !== undefined ? H.baseY + 1.2 : H.y - effH * 0.92));
     const ex = H.x + nrmX * standOff;
     const ez = H.z + nrmZ * standOff;
 
+    const frustumShape = kind === 'panel' ? 'pyramid' : (kind === 'disc' ? 'circle' : 'vertical');
+    const gateSpec = {
+      x: H.x,
+      y: is3DSolid ? (H.y - effH * 0.14) : H.y,
+      z: H.z,
+      w: is3DSolid ? Math.min(effW, effH) * 0.92 : effW,
+      h: is3DSolid ? Math.min(effW, effH) * 0.92 : effH,
+      rot,
+      frustumShape,
+    };
+
     const tint = (H.seed || 0) > 0.58 ? [0.98, 0.38, 0.78] : [0.34, 0.90, 1.0];
-    const frustum = new THREE.Mesh(projectorFrustumGeometry(ex, ey, ez, H, H.seed || 0, tint), beamMat);
+    const frustum = new THREE.Mesh(projectorFrustumGeometry(ex, ey, ez, gateSpec, H.seed || 0, tint), beamMat);
     frustum.frustumCulled = false;
     group.add(frustum);
-    if (H.kind === 'portal') {
-      const frustumB = new THREE.Mesh(
-        projectorFrustumGeometry(ex, ey, ez, { ...H, rot: rot + Math.PI * 0.5 }, ((H.seed || 0) + 0.41) % 1, [0.98, 0.42, 0.80]),
-        beamMat
-      );
-      frustumB.frustumCulled = false;
-      group.add(frustumB);
-    }
+    frustumMeshes.push(frustum);
+
     podBoxes.push({ x: ex, y: ey - 0.55, z: ez, rot });
     lensBoxes.push({ x: ex, y: ey + 0.08, z: ez, rot });
+    bucketItems.get(kind).push({ H, globalIdx: idx, effW, effH, is3DSolid, kind });
   }
 
   const yAxis = new THREE.Vector3(0, 1, 0);
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
+  const eEuler = new THREE.Euler(0, 0, 0, 'YXZ');
   const p = new THREE.Vector3();
   const s = new THREE.Vector3();
 
+  let podMesh = null;
+  let lensMesh = null;
   if (podBoxes.length) {
     const podGeo = new THREE.BoxGeometry(2.8, 1.3, 2.8);
-    const podMesh = new THREE.InstancedMesh(podGeo, podMat, podBoxes.length);
+    podMesh = new THREE.InstancedMesh(podGeo, podMat, podBoxes.length);
     podMesh.frustumCulled = false;
     const lensGeo = new THREE.CylinderGeometry(0.68, 0.88, 0.42, 12);
-    const lensMesh = new THREE.InstancedMesh(lensGeo, lensMat, lensBoxes.length);
+    lensMesh = new THREE.InstancedMesh(lensGeo, lensMat, lensBoxes.length);
     lensMesh.frustumCulled = false;
     for (let i = 0; i < podBoxes.length; i++) {
       const pb = podBoxes[i];
@@ -4459,43 +5182,92 @@ export function buildHolos(city, holoMat, beamMat) {
     group.add(lensMesh);
   }
 
-  if (panels.length) {
-    const pGeo = new THREE.BoxGeometry(1, 1, 1);
-    const pSeeds = new Float32Array(panels.length);
-    const pMesh = new THREE.InstancedMesh(pGeo, holoMat, panels.length);
-    pMesh.frustumCulled = false;
-    for (let i = 0; i < panels.length; i++) {
-      const H = panels[i];
-      p.set(H.x, H.y, H.z);
-      q.setFromAxisAngle(yAxis, H.rot);
-      s.set(H.w, H.h, 2.2);
-      m.compose(p, q, s);
-      pMesh.setMatrixAt(i, m);
-      pSeeds[i] = H.seed;
+  const bucketMeshes = [];
+  const makeBucketGeo = (kind) => {
+    if (kind === 'panel') return tagHoloGeometry(new THREE.PlaneGeometry(1, 1), 0.0);
+    if (kind === 'disc') return tagHoloGeometry(new THREE.PlaneGeometry(1, 1), 1.0);
+    if (kind === 'cuboctahedron' || kind === 'truncated_octahedron' || kind === 'rhombicuboctahedron') {
+      return makeArchimedeanGeometryByName(kind);
     }
-    pMesh.instanceMatrix.needsUpdate = true;
-    pGeo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(pSeeds, 1));
-    group.add(pMesh);
+    if (kind === 'trefoil_knot') return buildTrefoilHoloGeometry();
+    if (kind === 'astrolabe') return buildAstrolabeHoloGeometry();
+    // 'cylinder' open outer ring (FrontSide outward normals!)
+    return tagHoloGeometry(new THREE.CylinderGeometry(0.5, 0.5, 1, 24, 1, true), 4.0);
+  };
+
+  for (const kind of ARCH_BUCKETS) {
+    const entries = bucketItems.get(kind);
+    if (!entries || !entries.length) continue;
+    const geo = makeBucketGeo(kind);
+    const seeds = new Float32Array(entries.length);
+    const inst = new THREE.InstancedMesh(geo, holoMat, entries.length);
+    inst.frustumCulled = false;
+    for (let i = 0; i < entries.length; i++) {
+      const { H, effW, effH, is3DSolid } = entries[i];
+      p.set(H.x, H.y, H.z);
+      if (kind === 'disc') {
+        // Slight backward/upward tilt so conical disc faces both avenue & aerial traffic
+        eEuler.set(-0.22, H.rot || 0, 0, 'YXZ');
+        q.setFromEuler(eEuler);
+        const dSize = Math.min(effW, effH * 1.25);
+        s.set(dSize, dSize, 1);
+      } else if (kind === 'panel') {
+        q.setFromAxisAngle(yAxis, H.rot || 0);
+        s.set(effW, effH, 1);
+      } else if (is3DSolid) {
+        q.setFromAxisAngle(yAxis, H.rot || 0);
+        const solidDiam = Math.min(effW * 0.92, effH * 1.18);
+        s.set(solidDiam, solidDiam, solidDiam);
+      } else {
+        q.setFromAxisAngle(yAxis, H.rot || 0);
+        s.set(effW * 0.72, effH, effW * 0.72);
+      }
+      m.compose(p, q, s);
+      inst.setMatrixAt(i, m);
+      seeds[i] = H.seed || 0;
+    }
+    inst.instanceMatrix.needsUpdate = true;
+    geo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seeds, 1));
+    group.add(inst);
+    bucketMeshes.push({ kind, inst, entries });
   }
 
-  if (drums.length) {
-    const dGeo = new THREE.CylinderGeometry(0.5, 0.5, 1, 24, 1, true);
-    const dSeeds = new Float32Array(drums.length);
-    const dMesh = new THREE.InstancedMesh(dGeo, holoMat, drums.length);
-    dMesh.frustumCulled = false;
-    for (let i = 0; i < drums.length; i++) {
-      const H = drums[i];
-      p.set(H.x, H.y, H.z);
-      q.setFromAxisAngle(yAxis, H.rot);
-      s.set(H.w * 0.72, H.h, H.w * 0.72);
-      m.compose(p, q, s);
-      dMesh.setMatrixAt(i, m);
-      dSeeds[i] = H.seed;
+  let curDensity = opts.density !== undefined ? Number(opts.density) : 1.0;
+  function setHoloDensity(densityVal = 1.0) {
+    curDensity = Math.max(0, Math.min(2.5, Number.isFinite(Number(densityVal)) ? Number(densityVal) : 1.0));
+    let activeTotal = 0;
+    if (curDensity <= 0.005) {
+      activeTotal = 0;
+    } else if (curDensity <= 1.0) {
+      activeTotal = Math.round(baseCount * curDensity);
+    } else {
+      activeTotal = Math.round(baseCount + extraHolos.length * Math.min(1, (curDensity - 1.0) / 1.5));
     }
-    dMesh.instanceMatrix.needsUpdate = true;
-    dGeo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(dSeeds, 1));
-    group.add(dMesh);
+    activeTotal = Math.max(0, Math.min(allHolos.length, activeTotal));
+    group.visible = activeTotal > 0;
+    if (podMesh) podMesh.count = activeTotal;
+    if (lensMesh) lensMesh.count = activeTotal;
+    for (let i = 0; i < frustumMeshes.length; i++) {
+      frustumMeshes[i].visible = i < activeTotal;
+    }
+    for (const bm of bucketMeshes) {
+      let cCount = 0;
+      for (let i = 0; i < bm.entries.length; i++) {
+        if (bm.entries[i].globalIdx < activeTotal) cCount = i + 1;
+      }
+      bm.inst.count = cCount;
+      bm.inst.visible = cCount > 0;
+    }
+    group.userData.activeHoloCount = activeTotal;
+    return activeTotal;
   }
+
+  setHoloDensity(curDensity);
+  group.setHoloDensity = setHoloDensity;
+  group.userData.setHoloDensity = setHoloDensity;
+  group.userData.baseHoloCount = baseCount;
+  group.userData.maxHoloCount = allHolos.length;
+  group.userData.allHolos = allHolos;
   return group;
 }
 
@@ -5378,7 +6150,11 @@ export function applyLook(U, look, tune = { win: 1, glow: 1, fog: 1 }) {
   if (tune.megaWrap !== undefined && U.uMegaWrap) U.uMegaWrap.value = tune.megaWrap;
   if (tune.glyphStyle !== undefined && U.uGlyphStyle) U.uGlyphStyle.value = tune.glyphStyle;
   if (tune.signAnim !== undefined && U.uSignAnim) U.uSignAnim.value = tune.signAnim;
+  if (tune.holoScale !== undefined && U.uHoloScale) U.uHoloScale.value = tune.holoScale;
+  if (tune.holoScan !== undefined && U.uHoloScan) U.uHoloScan.value = tune.holoScan;
   if (tune.vehLight !== undefined && U.uVehLight) U.uVehLight.value = tune.vehLight;
+  if (tune.trailMode !== undefined && U.uTrailMode) U.uTrailMode.value = tune.trailMode;
+  if (tune.trailLength !== undefined && U.uTrailLen) U.uTrailLen.value = tune.trailLength;
   if (tune.clouds !== undefined) {
     const clTune = Math.max(0, tune.clouds);
     const baseCloud = (look.sky.cloud === 0 && clTune > 1.02) ? 0.34 : look.sky.cloud;
@@ -5642,7 +6418,11 @@ export function applyTime(U, look, hours = 12, tune = { lights: 1, glow: 1 }) {
   if (tune.megaWrap !== undefined && U.uMegaWrap) U.uMegaWrap.value = tune.megaWrap;
   if (tune.glyphStyle !== undefined && U.uGlyphStyle) U.uGlyphStyle.value = tune.glyphStyle;
   if (tune.signAnim !== undefined && U.uSignAnim) U.uSignAnim.value = tune.signAnim;
+  if (tune.holoScale !== undefined && U.uHoloScale) U.uHoloScale.value = tune.holoScale;
+  if (tune.holoScan !== undefined && U.uHoloScan) U.uHoloScan.value = tune.holoScan;
   if (tune.vehLight !== undefined && U.uVehLight) U.uVehLight.value = tune.vehLight;
+  if (tune.trailMode !== undefined && U.uTrailMode) U.uTrailMode.value = tune.trailMode;
+  if (tune.trailLength !== undefined && U.uTrailLen) U.uTrailLen.value = tune.trailLength;
   U.uHaze.value = look.sky.haze * (tune.haze ?? 1);
   U.uSunGlow.value = 0.65 * (tune.sun ?? 1) * Math.max(0.08, 0.6 + cur.warm * 0.8 + cur.night * 0.1 - cur.deep * 0.15 + dDay * 0.25);
   U.uSat.value = isMono ? 0 : (tune.sat ?? 1) * (1 + cur.warm * 0.12);
@@ -6000,11 +6780,11 @@ export function buildBridges(city, U, beaconMat = null, lampMat = null) {
   return group;
 }
 
-export function buildHarbor(city, U, beaconMat = null, lampMat = null) {
+export function buildHarbor(city, U, beaconMat = null, lampMat = null, opts = {}) {
   const group = new THREE.Group();
   const H = city.harbor;
   if (!H) {
-    return { group, ships: [], update() {}, setLook() {} };
+    return { group, ships: [], update() {}, setLook() {}, setTrailConfig() {} };
   }
 
   const quayMat = makeLandmarkMaterial(U, '#3e4654', 0);
@@ -6297,6 +7077,24 @@ export function buildHarbor(city, U, beaconMat = null, lampMat = null) {
       wakes[wIdx].set(0, 0, 0, 0);
     }
   }
+  let harborTrailMode = opts.trailMode !== undefined ? (opts.trailMode | 0) : 1;
+  let harborTrailLen = opts.trailLength !== undefined ? Number(opts.trailLength) : 1.0;
+  let harborRibbon = null;
+  const movingShipCount = activeShips.filter((s) => !s.spec.docked).length;
+  const ribbonTotal = movingShipCount + boatMeshes.length;
+  if (opts.ribbonTrailMat && ribbonTotal > 0) {
+    harborRibbon = createTrailRibbonBatch(opts.ribbonTrailMat, ribbonTotal, 14);
+    group.add(harborRibbon.mesh);
+  }
+
+  const wakeCol = new THREE.Color('#52e8ff');
+  const boatCol = new THREE.Color('#ffd894');
+  function syncHarborRibbonPalette(look) {
+    const isMonoHarbor = !!(look && look.signals && look.signals.billMono > 0.5);
+    wakeCol.set(isMonoHarbor ? '#d8d8d8' : ((look && look.accent) || '#52e8ff'));
+    boatCol.set(isMonoHarbor ? '#b6b6b6' : ((look && look.signals && look.signals.lamp) || '#ffd894'));
+  }
+
   function update(dt) {
     elapsed += dt;
     for (let i = 0; i < boatMeshes.length; i++) {
@@ -6328,8 +7126,49 @@ export function buildHarbor(city, U, beaconMat = null, lampMat = null) {
       }
     }
     syncShipWakes();
+
+    // Maritime luminous stern trails (active in 'Air, Rail, Ships & Rockets' mode 3 or 'All Moving Objects' mode 5)
+    if (harborRibbon) {
+      const on = (harborTrailMode === 3 || harborTrailMode === 5) && harborTrailLen > 0.01;
+      if (!on) {
+        harborRibbon.resetAll();
+      } else {
+        harborRibbon.beginFrame();
+        const stepM = Math.max(2.0, 5.5 * Math.min(2.4, harborTrailLen));
+        let rIdx = 0;
+        for (let i = 0; i < activeShips.length; i++) {
+          const { spec, mesh } = activeShips[i];
+          if (spec.docked) continue;
+          const yaw = mesh.rotation.y;
+          const sternDist = (spec.len || 120) * 0.46;
+          const sx = mesh.position.x - Math.sin(yaw) * sternDist;
+          const sz = mesh.position.z - Math.cos(yaw) * sternDist;
+          const sy = Math.max(0.8, mesh.position.y + 1.2);
+          const hw = Math.max(3.2, (spec.wid || 22) * 0.28);
+          harborRibbon.emitRibbon(rIdx++, sx, sy, sz, hw, wakeCol.r, wakeCol.g, wakeCol.b, 2.0, stepM, 260);
+        }
+        if (harborTrailMode === 5) {
+          for (let i = 0; i < boatMeshes.length; i++) {
+            const bm = boatMeshes[i].mesh;
+            const bx = bm.position.x + Math.sin(elapsed * 0.9 + i) * 1.4;
+            const bz = bm.position.z + Math.cos(elapsed * 0.9 + i) * 1.4;
+            const by = Math.max(0.7, bm.position.y + 0.5);
+            harborRibbon.emitRibbon(rIdx++, bx, by, bz, 1.3, boatCol.r, boatCol.g, boatCol.b, 2.0, 1.2, 80);
+          }
+        }
+        harborRibbon.endFrame();
+      }
+    }
   }
   syncShipWakes();
+
+  function setTrailConfig(mode, lengthMul = 1.0) {
+    harborTrailMode = Math.max(0, Math.min(5, mode | 0));
+    harborTrailLen = Math.max(0, Number(lengthMul) || 0);
+    if (harborRibbon && !((harborTrailMode === 3 || harborTrailMode === 5) && harborTrailLen > 0.01)) {
+      harborRibbon.resetAll();
+    }
+  }
 
   function setLook(look) {
     const pal = computeSpecialPalette(look, U, 0.48);
@@ -6339,16 +7178,17 @@ export function buildHarbor(city, U, beaconMat = null, lampMat = null) {
     sandWetMat.uniforms.uCol.value.copy(pal.pad).lerp(col('#9a8460'), 0.62);
     deckGlowMat.color.set((look && look.signals && look.signals.lamp) || '#ffe1a6');
     glassPoolMat.color.set((look && look.accent) || '#4ad8ff');
+    syncHarborRibbonPalette(look);
   }
 
-  return { group, ships: activeShips, update, setLook };
+  return { group, ships: activeShips, update, setLook, setTrailConfig, ribbonBatch: harborRibbon };
 }
 
-export function buildSpaceport(city, U, beaconMat = null, lampMat = null, beamMat = null) {
+export function buildSpaceport(city, U, beaconMat = null, lampMat = null, beamMat = null, opts = {}) {
   const group = new THREE.Group();
   const SP = city.spaceport;
   if (!SP) {
-    return { group, update() {}, setLook() {} };
+    return { group, update() {}, setLook() {}, setTrailConfig() {} };
   }
 
   const apronMat = makeLandmarkMaterial(U, '#1c212b', 0);
@@ -6558,10 +7398,34 @@ export function buildSpaceport(city, U, beaconMat = null, lampMat = null, beamMa
 
   group.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
 
+  let spTrailMode = opts.trailMode !== undefined ? (opts.trailMode | 0) : 1;
+  let spTrailLen = opts.trailLength !== undefined ? Number(opts.trailLength) : 1.0;
+  let spRibbon = null;
+  const spRibbonSlots = flightItems.length + (launchRocket ? 1 : 0);
+  if (opts.ribbonTrailMat && spRibbonSlots > 0) {
+    spRibbon = createTrailRibbonBatch(opts.ribbonTrailMat, spRibbonSlots, 16);
+    group.add(spRibbon.mesh);
+  }
+
+  const shuttleCol = new THREE.Color('#53d9ff');
+  const rocketCol = new THREE.Color('#ffac42');
+  function syncSpaceportRibbonPalette(look) {
+    const isMonoSp = !!(look && look.signals && look.signals.billMono > 0.5);
+    shuttleCol.set(isMonoSp ? '#e2e2e2' : ((look && look.accent) || '#53d9ff'));
+    rocketCol.set(isMonoSp ? '#ffffff' : '#ffac42');
+  }
+
   let elapsed = 0;
   function update(dt) {
     elapsed += dt;
     radarDish.rotation.y = elapsed * 0.85;
+
+    const spTrailOn = (spTrailMode === 2 || spTrailMode === 3 || spTrailMode === 5) && spTrailLen > 0.01;
+    const stepM = Math.max(3.5, 9.0 * Math.min(2.4, spTrailLen));
+    if (spRibbon) {
+      if (!spTrailOn) spRibbon.resetAll();
+      else spRibbon.beginFrame();
+    }
 
     // Suborbital shuttle runway traffic cycle
     for (let i = 0; i < flightItems.length; i++) {
@@ -6584,27 +7448,56 @@ export function buildSpaceport(city, U, beaconMat = null, lampMat = null, beamMa
       const cs = Math.cos(rw.rot), sn = Math.sin(rw.rot);
       mesh.position.set(rw.x + uAlong * cs, SP.y + alt, rw.z + uAlong * sn);
       mesh.rotation.set(pitch, Math.atan2(cs, sn), 0, 'YXZ');
+
+      if (spRibbon && spTrailOn) {
+        const tailX = mesh.position.x - cs * 14 * (spec.scale || 1);
+        const tailZ = mesh.position.z - sn * 14 * (spec.scale || 1);
+        const tailY = mesh.position.y + 1.2;
+        const hw = 4.2 * (spec.scale || 1);
+        spRibbon.emitRibbon(i, tailX, tailY, tailZ, hw, shuttleCol.r, shuttleCol.g, shuttleCol.b, 3.0, stepM, 380);
+      }
     }
 
     // Periodic Orbital Rocket Launch & Precision Landing Cycle (90s period)
     if (launchRocket && launchPlume) {
       const rCyc = (elapsed % 90) / 90;
+      let rocketActive = false;
       if (rCyc > 0.18 && rCyc < 0.56) {
         // Liftoff & accelerating orbital ascent!
         const f = (rCyc - 0.18) / 0.38;
         launchRocket.position.y = launchBaseY + Math.pow(f, 2.3) * 2600;
         launchPlume.visible = true;
         launchPlume.scale.set(1 + Math.sin(elapsed * 28) * 0.12, 0.9 + f * 1.4, 1 + Math.cos(elapsed * 24) * 0.12);
+        rocketActive = true;
       } else if (rCyc >= 0.72 && rCyc < 0.92) {
         // Retro-propulsive vertical landing burn back onto Pad 1!
         const f = 1 - (rCyc - 0.72) / 0.20;
         launchRocket.position.y = launchBaseY + Math.pow(f, 1.8) * 900;
         launchPlume.visible = f > 0.02;
         launchPlume.scale.set(0.75, 0.65 + f * 0.5, 0.75);
+        rocketActive = f > 0.02;
       } else {
         launchRocket.position.y = launchBaseY;
         launchPlume.visible = false;
       }
+
+      if (spRibbon && spTrailOn && rocketActive) {
+        const slot = flightItems.length;
+        const rx = launchRocket.position.x;
+        const ry = Math.max(SP.y + 4, launchRocket.position.y - 18);
+        const rz = launchRocket.position.z;
+        spRibbon.emitRibbon(slot, rx, ry, rz, 6.2, rocketCol.r, rocketCol.g, rocketCol.b, 3.0, stepM * 1.2, 420);
+      }
+    }
+
+    if (spRibbon && spTrailOn) spRibbon.endFrame();
+  }
+
+  function setTrailConfig(mode, lengthMul = 1.0) {
+    spTrailMode = Math.max(0, Math.min(5, mode | 0));
+    spTrailLen = Math.max(0, Number(lengthMul) || 0);
+    if (spRibbon && !((spTrailMode === 2 || spTrailMode === 3 || spTrailMode === 5) && spTrailLen > 0.01)) {
+      spRibbon.resetAll();
     }
   }
 
@@ -6613,9 +7506,10 @@ export function buildSpaceport(city, U, beaconMat = null, lampMat = null, beamMa
     termMat.uniforms.uCol.value.copy(pal.gallery);
     metalMat.uniforms.uCol.value.copy(pal.secondary).lerp(col('#9aa6b8'), 0.45);
     edgeGlowMat.color.set((look && look.accent) || '#53d9ff');
+    syncSpaceportRibbonPalette(look);
   }
 
-  return { group, update, setLook };
+  return { group, update, setLook, setTrailConfig, ribbonBatch: spRibbon };
 }
 
 /**

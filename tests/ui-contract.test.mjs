@@ -339,6 +339,29 @@ test('Phase-19 UI contract: landmark destination routing at current speed, cinem
   }
 });
 
+test('Phase-20 UI contract: hologram projection density/scale/scanlines, moving-object trails mode/length & WebMCP exposure', () => {
+  const webmcp = readFileSync(join(root, 'src', 'webmcp.js'), 'utf8');
+  for (const id of [
+    'sel-trail-mode', 'sl-trail-len', 'trail-len-label',
+    'sl-holo-density', 'holo-density-label',
+    'sl-holo-scale', 'holo-scale-label',
+    'sl-holo-scan', 'holo-scan-label',
+  ]) {
+    assert.ok(html.includes(`id="${id}"`), `#${id} exists in index.html`);
+  }
+
+  for (const v of ['0', '1', '2', '3', '4', '5']) {
+    assert.match(html, new RegExp(`<select[^>]*id="sel-trail-mode"[\\s\\S]*?<option[^>]*value="${v}"`), `#sel-trail-mode includes option value="${v}"`);
+  }
+  assert.match(html, /id="sl-holo-density"[^>]*min="0"[^>]*max="2\.5"/, '#sl-holo-density spans 0 (off) .. 2.5 (dense)');
+  assert.match(html, /id="sl-trail-len"[^>]*min="0"[^>]*max="2\.5"/, '#sl-trail-len spans 0 (off) .. 2.5');
+
+  for (const key of ['trailMode', 'trailLength', 'holoDensity', 'holoScale', 'holoScan', 'cuboctahedron', 'knot']) {
+    assert.ok(webmcp.includes(key), `src/webmcp.js exposes "${key}"`);
+  }
+});
+
+
 
 
 
