@@ -401,6 +401,11 @@ button.icon-btn.rec-on, button.action.rec-on {
 .minimap-bar .mini-btn:hover {
   background: rgba(255, 255, 255, 0.16);
 }
+.minimap-bar .mini-btn.on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 20%, rgba(255, 255, 255, 0.06));
+}
 
 #radio-wrap {
   margin: 2px 0 7px;
@@ -614,7 +619,9 @@ button.icon-btn.rec-on, button.action.rec-on {
         <div id="minimap-wrap">
           <canvas id="minimap" width="276" height="176" aria-label="Interactive city minimap showing editable autopilot loop, sites, and recorded camera path"></canvas>
           <div class="minimap-bar">
-            <span id="minimap-label">Drag loop · Click line +pt · Right-click del</span>
+            <span id="minimap-label">Click map to fly · Shift+click +stop</span>
+            <button id="b-minimap-follow" type="button" class="mini-btn" aria-pressed="false" aria-label="Follow or pause minimap flight path" title="Follow / pause active minimap Route or Loop (P)">&#x25B6;</button>
+            <button id="b-route-clear" type="button" class="mini-btn" aria-label="Clear dashed route or recorded path" title="Clear dashed destination route (or recorded path overlay)">&#x2715;</button>
             <button id="b-loop-add" type="button" class="mini-btn" aria-label="Insert autopilot loop waypoint ahead of camera" title="Insert autopilot loop waypoint at current camera position">&#xFF0B;</button>
             <button id="b-loop-reset" type="button" class="mini-btn" aria-label="Reset editable autopilot loop" title="Reset editable autopilot loop around city landmarks">&#x21BA;</button>
             <button id="b-minimap-zoom" type="button" class="mini-btn" aria-label="Cycle minimap zoom" title="Cycle minimap zoom (1× / 2× / 3.5×)">&#x2315;</button>

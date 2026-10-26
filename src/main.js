@@ -626,19 +626,51 @@ function boot() {
     if (!rawSpot) return;
     const spot = rawSpot.poi ? rawSpot.poi : rawSpot;
     director.stopCameraScript();
+    if (pathRecorder && pathRecorder.playing) {
+      pathRecorder.pause();
+      syncPathUI();
+    }
     fly = null; // never quick-jump teleport; route smoothly at current camera speed!
-    const dist = spot.kind === 'media' ? Math.max(190, (spot.r || 90) * 1.05) : Math.max(150, (spot.r || 32) * 3.2);
-    const away = new THREE.Vector3(camera.position.x - spot.x, 0, camera.position.z - spot.z);
-    if (away.lengthSq() < 1) away.set(1, 0, 1);
-    away.normalize().multiplyScalar(dist * 0.65);
+    if (camSpeed <= 0.005) {
+      camSpeed = 0.5;
+      controls.rampSpeedMultiplier(camSpeed);
+      $('#sl-camspeed').value = String(camSpeed);
+      syncFeatureLabels();
+    }
+
+    const isDirectMapPin = !!(opts.fromMinimap && !spot.kind);
     const terrAtTarget = cityCollider && cityCollider.groundHeightAt ? cityCollider.groundHeightAt(spot.x, spot.z) : 0;
-    const baseH = spot.h || spot.y || 65;
-    const cruiseY = Math.max(terrAtTarget + 44, terrAtTarget + baseH * 0.68 * heightScale + 26);
-    const lookY = terrAtTarget + baseH * 0.52 * heightScale;
-    const curved = bendWorldPoint(spot.x + away.x, cruiseY, spot.z + away.z, worldCurve, U.uPlanetR.value);
+    let targetX = spot.x;
+    let targetZ = spot.z;
+    let cruiseY;
+    let lookY;
+
+    if (isDirectMapPin) {
+      const roofNear = cityCollider && cityCollider.maxHeightNear
+        ? cityCollider.maxHeightNear(spot.x, spot.z, 18) * heightScale
+        : 0;
+      const keepAlt = Math.max(72, Math.min(260, camera.position.y));
+      cruiseY = Math.max(terrAtTarget + 56, roofNear + 34, keepAlt);
+      lookY = Math.max(terrAtTarget + 28, cruiseY - 26);
+    } else {
+      const dist = spot.kind === 'media' ? Math.max(190, (spot.r || 90) * 1.05) : Math.max(150, (spot.r || 32) * 3.2);
+      const away = new THREE.Vector3(camera.position.x - spot.x, 0, camera.position.z - spot.z);
+      if (away.lengthSq() < 1) away.set(1, 0, 1);
+      away.normalize().multiplyScalar(dist * 0.65);
+      targetX = spot.x + away.x;
+      targetZ = spot.z + away.z;
+      const baseH = spot.h || spot.y || 65;
+      cruiseY = Math.max(terrAtTarget + 44, terrAtTarget + baseH * 0.68 * heightScale + 26);
+      lookY = terrAtTarget + baseH * 0.52 * heightScale;
+    }
+
+    const curved = bendWorldPoint(targetX, cruiseY, targetZ, worldCurve, U.uPlanetR.value);
     const curvedLook = bendWorldPoint(spot.x, lookY, spot.z, worldCurve, U.uPlanetR.value);
 
-    const nStops = controls.enqueueWaypoint(
+    // Engage Autopilot BEFORE enqueueing so syncFromCamera() doesn't overwrite the queued course!
+    if (!glideOn) setGlideState(true, false);
+
+    const queued = controls.enqueueWaypoint(
       {
         name: spot.name || 'Map Pin',
         x: curved.x,
@@ -650,10 +682,11 @@ function boot() {
       },
       { append: !!opts.append, stopOnArrive: !!opts.stopOnArrive }
     );
-    if (!glideOn) setGlideState(true, false);
-    flash(opts.append && nStops > 1
-      ? `\u2708\uFE0E Route +Stop #${nStops} \u00B7 ${spot.name || 'Pin'}`
-      : `\u2708\uFE0E Destination \u2192 ${spot.name || 'Map Pin'}`);
+    const userStops = Array.isArray(queued) ? (queued.filter((q) => !q.via).length || queued.length) : 1;
+    persistStartingState();
+    flash(opts.append && userStops > 1
+      ? `\u2708\uFE0E Route +Stop #${userStops} \u00B7 ${spot.name || 'Map Pin'}`
+      : `\u2708\uFE0E Flying to \u2192 ${spot.name || 'Map Pin'}`);
   }
 
   controls.onRouteArrive = (wp) => {
@@ -785,6 +818,44 @@ function boot() {
 
   const minimapZooms = [1.0, 2.0, 3.5];
   let minimapZoomIdx = 0;
+  $('#b-minimap-follow').onclick = () => {
+    if (pathRecorder && pathRecorder.playing) {
+      pathRecorder.pause();
+      syncPathUI();
+    }
+    if (!glideOn) {
+      if (camSpeed <= 0.005) {
+        camSpeed = 0.5;
+        controls.rampSpeedMultiplier(camSpeed);
+        $('#sl-camspeed').value = String(camSpeed);
+        syncFeatureLabels();
+      }
+      setGlideState(true, false);
+      const nStops = controls.routeQueue.filter((q) => !q.via).length || controls.routeQueue.length;
+      flash(nStops > 0
+        ? `\u25B6 Following Route (${nStops} stop${nStops > 1 ? 's' : ''})`
+        : `\u25B6 Following Cyan Loop (${controls.autopilotLoop.length} pts)`);
+    } else {
+      setGlideState(false, false);
+      flash('\u23F8 Paused flight path (press \u25B6 or P to resume)');
+    }
+  };
+  $('#b-route-clear').onclick = () => {
+    if (controls.routeQueue.length > 0) {
+      controls.clearRoute();
+      if (controls.autopilotLoop.length >= 3) controls._syncNearestLoopParam(true);
+      flash(glideOn ? 'Cleared dashed Route \u00B7 Back on Cyan Loop' : 'Cleared dashed Route');
+      return;
+    }
+    if (pathRecorder && pathRecorder.frames && pathRecorder.frames.length > 0) {
+      pathRecorder.clear();
+      syncPathUI();
+      persistStartingState();
+      flash('Cleared recorded Gold camera path');
+      return;
+    }
+    flash('No dashed Route or recorded path to clear');
+  };
   $('#b-minimap-zoom').onclick = () => {
     minimapZoomIdx = (minimapZoomIdx + 1) % minimapZooms.length;
     const z = minimapZooms[minimapZoomIdx];
@@ -3103,13 +3174,25 @@ function boot() {
     b.classList.toggle('on', glideOn);
     b.setAttribute('aria-pressed', String(glideOn));
     b.title = (glideOn ? 'Stop' : 'Start') + ' Autopilot Loop Glide — drag to steer, wheel for speed (P)';
+    const bMapFollow = $('#b-minimap-follow');
+    if (bMapFollow) {
+      bMapFollow.textContent = glideOn ? '\u23F8' : '\u25B6';
+      bMapFollow.classList.toggle('on', glideOn);
+      bMapFollow.setAttribute('aria-pressed', String(glideOn));
+      bMapFollow.title = (glideOn ? 'Pause' : 'Follow') + ' active minimap Route or Cyan Loop (P)';
+    }
     persistStartingState();
     if (announce) {
       if (glideOn) {
-        const n = syncGlideNode();
-        flash(controls.autopilotLoop.length >= 3
-          ? `\u2708\uFE0E Autopilot Loop (${controls.autopilotLoop.length} pts)`
-          : (n ? `\u2708\uFE0E Glide · ${n.name}` : '\u2708\uFE0E Glide on'));
+        const nStops = controls.routeQueue.filter((q) => !q.via).length || controls.routeQueue.length;
+        if (nStops > 0) {
+          flash(`\u2708\uFE0E Following Route (${nStops} stop${nStops > 1 ? 's' : ''})`);
+        } else {
+          const n = syncGlideNode();
+          flash(controls.autopilotLoop.length >= 3
+            ? `\u2708\uFE0E Autopilot Loop (${controls.autopilotLoop.length} pts)`
+            : (n ? `\u2708\uFE0E Glide · ${n.name}` : '\u2708\uFE0E Glide on'));
+        }
       } else {
         flash('Glide off');
       }

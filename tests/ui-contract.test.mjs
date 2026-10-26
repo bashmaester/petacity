@@ -445,6 +445,8 @@ test('Phase-23 UI contract: Shift+Up/Down smooth speed steps (0.1 above 0.1, 0.0
   assert.match(main, /e\.shiftKey\s*&&\s*e\.key\s*===\s*'ArrowLeft'/, 'Shift+ArrowLeft goes to previous track');
   assert.match(html, /Speed up \/ slow down/, '#keys legend documents Shift+Up/Down speed control');
   assert.match(html, /Previous \/ next track/, '#keys legend documents Shift+Left/Right track control');
+  assert.ok(html.includes('id="b-minimap-follow"'), '#b-minimap-follow exists on minimap bar');
+  assert.ok(html.includes('id="b-route-clear"'), '#b-route-clear exists on minimap bar');
 });
 
 

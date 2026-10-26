@@ -483,9 +483,9 @@ export class FlyControls {
     const dz = spot.z - from.z;
     const dist = Math.hypot(dx, dz);
 
-    // For longer cross-city legs (> 520m), insert a smooth elevated mid-course arc waypoint
-    // above any intervening skyline ridge so the flight curves gracefully around/over blocks!
-    if (dist > 520) {
+    // For longer single-destination cross-city legs (> 520m), insert a smooth elevated mid-course arc waypoint
+    // above any intervening skyline ridge; skip auto-via when appending (`Shift+Click`) a manual multi-stop path!
+    if (!append && dist > 520) {
       const mx = from.x + dx * 0.5;
       const mz = from.z + dz * 0.5;
       let safeMidY = Math.max(from.y, destY, 135);
@@ -1532,21 +1532,44 @@ export class FlyControls {
       }
       activeAutopilotGoal = activeGoal;
 
+      const followingRoute = this.routeQueue.length > 0;
       if (activeGoal && (!manualSteeringKeys && (!this._drag || decoupled))) {
         const dx = activeGoal.x - p.x;
         const dy = activeGoal.y - p.y;
         const dz = activeGoal.z - p.z;
         const horiz = Math.hypot(dx, dz) || 1;
         const wantYaw = Math.atan2(-dx, -dz);
-        const avoidAtten = 1.0 - 0.72 * this._avoidActive;
-        const dYaw = wrapAngleDelta(wantYaw - this._targetMoveYaw);
-        const maxGlideTurn = (preset.glideTurnRate / Math.pow(turnK, 0.80)) * clampedDt * avoidAtten;
-        const stepYaw = Math.max(-maxGlideTurn, Math.min(maxGlideTurn, dYaw * 0.75));
-        this._targetMoveYaw += stepYaw;
-        if (!decoupled) this._targetYaw = this._targetMoveYaw;
+        const avoidAtten = followingRoute
+          ? (1.0 - 0.35 * this._avoidActive)
+          : (1.0 - 0.72 * this._avoidActive);
+        if (followingRoute) {
+          // Feed desired route heading directly into the critically-damped gimbal/course solver
+          // (avoids cascading two rate-limiters in series so the camera banks onto clicked routes in ~2.5s!)
+          const dMove = wrapAngleDelta(wantYaw - this.moveYaw) * avoidAtten;
+          this._targetMoveYaw = this.moveYaw + dMove;
+          if (!decoupled) this._targetYaw = this._targetMoveYaw;
+          const moveAlign = Math.abs(wrapAngleDelta(wantYaw - this.moveYaw));
+          const cruiseSpd = this.glideSpeed * spdMul;
+          if (moveAlign > 0.25 && cruiseSpd > 14) {
+            // Dubins circular-arc intercept bound: R = v / omega <= horiz / (2 * sin(theta))
+            // Guarantees high-speed cameras never get trapped orbiting outside a close waypoint's capture circle!
+            const routeOmega = 0.92 / Math.pow(Math.max(0.6, turnK), 0.30);
+            const sinTurn = Math.max(0.25, Math.sin(Math.min(Math.PI * 0.5, moveAlign)));
+            const maxInterceptSpd = Math.max(16, (0.46 * routeOmega * Math.max(45, horiz)) / sinTurn);
+            if (maxInterceptSpd < cruiseSpd) {
+              routeArrivalSlowdown = Math.min(routeArrivalSlowdown, maxInterceptSpd / cruiseSpd);
+            }
+          }
+        } else {
+          const dYaw = wrapAngleDelta(wantYaw - this._targetMoveYaw);
+          const maxGlideTurn = (preset.glideTurnRate / Math.pow(turnK, 0.80)) * clampedDt * avoidAtten;
+          const stepYaw = Math.max(-maxGlideTurn, Math.min(maxGlideTurn, dYaw * 0.75));
+          this._targetMoveYaw += stepYaw;
+          if (!decoupled) this._targetYaw = this._targetMoveYaw;
+        }
 
         const wantPitch = Math.max(-0.40, Math.min(0.40, Math.atan2(dy, horiz)));
-        const stepPitch = (wantPitch - this._targetMovePitch) * Math.min(1, clampedDt * (1.15 / Math.sqrt(turnK)) * avoidAtten);
+        const stepPitch = (wantPitch - this._targetMovePitch) * Math.min(1, clampedDt * (followingRoute ? 2.4 : 1.15) / Math.sqrt(turnK) * avoidAtten);
         this._targetMovePitch += stepPitch;
         if (!decoupled) this._targetPitch = this._targetMovePitch;
       }
@@ -1631,10 +1654,19 @@ export class FlyControls {
     // 3rd-Order Fluid-Head Cinema Gimbal Damping (pre-filtered + jerk/accel/rate bounded -> zero whip-pans!)
     const gimbalK = Math.max(0.25, Math.min(4.0, this.gimbalSmooth || 1.0));
     const droneDpActive = this.glide && this.autoLook && !this.freelook;
-    const maxLookRate = (droneDpActive ? Math.min(0.42, preset.glideTurnRate * 1.15) : preset.maxTurnRate) / Math.pow(turnK * (droneDpActive ? gimbalK : 1.0), 0.78);
-    const maxMoveRate = (this.glide ? preset.glideTurnRate * 1.15 : preset.maxTurnRate) / Math.pow(turnK, 0.82);
-    const angAccel = (droneDpActive ? preset.turnAccel * 0.82 : preset.turnAccel) / Math.pow(turnK * (droneDpActive ? gimbalK : 1.0), 0.72);
-    const lookGain = (droneDpActive ? Math.min(4.2, preset.lookRate * 0.52) : preset.lookRate) / Math.pow(smoothK * turnK * (droneDpActive ? gimbalK : 1.0), 0.42);
+    const followingRouteNow = this.glide && this.routeQueue.length > 0;
+    const routeMoveCap = 1.05 / Math.pow(Math.max(0.6, turnK), 0.30);
+    const baseLookRate = (droneDpActive ? Math.min(0.42, preset.glideTurnRate * 1.15) : preset.maxTurnRate) / Math.pow(turnK * (droneDpActive ? gimbalK : 1.0), 0.78);
+    const maxLookRate = (followingRouteNow && !decoupled) ? Math.max(baseLookRate, routeMoveCap) : baseLookRate;
+    const maxMoveRate = followingRouteNow
+      ? routeMoveCap
+      : ((this.glide ? preset.glideTurnRate * 1.15 : preset.maxTurnRate) / Math.pow(turnK, 0.82));
+    const baseAngAccel = (droneDpActive ? preset.turnAccel * 0.82 : preset.turnAccel) / Math.pow(turnK * (droneDpActive ? gimbalK : 1.0), 0.72);
+    const angAccel = (followingRouteNow && !decoupled) ? Math.max(baseAngAccel, 2.1) : baseAngAccel;
+    const moveAngAccel = followingRouteNow ? Math.max(baseAngAccel * 1.25, 2.2) : (baseAngAccel * 1.25);
+    const baseLookGain = (droneDpActive ? Math.min(4.2, preset.lookRate * 0.52) : preset.lookRate) / Math.pow(smoothK * turnK * (droneDpActive ? gimbalK : 1.0), 0.42);
+    const lookGain = (followingRouteNow && !decoupled) ? Math.max(baseLookGain, 4.6) : baseLookGain;
+    const moveLookGain = followingRouteNow ? Math.max(baseLookGain * 0.85, 4.6) : (baseLookGain * 0.85);
 
     if (droneDpActive) {
       const preAlpha = 1 - Math.exp(-clampedDt * (5.2 / Math.sqrt(gimbalK)));
@@ -1657,9 +1689,9 @@ export class FlyControls {
     ));
 
     if (decoupled) {
-      this.moveYaw = this._stepDampedAngle(this.moveYaw, this._targetMoveYaw, '_moveYawVel', maxMoveRate, angAccel * 1.25, lookGain * 0.85, clampedDt);
+      this.moveYaw = this._stepDampedAngle(this.moveYaw, this._targetMoveYaw, '_moveYawVel', maxMoveRate, moveAngAccel, moveLookGain, clampedDt);
       this.movePitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT,
-        this._stepDampedAngle(this.movePitch, this._targetMovePitch, '_movePitchVel', maxMoveRate * 0.8, angAccel * 1.25, lookGain * 0.85, clampedDt)
+        this._stepDampedAngle(this.movePitch, this._targetMovePitch, '_movePitchVel', maxMoveRate * 0.8, moveAngAccel, moveLookGain, clampedDt)
       ));
     } else {
       this.moveYaw = this.yaw;
@@ -1691,7 +1723,8 @@ export class FlyControls {
     }
 
     // Smooth inertial velocity response scaled by Motion Style & Smoothness slider
-    const effVelRate = (preset.velRate * (this.damping / 7.5)) / Math.pow(smoothK, 1.15);
+    const rawVelRate = (preset.velRate * (this.damping / 7.5)) / Math.pow(smoothK, 1.15);
+    const effVelRate = followingRouteNow ? Math.max(2.6, rawVelRate) : rawVelRate;
     const velAlpha = 1 - Math.exp(-clampedDt * Math.max(0.28, effVelRate));
     this._vel.lerp(desiredVel, velAlpha);
 

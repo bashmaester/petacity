@@ -3373,6 +3373,30 @@ test('Phase-23: stepCameraSpeed (0.1 above 0.1, 0.01 in 0..0.1), smooth rampSpee
   assert.equal(radio._xfadeActive, false);
 });
 
+test('Phase-24: camera turns decisively onto reverse/abeam minimap routeQueue waypoints and drains multi-stop route', () => {
+  const cam = new THREE.PerspectiveCamera(60, 1.6, 1, 8000);
+  const domStub = { addEventListener() {}, removeEventListener() {} };
+  const ctl = new FlyControls(cam, domStub);
+  ctl.avoidance = false;
+  ctl.collision = false;
+  ctl.turnSmooth = 1.65;
+  ctl.motionStyle = 5; // Silk Horizon / slow-turn style
+  // Start in NW corner heading SW (+2.35 rad), then queue an Eastbound 2-stop route (exact screenshot scenario!)
+  ctl.setPose({ x: -350, y: 135, z: -220, yaw: 2.35, pitch: 0 });
+  ctl.glideSpeed = 165;
+  ctl.setGlide(true);
+  ctl.enqueueWaypoint({ name: 'Pin 1', x: 40, y: 135, z: -240 }, { append: false });
+  ctl.enqueueWaypoint({ name: 'Pin 2', x: 320, y: 135, z: -120 }, { append: true });
+  assert.equal(ctl.routeQueue.length, 2, 'multi-stop Shift+click route omits extra via dot on append');
+
+  for (let i = 0; i < 60 * 12 && ctl.routeQueue.length > 0; i++) {
+    ctl.update(1 / 60);
+  }
+  assert.equal(ctl.routeQueue.length, 0, 'camera smoothly turned around and reached both queued route waypoints within 12s');
+  assert.ok(cam.position.x > 220, `camera reached Eastbound destination (x=${cam.position.x.toFixed(1)})`);
+});
+
+
 
 
 

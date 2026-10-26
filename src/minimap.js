@@ -190,12 +190,13 @@ export function makeMinimap({
       octx.fill();
     }
 
-    // Transit lines
+    // Transit lines (subtle map infrastructure so they never read as a camera flight path)
     if (city.transit && city.transit.active) {
+      octx.setLineDash?.([2, 3]);
       for (const ln of (city.transit.lines || [])) {
         octx.strokeStyle = ln.color || '#53d9ff';
-        octx.globalAlpha = 0.55;
-        octx.lineWidth = 1.25;
+        octx.globalAlpha = 0.20;
+        octx.lineWidth = 0.85;
         octx.beginPath();
         for (let s = 0; s < ln.segments.length; s++) {
           const sg = ln.segments[s];
@@ -208,6 +209,7 @@ export function makeMinimap({
         octx.stroke();
         octx.globalAlpha = 1;
       }
+      octx.setLineDash?.([]);
     }
 
     // Harbor piers & Spaceport runway
@@ -289,8 +291,15 @@ export function makeMinimap({
       }
     }
 
-    // 2. Recorded Camera Path Spline + Keyframe Nodes (`keys`) + Active Playhead
+    const hasActiveRoute = !!(controls && Array.isArray(controls.routeQueue) && controls.routeQueue.length > 0);
+    const hasLoop = !!(controls && Array.isArray(controls.autopilotLoop) && controls.autopilotLoop.length >= 3 && typeof controls.evaluateAutopilotLoop === 'function');
+    const hasRecPath = !!(recorder && recorder.frames && recorder.frames.length >= 1 && (recorder.hasPath || recorder.recording));
+    const recActive = !!(recorder && (recorder.recording || recorder.playing));
+
+    // 2. Recorded Camera Path Spline + Keyframe Nodes (`keys`) + Active Playhead (Gold/Coral — dimmed when idle)
     if (recorder && recorder.frames && recorder.frames.length >= 1) {
+      ctx.save();
+      ctx.globalAlpha = recActive ? 1.0 : 0.42;
       if (recorder.hasPath) {
         const dur = recorder.duration;
         const samples = Math.min(96, Math.max(24, recorder.frames.length * 4));
@@ -303,7 +312,7 @@ export function makeMinimap({
           else ctx.lineTo(m.px, m.py);
         }
         ctx.strokeStyle = recorder.recording ? '#ff5566' : '#ffd24c';
-        ctx.lineWidth = 1.85;
+        ctx.lineWidth = recActive ? 1.95 : 1.35;
         ctx.stroke();
       }
 
@@ -340,13 +349,15 @@ export function makeMinimap({
           ctx.stroke();
         }
       }
+      ctx.restore();
     }
 
-    // 2a. Editable Closed Autopilot Loop Spline + Draggable Waypoint Handles!
-    if (controls && Array.isArray(controls.autopilotLoop) && controls.autopilotLoop.length >= 3 && typeof controls.evaluateAutopilotLoop === 'function') {
+    // 2a. Editable Closed Autopilot Loop Spline + Draggable Waypoint Handles (Solid Cyan — dims while a clicked Route runs!)
+    if (hasLoop) {
       const loopPts = controls.autopilotLoop;
       const nL = loopPts.length;
       const samples = Math.min(160, Math.max(48, nL * 14));
+      const loopDriving = !!(controls.glide && !hasActiveRoute && !(recorder && recorder.playing));
       ctx.save();
       ctx.beginPath();
       for (let s = 0; s <= samples; s++) {
@@ -358,8 +369,10 @@ export function makeMinimap({
         else ctx.lineTo(m.px, m.py);
       }
       ctx.closePath();
-      ctx.strokeStyle = controls.glide ? 'rgba(83, 243, 255, 0.85)' : 'rgba(120, 210, 255, 0.44)';
-      ctx.lineWidth = controls.glide ? 1.85 : 1.3;
+      ctx.strokeStyle = loopDriving
+        ? 'rgba(83, 243, 255, 0.86)'
+        : (hasActiveRoute ? 'rgba(83, 243, 255, 0.22)' : 'rgba(120, 210, 255, 0.44)');
+      ctx.lineWidth = loopDriving ? 1.85 : (hasActiveRoute ? 1.05 : 1.3);
       ctx.stroke();
 
       // Subtle directional flow chevrons along the loop
@@ -373,8 +386,10 @@ export function makeMinimap({
         ctx.save();
         ctx.translate(mb.px, mb.py);
         ctx.rotate(ang);
-        ctx.strokeStyle = controls.glide ? 'rgba(160, 250, 255, 0.9)' : 'rgba(150, 220, 255, 0.55)';
-        ctx.lineWidth = 1.25;
+        ctx.strokeStyle = loopDriving
+          ? 'rgba(160, 250, 255, 0.9)'
+          : (hasActiveRoute ? 'rgba(120, 210, 255, 0.24)' : 'rgba(150, 220, 255, 0.55)');
+        ctx.lineWidth = 1.2;
         ctx.beginPath();
         ctx.moveTo(-3.6, -2.5);
         ctx.lineTo(0.8, 0);
@@ -398,9 +413,10 @@ export function makeMinimap({
         const lp = loopPts[i];
         const m = worldToMap(lp.x, lp.z, cx, cz, w, h, span);
         const isActive = i === dragLoopIdx || i === hoveredLoopIdx;
-        ctx.fillStyle = isActive ? '#ffffff' : (controls.glide ? '#53f3ff' : '#8fd8ff');
+        ctx.globalAlpha = isActive ? 1.0 : (hasActiveRoute ? 0.42 : 1.0);
+        ctx.fillStyle = isActive ? '#ffffff' : (loopDriving ? '#53f3ff' : '#8fd8ff');
         ctx.beginPath();
-        ctx.arc(m.px, m.py, isActive ? 4.8 : 3.4, 0, Math.PI * 2);
+        ctx.arc(m.px, m.py, isActive ? 4.8 : 3.2, 0, Math.PI * 2);
         ctx.fill();
         ctx.strokeStyle = '#071019';
         ctx.lineWidth = 1.25;
@@ -409,39 +425,73 @@ export function makeMinimap({
       ctx.restore();
     }
 
-    // 2b. Live Autopilot Waypoint Route Queue (smooth minimap click-to-fly course!)
-    if (camera && controls && Array.isArray(controls.routeQueue) && controls.routeQueue.length > 0) {
+    // 2b. Live Autopilot Waypoint Route Queue (Dashed Emerald-Mint — distinct from Cyan Loop!)
+    if (camera && hasActiveRoute) {
+      const routeFlying = !!(controls.glide && !(recorder && recorder.playing));
+      const routeCol = routeFlying ? '#5cff9d' : 'rgba(92, 255, 157, 0.62)';
       ctx.save();
-      ctx.strokeStyle = '#53f3ff';
-      ctx.lineWidth = 1.85;
-      ctx.setLineDash([4, 3]);
+      ctx.strokeStyle = routeCol;
+      ctx.lineWidth = routeFlying ? 2.05 : 1.6;
+      ctx.setLineDash?.([5, 3]);
       ctx.beginPath();
       const mStart = worldToMap(camera.position.x, camera.position.z, cx, cz, w, h, span);
       ctx.moveTo(mStart.px, mStart.py);
+      let prevPt = mStart;
+      const chevrons = [];
       for (const wp of controls.routeQueue) {
         const mw = worldToMap(wp.x, wp.z, cx, cz, w, h, span);
         ctx.lineTo(mw.px, mw.py);
+        const segLen = Math.hypot(mw.px - prevPt.px, mw.py - prevPt.py);
+        if (segLen > 16) {
+          chevrons.push({
+            x: (prevPt.px + mw.px) * 0.5,
+            y: (prevPt.py + mw.py) * 0.5,
+            ang: Math.atan2(mw.py - prevPt.py, mw.px - prevPt.px),
+          });
+        }
+        prevPt = mw;
       }
       ctx.stroke();
-      ctx.setLineDash([]);
+      ctx.setLineDash?.([]);
+
+      // Directional chevrons along the dashed route so travel order is unmistakable
+      for (const ch of chevrons) {
+        ctx.save();
+        ctx.translate(ch.x, ch.y);
+        ctx.rotate(ch.ang);
+        ctx.strokeStyle = routeCol;
+        ctx.lineWidth = 1.35;
+        ctx.beginPath();
+        ctx.moveTo(-3.6, -2.5);
+        ctx.lineTo(1.0, 0);
+        ctx.lineTo(-3.6, 2.5);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      let userStopNum = 0;
       for (let i = 0; i < controls.routeQueue.length; i++) {
         const wp = controls.routeQueue[i];
         const mw = worldToMap(wp.x, wp.z, cx, cz, w, h, span);
         if (wp.via) {
-          ctx.fillStyle = 'rgba(83, 243, 255, 0.75)';
+          ctx.fillStyle = 'rgba(92, 255, 157, 0.72)';
           ctx.beginPath();
           ctx.arc(mw.px, mw.py, 2.0, 0, Math.PI * 2);
           ctx.fill();
         } else {
-          ctx.strokeStyle = '#5cff9d';
+          userStopNum++;
+          ctx.strokeStyle = routeCol;
           ctx.lineWidth = 1.6;
           ctx.beginPath();
-          ctx.arc(mw.px, mw.py, 4.6, 0, Math.PI * 2);
+          ctx.arc(mw.px, mw.py, 4.8, 0, Math.PI * 2);
           ctx.stroke();
-          ctx.fillStyle = '#5cff9d';
+          ctx.fillStyle = '#071210';
           ctx.beginPath();
-          ctx.arc(mw.px, mw.py, 1.9, 0, Math.PI * 2);
+          ctx.arc(mw.px, mw.py, 3.5, 0, Math.PI * 2);
           ctx.fill();
+          ctx.fillStyle = routeCol;
+          ctx.font = '700 7.5px ui-monospace, monospace';
+          ctx.fillText(String(userStopNum), mw.px - 2.2, mw.py + 2.5);
         }
       }
       ctx.restore();
@@ -494,7 +544,67 @@ export function makeMinimap({
       ctx.stroke();
     }
 
-    // Subtle compass "N" watermark
+    // 4. Compact Color-Coded Path Legend (top-left) + Compass "N" Watermark
+    const badges = [];
+    if (hasActiveRoute) {
+      const userStops = controls.routeQueue.filter((q) => !q.via).length || controls.routeQueue.length;
+      badges.push({
+        text: controls.glide ? `\u21E2 Route (${userStops})` : `\u23F8 Route (${userStops})`,
+        color: '#5cff9d',
+        active: !!controls.glide && !(recorder && recorder.playing),
+      });
+    }
+    if (hasLoop) {
+      badges.push({
+        text: '\u25CB Loop',
+        color: '#53f3ff',
+        active: !!(controls.glide && !hasActiveRoute && !(recorder && recorder.playing)),
+      });
+    }
+    if (hasRecPath) {
+      badges.push({
+        text: recorder.recording ? '\u25CF Rec' : (recorder.playing ? '\u25B6 Rec' : '\u25C6 Rec'),
+        color: recorder.recording ? '#ff5566' : '#ffd24c',
+        active: recActive,
+      });
+    }
+    if (badges.length) {
+      ctx.save();
+      ctx.font = '600 8.5px ui-monospace, monospace';
+      let bx = 5;
+      const by = 5;
+      for (const b of badges) {
+        const tw = (ctx.measureText ? ctx.measureText(b.text).width : b.text.length * 5) + 8;
+        ctx.fillStyle = b.active ? 'rgba(8, 16, 26, 0.86)' : 'rgba(8, 16, 26, 0.58)';
+        ctx.fillRect(bx, by, tw, 13);
+        ctx.strokeStyle = b.active ? b.color : 'rgba(180, 210, 240, 0.18)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(bx, by, tw, 13);
+        ctx.fillStyle = b.color;
+        ctx.globalAlpha = b.active ? 1.0 : 0.62;
+        ctx.fillText(b.text, bx + 4, by + 9.5);
+        ctx.globalAlpha = 1.0;
+        bx += tw + 4;
+      }
+      ctx.restore();
+    }
+
+    // Keep default #minimap-label informative when idle (not hovering/dragging)
+    if (labelEl && !hoveredSite && hoveredLoopIdx < 0 && !hoveredSeg && dragLoopIdx < 0) {
+      if (recorder && recorder.playing) {
+        labelEl.textContent = 'Playing Rec Path (Shift+P stop)';
+      } else if (hasActiveRoute) {
+        const nStops = controls.routeQueue.filter((q) => !q.via).length || controls.routeQueue.length;
+        labelEl.textContent = controls.glide
+          ? `Flying Route (${nStops}) \u00B7 Shift+click +stop`
+          : `Route (${nStops}) paused \u00B7 Press \u25B6 or P`;
+      } else {
+        labelEl.textContent = controls && controls.glide
+          ? 'Flying Loop \u00B7 Click map for Route'
+          : 'Click map to fly \u00B7 Press \u25B6 or P';
+      }
+    }
+
     ctx.fillStyle = 'rgba(210, 225, 245, 0.48)';
     ctx.font = '600 9px ui-monospace, monospace';
     ctx.fillText('N', w * 0.5 - 3, 11);

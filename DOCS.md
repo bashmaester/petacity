@@ -118,8 +118,12 @@ To prevent open-ocean blotchiness and screen-space Moiré shimmer at grazing ang
   Supports **11 real-time GPU edit transitions** (`cut`, `fade_black`, `fade_white`, `dissolve`, `wipe_left`, `wipe_right`, `wipe_up`, `wipe_down`, `wipe_diagonal`, `iris`, `shutter_bars`) across HUD preset/look/bookmark/new-seed changes, `MovieSetDirector` scripted shots, and `petacity_scene_transition`. Dual-frame transitions lazily snapshot the outgoing graded frame (`snapRT`) at zero steady-state render-pass overhead.
 - **Low-End Optimization & View-Frustum / Distance Culling (`PERFORMANCE_PROFILES`, `createSceneViewCuller` in `src/scene.js`, `#sel-quality`, `#b-cull`)**:
   Zero-allocation per-frame sphere-frustum & horizon-distance culler hides off-screen landmarks, public venues, bridges, transit stations, harbor, spaceport, sky searchlights, hologram frustums, fine street furniture, and ambient vehicles (automatically bypassed for 360° omnidirectional lenses `lensMode >= 4` and globe curvature), paired with 5 quality tiers (`auto` adaptive FPS governor + `low`, `medium`, `high`, `ultra`) scaling DPR cap, volumetric `uPerfQuality` raymarch steps, cloud puff instances, weather draw range, and bloom passes.
-- **Minimap Smooth Route Queue (`enqueueWaypoint`) & Seamless Manual Course Trim**:
-  - Clicking any landmark or coordinate on the radar minimap (`#minimap`) enqueues a smooth flight route (`Shift+Click` chains multi-stop routes!) rendered as a live cyan dashed trajectory with target rings — flying smoothly there instead of teleporting.
+- **Minimap Flight Paths (`Route` vs `Loop` vs `Rec`), Controls & Dubins Route Steering (`src/minimap.js`, `src/controls.js`, `src/main.js`)**:
+  - Clearly distinguishes the three camera trajectories on `#minimap` with separate colors, directional chevrons, top-left legend badges, and live `#minimap-label` status:
+    1. **Dashed Emerald-Mint (`#5cff9d`, `⇢ Route (N)`)** — Active clicked destination / multi-stop route (`controls.routeQueue`). Click anywhere on the minimap to fly there immediately (`Shift+Click` appends stops `1, 2, …`), press `▶` (`#b-minimap-follow`) or `P` to follow/pause, and `✕` (`#b-route-clear`) to clear.
+    2. **Solid Cyan Closed Spline (`#53f3ff`, `○ Loop`)** — Continuous scenic `Autopilot Loop` (`controls.autopilotLoop` draggable dots; dims onto standby while a clicked `Route` or `Rec` playback is active, then resumes automatically once the `Route` finishes).
+    3. **Gold / Coral Spline (`#ffd24c` / `#ff5566`, `◆ Rec`)** — Recorded keyframe camera path (`CameraPathRecorder`, played separately via `Shift+P` or `#b-path-play`).
+  - Background public-transit lines (`city.transit.lines`) are rendered subtly (`0.20` alpha dashed) so they never masquerade as a camera path, and `FlyControls` uses single-stage damped route steering plus a Dubins circular-arc intercept speed bound so high-speed cameras turn decisively onto reverse/abeam waypoints without orbiting outside the capture circle.
   - Dragging or pressing `A/D/Q/E` during Autopilot smoothly trims the flight course without fighting or snapping back; releasing input automatically re-orients scenic touring toward landmarks ahead of your new heading (`onCourseReorient`).
 - **Camera Optics, Wide-Angle, 360° Projections & Strange Angles (`src/post.js`, `src/controls.js`, Subpanel `2C`)**:
   - **10 Optical Lens Projections (`LENS_MODE_NAMES`, `0..9`)**:
@@ -171,6 +175,6 @@ To prevent open-ocean blotchiness and screen-space Moiré shimmer at grazing ang
 # Start local static server on port 8000
 npm run serve   # or: python3 -m http.server 8000 --bind 0.0.0.0
 
-# Run full 94-test Node verification suite (city, scene, shaders, holos, trails, optics, anti-wobble Drone-DP gaze, transitions, culling, 14-station music sync, WebMCP, UI contract & JSDOM boot)
+# Run full 95-test Node verification suite (city, scene, shaders, holos, trails, optics, anti-wobble Drone-DP gaze, Dubins route steering, transitions, culling, 14-station music sync, WebMCP, UI contract & JSDOM boot)
 npm test
 ```
