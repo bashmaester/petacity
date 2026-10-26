@@ -112,8 +112,12 @@ To prevent open-ocean blotchiness and screen-space Moiré shimmer at grazing ang
   `0` Cinema Drone, `1` FPV Agile, `2` Steadicam Crane, `3` Orbital Glider, and `4` **Silk Airship (Slow Turns)**.
 - **2nd-Order Rate- & Acceleration-Limited Turn Damping (`turnSmooth`, `#sl-turnsmooth`)**:
   `_stepDampedAngle` caps both maximum angular velocity (`|dyaw/dt| <= maxRate / turnSmooth^0.82`) and angular acceleration (`|d²yaw/dt²| <= turnAccel / turnSmooth^0.75`), completely eliminating jarring whip-pans or super-fast turns.
-- **Autopilot POI Auto-Look (`autoLook`, `#b-autolook` / `O`)**:
-  Decouples camera gaze from the flight vector during Autopilot (`G`), smoothly panning across nearby landmarks, bridges, harbors, and towers with gentle breathing framing — even when cruising very slowly or **hovering motionless (`glideSpeed = 0`)** via mouse-wheel down!
+- **Drone-DP Fluid-Head Cinematography (`gazeMode` `0..5`, `#sel-gaze-mode`, `#b-autolook` / `O`)**:
+  Simulates an experienced aerial Director of Photography during Autopilot (`G`) via a deterministic 3rd-order jerk-limited fluid-head gimbal (`gimbalSmooth`, `leadFraming`). Rather than wandering randomly, the Drone DP scores forward-hemisphere landmarks, 3D holograms, canyon vistas, and tall spires with `_gazeHistory` novelty memory, anticipates flight-path curves (`turnLeadYaw`), holds composed shots across smooth `quintic01` C² envelopes, tapers gracefully past abeam (`1.62..2.18 rad`), fades sightline occlusions continuously without snapping, and alternates motivated reveals with calm establishing beats.
+- **Cinema Scene Edit Transitions (`SCENE_TRANSITION_MODES` `0..10` in `src/post.js`, `#sel-edit-trans`, `#sl-trans-dur`)**:
+  Supports **11 real-time GPU edit transitions** (`cut`, `fade_black`, `fade_white`, `dissolve`, `wipe_left`, `wipe_right`, `wipe_up`, `wipe_down`, `wipe_diagonal`, `iris`, `shutter_bars`) across HUD preset/look/bookmark/new-seed changes, `MovieSetDirector` scripted shots, and `petacity_scene_transition`. Dual-frame transitions lazily snapshot the outgoing graded frame (`snapRT`) at zero steady-state render-pass overhead.
+- **Low-End Optimization & View-Frustum / Distance Culling (`PERFORMANCE_PROFILES`, `createSceneViewCuller` in `src/scene.js`, `#sel-quality`, `#b-cull`)**:
+  Zero-allocation per-frame sphere-frustum & horizon-distance culler hides off-screen landmarks, public venues, bridges, transit stations, harbor, spaceport, sky searchlights, hologram frustums, fine street furniture, and ambient vehicles (automatically bypassed for 360° omnidirectional lenses `lensMode >= 4` and globe curvature), paired with 5 quality tiers (`auto` adaptive FPS governor + `low`, `medium`, `high`, `ultra`) scaling DPR cap, volumetric `uPerfQuality` raymarch steps, cloud puff instances, weather draw range, and bloom passes.
 - **Minimap Smooth Route Queue (`enqueueWaypoint`) & Seamless Manual Course Trim**:
   - Clicking any landmark or coordinate on the radar minimap (`#minimap`) enqueues a smooth flight route (`Shift+Click` chains multi-stop routes!) rendered as a live cyan dashed trajectory with target rings — flying smoothly there instead of teleporting.
   - Dragging or pressing `A/D/Q/E` during Autopilot smoothly trims the flight course without fighting or snapping back; releasing input automatically re-orients scenic touring toward landmarks ahead of your new heading (`onCourseReorient`).
@@ -148,6 +152,6 @@ To prevent open-ocean blotchiness and screen-space Moiré shimmer at grazing ang
 # Start local static server on port 8000
 npm run serve   # or: python3 -m http.server 8000 --bind 0.0.0.0
 
-# Run full 88-test Node verification suite (city, scene, shaders, holos, trails, optics, gaze, weather, PoIs, UI contract & JSDOM boot)
+# Run full 90-test Node verification suite (city, scene, shaders, holos, trails, optics, Drone-DP gaze, transitions, culling, WebMCP, UI contract & JSDOM boot)
 npm test
 ```

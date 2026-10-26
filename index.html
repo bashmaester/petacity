@@ -627,15 +627,15 @@ button.icon-btn.rec-on, button.action.rec-on {
           <button id="b-collide" class="icon-btn on" type="button" aria-pressed="true" aria-label="Toggle collision detection" title="Collision: on — toggle noclip (C)">&#x2B21;</button>
         </div>
         <div class="slider-grid">
-          <div class="slider-row wide" title="Strategic Cinematic Camera Gaze Mode (admire nearby landmarks, 3D projections, street canyons below &amp; spires above)">
+          <div class="slider-row wide" title="Experienced Drone Cinematographer Gimbal Mode (motivated C2 reveals, rule-of-thirds framing, horizon turn-lead, zero random hunting)">
             <span>&#x29BF;</span>
-            <select id="sel-gaze-mode" aria-label="Strategic cinematic camera gaze mode">
+            <select id="sel-gaze-mode" aria-label="Drone cinematographer camera gaze mode">
               <option value="0">Gaze · Off (Locked Forward Nose)</option>
-              <option value="1" selected>Gaze · Cinematic Director (Sites, Projections &amp; Canyons)</option>
-              <option value="2">Gaze · Sites &amp; Landmarks Tracking</option>
-              <option value="3">Gaze · Holograms, Neon &amp; Projections</option>
-              <option value="4">Gaze · Vertigo Canyon &amp; Spire Tilt (Up / Down)</option>
-              <option value="5">Gaze · Gentle Horizon Drift</option>
+              <option value="1" selected>Gaze · Drone DP — Motivated Reveals (All)</option>
+              <option value="2">Gaze · Drone DP — Architecture &amp; Landmarks</option>
+              <option value="3">Gaze · Drone DP — Holograms &amp; Projections</option>
+              <option value="4">Gaze · Drone DP — Canyon &amp; Spire Tilt</option>
+              <option value="5">Gaze · Drone DP — Silk Horizon Turn-Lead</option>
             </select>
           </div>
           <div class="slider-row wide" title="Camera flight physics &amp; motion style">
@@ -1267,6 +1267,41 @@ button.icon-btn.rec-on, button.action.rec-on {
           <div class="slider-row" title="Color grading contrast"><span>&#x25D1;</span><input id="sl-contrast" type="range" min="0.65" max="1.5" step="0.01" value="1.08" aria-label="Color grading contrast"></div>
           <div class="slider-row" title="Color temperature (cool ↔ warm)"><span>&#x00B1;</span><input id="sl-temp" type="range" min="-1" max="1" step="0.02" value="0.14" aria-label="Color grading temperature"></div>
           <div class="slider-row wide" title="Old-film grain, specks &amp; scratches"><span>&#x2338;</span><input id="sl-film" type="range" min="0" max="1.5" step="0.02" value="0.16" aria-label="Old film grain, dust specks and scratches"></div>
+        </div>
+
+        <div class="subsec-sep">Scene Edit Transitions &amp; Performance</div>
+        <div class="drop-row" style="margin-bottom: 5px;" title="Cinema scene-change edit transition used when switching presets, looks, bookmarks or scripted shots">
+          <select id="sel-edit-trans" aria-label="Scene edit transition effect" title="Scene edit transition effect">
+            <option value="cut" selected>Edit · Clean Cut (Instant)</option>
+            <option value="fade_black">Edit · Fade to Black</option>
+            <option value="fade_white">Edit · Dip to White</option>
+            <option value="dissolve">Edit · Cross-Dissolve</option>
+            <option value="wipe_left">Edit · Wipe — Left to Right</option>
+            <option value="wipe_right">Edit · Wipe — Right to Left</option>
+            <option value="wipe_up">Edit · Wipe — Rising Curtain</option>
+            <option value="wipe_down">Edit · Wipe — Top Curtain</option>
+            <option value="wipe_diagonal">Edit · Wipe — Anamorphic Slash</option>
+            <option value="iris">Edit · Cinema Iris Reveal</option>
+            <option value="shutter_bars">Edit · Venetian Shutter Wipe</option>
+          </select>
+          <button id="b-trans-preview" type="button" class="icon-btn" aria-label="Preview scene edit transition" title="Preview selected scene edit transition">&#x2702;</button>
+        </div>
+        <div class="slider-grid" style="margin-bottom: 5px;">
+          <div class="slider-row wide" title="Scene edit transition duration in seconds">
+            <span>&#x29D7;</span>
+            <input id="sl-trans-dur" type="range" min="0.15" max="4" step="0.05" value="0.95" aria-label="Scene edit transition duration">
+            <em id="trans-dur-label">0.95s</em>
+          </div>
+        </div>
+        <div class="drop-row" style="margin-bottom: 6px;" title="Hardware performance quality tier &amp; camera view-frustum / horizon culling for low-end devices">
+          <select id="sel-quality" aria-label="Hardware performance quality profile" title="Hardware performance quality profile">
+            <option value="auto" selected>Perf · Auto (Adaptive FPS)</option>
+            <option value="low">Perf · Low-End / Integrated (Fast)</option>
+            <option value="medium">Perf · Balanced Laptop</option>
+            <option value="high">Perf · Cinema Desktop (60 FPS)</option>
+            <option value="ultra">Perf · Master Reference (4K)</option>
+          </select>
+          <button id="b-cull" type="button" class="icon-btn on" aria-pressed="true" aria-label="Toggle view-frustum and horizon culling" title="View-frustum &amp; horizon distance culling: on">&#x25EB;</button>
         </div>
 
         <div class="cap-row" style="margin-top: 7px;" title="Clean HUD-free scene render export (PNG still, WebM/MP4 video with synth soundtrack, or standalone HTML autoloop demo)">

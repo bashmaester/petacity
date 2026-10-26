@@ -243,6 +243,12 @@ const DEF_TOP = {
   gazeMode: 1,
   weatherAutoMode: 'off',
   weatherInterval: 60,
+  gimbalSmooth: 1,
+  leadFraming: 0.82,
+  editTransition: 'cut',
+  transitionDuration: 0.95,
+  qualityMode: 'auto',
+  viewCulling: true,
 };
 
 const DEF_CUSTOM = {
@@ -400,8 +406,14 @@ export function normalizeExactState(raw = {}) {
     camRadius: roundN(raw.camRadius ?? 2.2, 2),
     camSmooth: roundN(raw.camSmooth ?? 0.72, 2),
     turnSmooth: roundN(raw.turnSmooth ?? 1.25, 2),
+    gimbalSmooth: roundN(raw.gimbalSmooth ?? 1.0, 2),
+    leadFraming: roundN(raw.leadFraming ?? 0.82, 2),
     camStyle: Math.max(0, Math.min(4, Math.round(Number(raw.camStyle ?? 0)))),
     pathSmooth: roundN(raw.pathSmooth ?? 0.65, 2),
+    editTransition: typeof raw.editTransition === 'string' ? raw.editTransition : 'cut',
+    transitionDuration: roundN(raw.transitionDuration ?? 0.95, 2),
+    qualityMode: ['auto', 'low', 'medium', 'high', 'ultra'].includes(raw.qualityMode) ? raw.qualityMode : 'auto',
+    viewCulling: raw.viewCulling !== undefined ? !!raw.viewCulling : true,
   };
   if (raw.custom && typeof raw.custom === 'object') {
     out.custom = {

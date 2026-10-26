@@ -198,6 +198,7 @@ export function makeUniforms() {
     uTrafficSpeed: { value: 1.0 },
     uTrailMode: { value: 1.0 },
     uTrailLen: { value: 1.0 },
+    uPerfQuality: { value: 1.0 },
     uShipWakes: { value: Array.from({ length: 8 }, () => new THREE.Vector4(0, 0, 0, 0)) },
   };
 }
@@ -346,6 +347,10 @@ export function buildCloudLayers(cloudMat, seed = 4417) {
   puffs.frustumCulled = false;
   puffs.renderOrder = 3;
   group.add(puffs);
+  group.setQualityFrac = (frac = 1.0) => {
+    const f = Math.max(0.15, Math.min(1.0, Number.isFinite(Number(frac)) ? Number(frac) : 1.0));
+    instGeo.instanceCount = Math.max(8, Math.round(puffCount * f));
+  };
   return group;
 }
 
@@ -360,7 +365,7 @@ export function makeWorld(U) {
       'uCloudLayerElev', 'uCloudLayerThick', 'uCloudLayerDens',
       'uWindAngle', 'uWindStrength',
       'uHaze', 'uTime', 'uSunGlow', 'uSat', 'uMoonDir', 'uMoonSize', 'uMoonGlow', 'uMoonPhase',
-      'uFlash', 'uWorldCurve', 'uPlanetR',
+      'uFlash', 'uWorldCurve', 'uPlanetR', 'uPerfQuality',
     ]),
     side: THREE.BackSide,
     depthWrite: false,
@@ -397,7 +402,7 @@ export function makeWorld(U) {
       'uCloudLayerElev', 'uCloudLayerThick', 'uCloudLayerDens',
       'uWindAngle', 'uWindStrength',
       'uSunGlow', 'uTime', 'uSat',
-      'uPoolCol', 'uLightK', 'uWorldCurve', 'uPlanetR',
+      'uPoolCol', 'uLightK', 'uWorldCurve', 'uPlanetR', 'uPerfQuality',
     ]),
     transparent: true,
     depthWrite: false,
@@ -825,6 +830,15 @@ export function buildLandmarks(city, U, initialLook = null) {
     m.position.set(lm.x, 0, lm.z);
     m.rotation.y = lm.rot;
     const { kind, r, h } = lm;
+    m.userData.cullSpec = {
+      cx: lm.x,
+      cyBase: h * 0.52,
+      cz: lm.z,
+      r: Math.hypot(r * 2.8, h * 0.68) + 42,
+      scaleWithHeight: true,
+      drawCallsEst: 34,
+      distMul: 1.35,
+    };
 
     // Shared monumental stepped plaza plinth so landmarks meet the city grid cleanly
     addBox(m, r * 2.25, 4.5, r * 2.25, secondaryMat, 0, 2.25, 0);
@@ -1689,6 +1703,15 @@ export function buildPlaces(city, U, initialLook = null) {
     m.position.set(pl.x, 0, pl.z);
     m.rotation.y = pl.rot;
     const { kind, r, seed } = pl;
+    m.userData.cullSpec = {
+      cx: pl.x,
+      cyBase: 26,
+      cz: pl.z,
+      r: r * 1.65 + 48,
+      scaleWithHeight: false,
+      drawCallsEst: 22,
+      distMul: 0.95,
+    };
 
     // Stepped paved plaza plinth + perimeter trim curb
     const pad = new THREE.Mesh(new THREE.BoxGeometry(r * 2.02, 1.6, r * 2.02), padMat);
@@ -3779,6 +3802,30 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
   }
   const transitStations = (city.transit && Array.isArray(city.transit.stations)) ? city.transit.stations : [];
 
+  // View-Frustum & Distance Culling state for hero vehicles + GPU swarm scaling
+  let cullFrustum = null;
+  let cullCamX = 0, cullCamY = 0, cullCamZ = 0;
+  let cullMaxDistSq = Infinity;
+  let swarmQualityFrac = 1.0;
+  let lastVisibleHeroCount = 0;
+  let lastCulledHeroCount = 0;
+  const wasCulled = new Uint8Array(total);
+  const cullTestSphere = new THREE.Sphere();
+  const zeroMat = new THREE.Matrix4().makeScale(0, 0, 0);
+
+  function setViewCull(frustum, camPos, maxDist = 3400, swarmFrac = 1.0) {
+    cullFrustum = frustum || null;
+    if (camPos) {
+      cullCamX = camPos.x || 0;
+      cullCamY = camPos.y || 0;
+      cullCamZ = camPos.z || 0;
+    }
+    const d = Number.isFinite(maxDist) && maxDist > 0 ? maxDist : 3400;
+    cullMaxDistSq = d * d;
+    swarmQualityFrac = Math.max(0.15, Math.min(1.0, Number.isFinite(Number(swarmFrac)) ? Number(swarmFrac) : 1.0));
+    if (!cullFrustum) wasCulled.fill(0);
+  }
+
   function update(dt, density = 1, heightScale = 1) {
     elapsed += dt;
     curHeightScale = heightScale;
@@ -3797,12 +3844,12 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
         n = Math.min(total, Math.round(baseHero + (total - baseHero) * extraFrac));
       }
       n = Math.min(n, targetTotal);
-      swarmActive = Math.max(0, Math.min(swarmCap, targetTotal - n));
+      swarmActive = Math.max(0, Math.min(swarmCap, Math.round((targetTotal - n) * swarmQualityFrac)));
       if (swarmGeo) swarmGeo.instanceCount = swarmActive;
       if (swarmTrailGeo && swarmTrailMesh) {
         const useSwarmRibbons = (curTrailMode === 2 || curTrailMode >= 4) && curTrailLen > 0.02 && swarmActive > 0;
         swarmTrailMesh.visible = useSwarmRibbons;
-        swarmTrailGeo.instanceCount = useSwarmRibbons ? Math.min(swarmActive, 8500) : 0;
+        swarmTrailGeo.instanceCount = useSwarmRibbons ? Math.min(swarmActive, Math.round(8500 * swarmQualityFrac)) : 0;
       }
     } else {
       n = Math.max(0, Math.min(total, Math.round(total * dClamped)));
@@ -3813,6 +3860,8 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     ribbonBatch.beginFrame();
 
     const active = new Array(nCls).fill(0);
+    let visCount = 0;
+    let cullCount = 0;
     if (collision && dt > 0) applyCollision(n);
     const dampK = dt > 0 ? (1 - Math.exp(-dt * 4.5)) : 1;
     for (let i = 0; i < n; i++) {
@@ -3909,9 +3958,51 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
 
       const curL = lanes[laneIdx[i]];
       const isDeck0 = (curL.nominalLayer || curL.layer) === 'ground';
+      const li = local[i];
+
+      // Fast View-Frustum & Horizon Culling for off-screen traffic (skips Matrix4/Quaternion/Coach/Beam CPU & GPU work!)
+      if (cullFrustum && !ov) {
+        evalLane(curL, Math.max(0, Math.min(1, t[i])), tmp);
+        const approxY = curL.railLoop
+          ? (laneY(curL, t[i]) + 2.2)
+          : (isDeck0 ? Math.max(5.2, laneY(curL, t[i])) : (laneY(curL, t[i]) + vOf[i]) * curHeightScale);
+        lastWorldPos[i * 3 + 0] = tmp.x;
+        lastWorldPos[i * 3 + 1] = approxY;
+        lastWorldPos[i * 3 + 2] = tmp.z;
+        const dxC = tmp.x - cullCamX;
+        const dyC = approxY - cullCamY;
+        const dzC = tmp.z - cullCamZ;
+        const distSq = dxC * dxC + dyC * dyC + dzC * dzC;
+        const boundR = cc === 2 ? 155 : (cc === 5 ? 185 : 68);
+        cullTestSphere.center.set(tmp.x, approxY, tmp.z);
+        cullTestSphere.radius = boundR;
+        const classDistLimSq = (cc === 5 || cc === 2) ? cullMaxDistSq * 2.2 : cullMaxDistSq;
+        if (distSq > 22500 && (distSq > classDistLimSq || !cullFrustum.intersectsSphere(cullTestSphere))) {
+          active[cc]++;
+          cullCount++;
+          if (!wasCulled[i]) {
+            wasCulled[i] = 1;
+            bodies[cc].setMatrixAt(li, zeroMat);
+            if (beams[cc]) beams[cc].setMatrixAt(li, zeroMat);
+            if (cc === 5) blimpAftBeams.setMatrixAt(li, zeroMat);
+            if (cc === 0) thrusters.setMatrixAt(li, zeroMat);
+            if (rotors[cc]) rotors[cc].setMatrixAt(li, zeroMat);
+            if (cc === 2) {
+              trailers[0].setMatrixAt(li, zeroMat);
+              trailers[1].setMatrixAt(li, zeroMat);
+              extraCoaches[0].setMatrixAt(li, zeroMat);
+              extraCoaches[1].setMatrixAt(li, zeroMat);
+            }
+            trails.setMatrixAt(i, zeroMat);
+          }
+          continue;
+        }
+      }
+      wasCulled[i] = 0;
+      visCount++;
+
       const bob = (isDeck0 || curL.railLoop) ? 0 : Math.sin(elapsed * V.bobF + ph) * V.bobA * (curL.directed ? 0.25 : 0.55);
       const roll = (isDeck0 || curL.railLoop) ? 0 : Math.sin(elapsed * 0.72 + ph) * 0.025;
-      const li = local[i];
 
       composeAt(i, t[i], { bob, roll, smoothDt: dt });
       let craftX = posCur.x, craftY = posCur.y, craftZ = posCur.z;
@@ -4046,6 +4137,8 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
       }
     }
     ribbonBatch.endFrame();
+    lastVisibleHeroCount = visCount;
+    lastCulledHeroCount = cullCount;
     trails.visible = curTrailMode !== 0;
     for (let cIdx = 0; cIdx < nCls; cIdx++) {
       bodies[cIdx].count = active[cIdx];
@@ -4193,7 +4286,10 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     beamReach,
     capacity: total + swarmCap,
     get activeCount() { return lastActiveCount; },
+    get visibleHeroCount() { return lastVisibleHeroCount; },
+    get culledHeroCount() { return lastCulledHeroCount; },
     update,
+    setViewCull,
     setPalette,
     getVehicleState,
     listVehicles,
@@ -5140,6 +5236,15 @@ export function buildHolos(city, holoMat, beamMat, opts = {}) {
     const tint = (H.seed || 0) > 0.58 ? [0.98, 0.38, 0.78] : [0.34, 0.90, 1.0];
     const frustum = new THREE.Mesh(projectorFrustumGeometry(ex, ey, ez, gateSpec, H.seed || 0, tint), beamMat);
     frustum.frustumCulled = false;
+    frustum.userData.cullSpec = {
+      cx: (ex + H.x) * 0.5,
+      cyBase: (ey + H.y) * 0.5,
+      cz: (ez + H.z) * 0.5,
+      r: Math.hypot(H.x - ex, H.y - ey, H.z - ez) * 0.6 + Math.max(effW, effH) * 0.9 + 24,
+      holoIdx: idx,
+      drawCallsEst: 1,
+      distMul: 0.65,
+    };
     group.add(frustum);
     frustumMeshes.push(frustum);
 
@@ -6550,6 +6655,14 @@ export function buildTransitInfrastructure(city, U, lampMat = null) {
     const stGroup = new THREE.Group();
     stGroup.position.set(st.x, st.y, st.z);
     stGroup.rotation.y = st.rot;
+    stGroup.userData.cullSpec = {
+      cx: st.x,
+      cyBase: st.y + 4,
+      cz: st.z,
+      r: Math.max(28, (st.len || 48) * 0.72) + 22,
+      drawCallsEst: 5,
+      distMul: 0.85,
+    };
 
     const platform = new THREE.Mesh(new THREE.BoxGeometry(16.5, 1.5, st.len), pierMat);
     platform.position.y = -0.3;
@@ -6630,6 +6743,14 @@ export function buildBridges(city, U, beaconMat = null, lampMat = null) {
     const bg = new THREE.Group();
     bg.position.set(br.cx, 0, br.cz);
     bg.rotation.y = br.rot;
+    bg.userData.cullSpec = {
+      cx: br.cx,
+      cyBase: Math.max(br.yDeck, br.towerH * 0.5),
+      cz: br.cz,
+      r: Math.hypot(br.span * 0.56, br.towerH) + 36,
+      drawCallsEst: 26,
+      distMul: 1.15,
+    };
 
     const halfSpan = br.span * 0.5;
     const hw = br.deckW * 0.5;
@@ -7651,6 +7772,7 @@ export function buildStreetInfrastructure(city, U) {
     }
     const poleMesh = new THREE.InstancedMesh(unitBox, woodMetalMat, poleBoxes.length);
     poleMesh.frustumCulled = false;
+    poleMesh.userData.streetDetail = true;
     for (let i = 0; i < poleBoxes.length; i++) {
       const pb = poleBoxes[i];
       dummy.position.set(pb.x, pb.y, pb.z);
@@ -7695,6 +7817,7 @@ export function buildStreetInfrastructure(city, U) {
       wireGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(wireVerts), 3));
       const wireLines = new THREE.LineSegments(wireGeo, wireMat);
       wireLines.frustumCulled = false;
+      wireLines.userData.streetDetail = true;
       group.add(wireLines);
     }
   }
@@ -7831,6 +7954,18 @@ export function buildStreetInfrastructure(city, U) {
   }
 
   refreshSignalColors(0, true);
+  let detailVisible = true;
+  function setDetailVisible(vis = true) {
+    const next = Boolean(vis);
+    if (next === detailVisible) return;
+    detailVisible = next;
+    for (const ch of group.children) {
+      if (ch.userData && ch.userData.streetDetail) ch.visible = next;
+    }
+    if (benchInst) benchInst.visible = next && benchInst.count > 0;
+    if (shelterInst) shelterInst.visible = next && shelterInst.count > 0;
+  }
+
   return {
     group,
     signalCount: signals.length,
@@ -7839,11 +7974,358 @@ export function buildStreetInfrastructure(city, U) {
     update,
     setSignalGlow,
     setDensity,
+    setDetailVisible,
     setLook,
+    get detailVisible() { return detailVisible; },
     get signalGlow() { return signalGlow; },
     get density() { return signalDensity; },
     get activeSignalCount() { return activeHeads; },
   };
 }
+
+/**
+ * Tiered Hardware Performance & View-Culling Profiles for Low-End -> Ultra Devices.
+ */
+export const PERFORMANCE_PROFILES = {
+  low: {
+    id: 'low',
+    label: 'Low-End / Integrated (Fast)',
+    dprCap: 0.80,
+    bloomPasses: 1,
+    bloomScale: 0.22,
+    cubeMax: 384,
+    perfQuality: 0.35,
+    cloudPuffFrac: 0.35,
+    maxDrawDist: 2300,
+    vehDrawDist: 1050,
+    streetDetailDist: 540,
+    streetDetailAlt: 320,
+    swarmCapFrac: 0.40,
+    weatherCapFrac: 0.38,
+  },
+  medium: {
+    id: 'medium',
+    label: 'Balanced Laptop',
+    dprCap: 1.0,
+    bloomPasses: 1,
+    bloomScale: 0.28,
+    cubeMax: 512,
+    perfQuality: 0.62,
+    cloudPuffFrac: 0.65,
+    maxDrawDist: 3800,
+    vehDrawDist: 1850,
+    streetDetailDist: 980,
+    streetDetailAlt: 460,
+    swarmCapFrac: 0.72,
+    weatherCapFrac: 0.68,
+  },
+  high: {
+    id: 'high',
+    label: 'Cinema Desktop (60 FPS)',
+    dprCap: 1.35,
+    bloomPasses: 2,
+    bloomScale: 0.35,
+    cubeMax: 1024,
+    perfQuality: 1.0,
+    cloudPuffFrac: 1.0,
+    maxDrawDist: 7200,
+    vehDrawDist: 3400,
+    streetDetailDist: 1850,
+    streetDetailAlt: 760,
+    swarmCapFrac: 1.0,
+    weatherCapFrac: 1.0,
+  },
+  ultra: {
+    id: 'ultra',
+    label: 'Master Reference (4K)',
+    dprCap: 2.0,
+    bloomPasses: 2,
+    bloomScale: 0.42,
+    cubeMax: 1024,
+    perfQuality: 1.0,
+    cloudPuffFrac: 1.0,
+    maxDrawDist: 16000,
+    vehDrawDist: 8000,
+    streetDetailDist: 4200,
+    streetDetailAlt: 1800,
+    swarmCapFrac: 1.0,
+    weatherCapFrac: 1.0,
+  },
+};
+
+/**
+ * Zero-allocation Scene-Wide View-Frustum & Horizon Distance Culler:
+ * Culls off-screen multi-part districts (16 Landmarks, Public Venues, River Bridges,
+ * Transit Stations, Deepwater Harbor, Orbital Spaceport, Sky Searchlights, Holo Frustums,
+ * Street Furniture/Wires & Hero Traffic) in <0.04ms CPU per frame, automatically restoring
+ * full visibility during 360° omnidirectional cubemap lens modes (`lensMode >= 4`) or globe curve!
+ */
+export function createSceneViewCuller() {
+  const frustum = new THREE.Frustum();
+  const projScreenMat = new THREE.Matrix4();
+  const sphere = new THREE.Sphere();
+  let items = [];
+  let refs = {};
+  let enabled = true;
+  let maxDrawDist = 7200;
+  let vehDrawDist = 3400;
+  let streetDetailDist = 1850;
+  let streetDetailAlt = 760;
+  let swarmCapFrac = 1.0;
+  let harborVisible = true;
+  let spaceportVisible = true;
+
+  const stats = {
+    enabled: true,
+    omnidirectionalBypass: false,
+    registeredGroups: 0,
+    visibleGroups: 0,
+    culledGroups: 0,
+    culledDrawCallsEst: 0,
+    visibleVehicles: 0,
+    culledVehicles: 0,
+    harborVisible: true,
+    spaceportVisible: true,
+  };
+
+  function registerCity(nextRefs = {}) {
+    refs = nextRefs || {};
+    items = [];
+    const {
+      city, landmarks, places, bridges, transitInfra,
+      harborObj, spaceportObj, beams, holoGroup,
+    } = refs;
+
+    const collectTaggedChildren = (parent, category) => {
+      if (!parent || !Array.isArray(parent.children)) return;
+      for (const ch of parent.children) {
+        if (ch.userData && ch.userData.cullSpec) {
+          items.push({ obj: ch, spec: ch.userData.cullSpec, category });
+        }
+      }
+    };
+
+    collectTaggedChildren(landmarks, 'landmark');
+    collectTaggedChildren(places, 'place');
+    collectTaggedChildren(bridges, 'bridge');
+    collectTaggedChildren(transitInfra, 'transit');
+    collectTaggedChildren(holoGroup, 'holo_frustum');
+
+    if (beams && Array.isArray(beams.pivots)) {
+      for (let i = 0; i < beams.pivots.length; i++) {
+        const pv = beams.pivots[i];
+        if (!pv || !pv.pivot) continue;
+        const pos = pv.pivot.position;
+        items.push({
+          obj: pv.pivot,
+          category: 'searchlight',
+          beamIdx: i,
+          spec: {
+            cx: pos.x,
+            cyBase: pos.y + 240,
+            cz: pos.z,
+            r: 420,
+            drawCallsEst: 1,
+            distMul: 0.92,
+          },
+        });
+      }
+    }
+
+    if (harborObj && harborObj.group && city && city.harbor) {
+      const hb = city.harbor;
+      items.push({
+        obj: harborObj.group,
+        category: 'harbor',
+        spec: {
+          cx: hb.cx ?? 0,
+          cyBase: 45,
+          cz: hb.cz ?? 0,
+          r: Math.max(920, (hb.span || 900) * 1.15),
+          drawCallsEst: 145,
+          distMul: 1.45,
+        },
+      });
+    }
+
+    if (spaceportObj && spaceportObj.group && city && city.spaceport) {
+      const sp = city.spaceport;
+      items.push({
+        obj: spaceportObj.group,
+        category: 'spaceport',
+        spec: {
+          cx: sp.cx ?? 0,
+          cyBase: (sp.y || 0) + 260,
+          cz: sp.cz ?? 0,
+          r: 1380,
+          drawCallsEst: 130,
+          distMul: 1.55,
+        },
+      });
+    }
+
+    stats.registeredGroups = items.length;
+    harborVisible = true;
+    spaceportVisible = true;
+  }
+
+  function restoreAll() {
+    const activeBeams = refs.beams ? refs.beams.activeCount : Infinity;
+    const activeHolos = (refs.holoGroup && refs.holoGroup.userData && refs.holoGroup.userData.activeHoloCount !== undefined)
+      ? refs.holoGroup.userData.activeHoloCount
+      : Infinity;
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (it.category === 'searchlight') {
+        it.obj.visible = it.beamIdx < activeBeams;
+      } else if (it.category === 'holo_frustum') {
+        it.obj.visible = (it.spec.holoIdx ?? 0) < activeHolos;
+      } else {
+        it.obj.visible = true;
+      }
+    }
+    if (refs.streetInfraObj && refs.streetInfraObj.setDetailVisible) {
+      refs.streetInfraObj.setDetailVisible(true);
+    }
+    if (refs.vehicles && refs.vehicles.setViewCull) {
+      refs.vehicles.setViewCull(null, null, Infinity, swarmCapFrac);
+    }
+    harborVisible = true;
+    spaceportVisible = true;
+    stats.visibleGroups = items.length;
+    stats.culledGroups = 0;
+    stats.culledDrawCallsEst = 0;
+    stats.harborVisible = true;
+    stats.spaceportVisible = true;
+  }
+
+  function configure(cfg = {}) {
+    if (cfg.enabled !== undefined) enabled = Boolean(cfg.enabled);
+    if (cfg.maxDrawDist !== undefined) maxDrawDist = Math.max(600, Number(cfg.maxDrawDist) || 7200);
+    if (cfg.vehDrawDist !== undefined) vehDrawDist = Math.max(350, Number(cfg.vehDrawDist) || 3400);
+    if (cfg.streetDetailDist !== undefined) streetDetailDist = Math.max(200, Number(cfg.streetDetailDist) || 1850);
+    if (cfg.streetDetailAlt !== undefined) streetDetailAlt = Math.max(120, Number(cfg.streetDetailAlt) || 760);
+    if (cfg.swarmCapFrac !== undefined) swarmCapFrac = Math.max(0.15, Math.min(1.0, Number(cfg.swarmCapFrac) || 1.0));
+    stats.enabled = enabled;
+    if (!enabled) restoreAll();
+  }
+
+  function update(camera, { heightScale = 1, lensMode = 0, worldCurve = 0 } = {}) {
+    if (!camera) return stats;
+    // Automatically bypass directional frustum culling in 360° cubemap optics or curved planetoid mode!
+    const omni = (lensMode >= 3.5) || (worldCurve >= 0.008);
+    stats.omnidirectionalBypass = omni;
+    stats.enabled = enabled;
+    if (!enabled || omni) {
+      restoreAll();
+      return stats;
+    }
+
+    camera.updateMatrixWorld?.();
+    if (camera.matrixWorldInverse && camera.matrixWorld) {
+      camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
+    }
+    projScreenMat.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    frustum.setFromProjectionMatrix(projScreenMat);
+
+    const camPos = camera.position;
+    const cxCam = camPos.x, cyCam = camPos.y, czCam = camPos.z;
+    const activeBeams = refs.beams ? refs.beams.activeCount : Infinity;
+    const activeHolos = (refs.holoGroup && refs.holoGroup.userData && refs.holoGroup.userData.activeHoloCount !== undefined)
+      ? refs.holoGroup.userData.activeHoloCount
+      : Infinity;
+
+    let vis = 0;
+    let culled = 0;
+    let savedDraws = 0;
+    harborVisible = true;
+    spaceportVisible = true;
+
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      const sp = it.spec;
+      if (it.category === 'searchlight' && it.beamIdx >= activeBeams) {
+        it.obj.visible = false;
+        continue;
+      }
+      if (it.category === 'holo_frustum' && (sp.holoIdx ?? 0) >= activeHolos) {
+        it.obj.visible = false;
+        continue;
+      }
+
+      const sy = sp.scaleWithHeight ? sp.cyBase * heightScale : sp.cyBase;
+      const sr = (sp.scaleWithHeight ? sp.r * Math.max(1, heightScale * 0.85) : sp.r) + 45;
+      const dx = sp.cx - cxCam;
+      const dy = sy - cyCam;
+      const dz = sp.cz - czCam;
+      const distSq = dx * dx + dy * dy + dz * dz;
+      const lim = maxDrawDist * (sp.distMul || 1.0) + sr;
+
+      let show = true;
+      if (distSq > sr * sr) {
+        if (distSq > lim * lim) {
+          show = false;
+        } else {
+          sphere.center.set(sp.cx, sy, sp.cz);
+          sphere.radius = sr;
+          show = frustum.intersectsSphere(sphere);
+        }
+      }
+      it.obj.visible = show;
+      if (show) {
+        vis++;
+      } else {
+        culled++;
+        savedDraws += (sp.drawCallsEst || 1);
+      }
+      if (it.category === 'harbor') harborVisible = show;
+      else if (it.category === 'spaceport') spaceportVisible = show;
+    }
+
+    if (refs.streetInfraObj && refs.streetInfraObj.setDetailVisible) {
+      const coreDist = Math.hypot(cxCam, czCam) - ((refs.city && refs.city.span) || 900);
+      const showStreetDetail = cyCam < streetDetailAlt && coreDist < streetDetailDist;
+      refs.streetInfraObj.setDetailVisible(showStreetDetail);
+      if (!showStreetDetail) savedDraws += 4;
+    }
+
+    if (refs.vehicles && refs.vehicles.setViewCull) {
+      refs.vehicles.setViewCull(frustum, camPos, vehDrawDist, swarmCapFrac);
+      stats.visibleVehicles = refs.vehicles.visibleHeroCount || 0;
+      stats.culledVehicles = refs.vehicles.culledHeroCount || 0;
+    }
+
+    stats.visibleGroups = vis;
+    stats.culledGroups = culled;
+    stats.culledDrawCallsEst = savedDraws;
+    stats.harborVisible = harborVisible;
+    stats.spaceportVisible = spaceportVisible;
+    return stats;
+  }
+
+  function setEnabled(v) {
+    configure({ enabled: v });
+  }
+
+  function setProfile(tierOrObj) {
+    const p = typeof tierOrObj === 'string' ? PERFORMANCE_PROFILES[tierOrObj] : tierOrObj;
+    if (p && typeof p === 'object') configure(p);
+  }
+
+  return {
+    frustum,
+    registerCity,
+    configure,
+    setEnabled,
+    setProfile,
+    update,
+    restoreAll,
+    get stats() { return stats; },
+    get enabled() { return enabled; },
+    get harborVisible() { return harborVisible; },
+    get spaceportVisible() { return spaceportVisible; },
+  };
+}
+
 
 

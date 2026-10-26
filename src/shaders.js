@@ -692,6 +692,7 @@ uniform float uWorldCurve;
 uniform float uPlanetR;
 uniform float uWindAngle;
 uniform float uWindStrength;
+uniform float uPerfQuality;
 varying vec3 vDir;
 ${GLSL_NOISE}
 ${GLSL_UTIL}
@@ -1005,21 +1006,28 @@ void main() {
         nearestT = min(nearestT, tStart);
         float jit = grainHash(fc + float(L) * 37.0 + fract(uTime * 7.31) * 113.0);
         float span = tEnd - tStart;
-        float dtStep = span / 6.0;
+        int maxSkySteps = uPerfQuality < 0.48 ? 3 : (uPerfQuality < 0.78 ? 4 : 6);
+        float dtStep = span / float(maxSkySteps);
         float covK = clamp(covBase * lDens, 0.0, 2.5);
         vec3 layerOff = vec3(float(L) * 910.0, 0.0, float(L) * -670.0);
         if (totalW < 1e-3) repP = cameraPosition + d * (tStart + span * 0.45);
 
         for (int i = 0; i < 6; i++) {
-          if (totalTr < 0.025) break;
+          if (i >= maxSkySteps || totalTr < 0.025) break;
           float tCur = tStart + (float(i) + jit) * dtStep;
           vec3 p = cameraPosition + d * tCur;
           float h01 = clamp((length(p - sphereCenter) - rBase) / spanH, 0.0, 1.0);
           float dens = skyCumulusDensity(p + layerOff, h01, covK, layerType, uTime);
           if (dens > 0.004) {
-            vec3 pSun = p + sd * 145.0;
-            float hSun = clamp((length(pSun - sphereCenter) - rBase) / spanH, 0.0, 1.0);
-            float shDens = skyCumulusDensity(pSun + layerOff, hSun, covK, layerType, uTime);
+            float shDens = 0.0;
+            if (uPerfQuality < 0.56) {
+              // Fast low-power analytical self-shadow (avoids 2nd 3D FBM evaluation per step!)
+              shDens = dens * 0.68 * (1.0 - h01 * 0.58);
+            } else {
+              vec3 pSun = p + sd * 145.0;
+              float hSun = clamp((length(pSun - sphereCenter) - rBase) / spanH, 0.0, 1.0);
+              shDens = skyCumulusDensity(pSun + layerOff, hSun, covK, layerType, uTime);
+            }
             float sunTrans = exp(-shDens * 2.5);
             float powder = 1.0 - exp(-dens * 3.4);
             // High decks catch slightly warmer/brighter upper-troposphere light
@@ -1204,6 +1212,7 @@ uniform vec3 uPoolCol;
 uniform float uLightK;
 uniform float uTime;
 uniform float uSat;
+uniform float uPerfQuality;
 varying vec3 vWorld;
 varying vec3 vCenterW;
 varying vec3 vAxisX;
@@ -1301,21 +1310,27 @@ void main() {
   float fwd = pow(max(dot(rdW, sd), 0.0), 5.0);
   float optScale = mix(1.85 + covK * 0.95, 0.78 + covK * 0.42, isCirrus);
 
+  int maxPuffSteps = uPerfQuality < 0.48 ? 3 : (uPerfQuality < 0.78 ? 5 : 7);
+  float stepMul = 7.0 / float(maxPuffSteps);
+  float dtQ = dtL * stepMul;
+
   for (int i = 0; i < 7; i++) {
-    if (Tr < 0.04) break;
-    float tCur = t0 + (float(i) + jit) * dtL;
+    if (i >= maxPuffSteps || Tr < 0.04) break;
+    float tCur = t0 + (float(i) + jit) * dtQ;
     vec3 pL = roL + rdL * tCur;
     float dens = puffVolDensity(pL, covK, effType, vSeed, uTime);
     if (dens > 0.005) {
-      float shD = puffVolDensity(pL + sdL * 0.32, covK, effType, vSeed, uTime);
-      float sunT = exp(-shD * 2.4);
       float hUp = clamp(pL.y * 0.5 + 0.5, 0.0, 1.0);
+      float shD = uPerfQuality < 0.56
+        ? dens * 0.64 * (1.0 - hUp * 0.58)
+        : puffVolDensity(pL + sdL * 0.32, covK, effType, vSeed, uTime);
+      float sunT = exp(-shD * 2.4);
       float lit = clamp(sunT * (0.55 + 0.52 * hUp) + 0.12, 0.0, 1.22);
       vec3 sc = mix(darkBelly, brightTop, clamp(lit, 0.0, 1.0));
       sc += cityUnder * (1.0 - hUp) * 0.55;
       sc += uSkySunCol * sunT * fwd * (0.35 + uSunGlow * 0.75);
 
-      float stepT = exp(-dens * dtL * optScale);
+      float stepT = exp(-dens * dtQ * optScale);
       float w = Tr * (1.0 - stepT);
       accum += w * sc;
       avgLit += w * lit;

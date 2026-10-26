@@ -310,6 +310,7 @@ export class MovieSetDirector {
     uniforms,
     getCity,
     getVehicles,
+    onEditTransition = null,
   }) {
     this.scene = scene;
     this.camera = camera;
@@ -317,6 +318,7 @@ export class MovieSetDirector {
     this.U = uniforms;
     this.getCity = getCity;
     this.getVehicles = getVehicles;
+    this.onEditTransition = onEditTransition;
 
     this.root = new THREE.Group();
     this.root.name = 'movie-set-director';
@@ -746,39 +748,79 @@ export class MovieSetDirector {
     const raw = this._shotQueue.shift();
     if (this.controls) this.controls.setGlide(false);
 
-    const fromVec = raw.from
-      ? this._resolveTargetPoint(raw.from)
-      : this.camera.position.clone();
-    const toVec = this._resolveTargetPoint(raw.to || raw.pos || raw.position) || fromVec.clone();
-    const dur = Math.max(0, Number(raw.duration ?? (raw.type === 'cut' ? 0 : 4.5)));
+    const activateShot = () => {
+      const fromVec = raw.from
+        ? this._resolveTargetPoint(raw.from)
+        : this.camera.position.clone();
+      const toVec = this._resolveTargetPoint(raw.to || raw.pos || raw.position) || fromVec.clone();
+      const dur = Math.max(0, Number(raw.duration ?? (raw.type === 'cut' ? 0 : 4.5)));
 
-    if (dur <= 0.001 || raw.type === 'cut') {
-      this.camera.position.copy(toVec);
-      if (raw.fov && Number.isFinite(raw.fov)) {
-        this.camera.fov = Math.max(18, Math.min(115, raw.fov));
-        this.camera.updateProjectionMatrix?.();
+      if (raw.roll !== undefined && this.controls && typeof this.controls.setCameraRoll === 'function') {
+        this.controls.setCameraRoll((Number(raw.roll) * Math.PI) / 180);
       }
-      if (raw.lookAt) this.lookAt(raw.lookAt, { immediate: true });
-      else if (this.controls) this.controls.syncFromCamera();
-      this._startNextShot();
+
+      if (dur <= 0.001 || raw.type === 'cut') {
+        this.camera.position.copy(toVec);
+        if (raw.fov && Number.isFinite(raw.fov)) {
+          this.camera.fov = Math.max(15, Math.min(150, raw.fov));
+          this.camera.updateProjectionMatrix?.();
+        }
+        if (raw.lookAt) this.lookAt(raw.lookAt, { immediate: true });
+        else if (this.controls) this.controls.syncFromCamera();
+        this._startNextShot();
+        return;
+      }
+
+      // Snap camera immediately to shot `from` start point so any wipe/dissolve/fade reveals the new shot cleanly!
+      if (raw.from) {
+        this.camera.position.copy(fromVec);
+        if (raw.lookAt) this.lookAt(raw.lookAt, { immediate: true });
+      }
+
+      this._activeShot = {
+        type: raw.type || 'dolly',
+        from: fromVec,
+        to: toVec,
+        lookAt: raw.lookAt || null,
+        startFov: this.camera.fov || 58,
+        endFov: Number.isFinite(raw.fov) ? Math.max(15, Math.min(150, raw.fov)) : (this.camera.fov || 58),
+        duration: dur,
+        elapsed: 0,
+        ease: raw.ease || 'C2',
+        orbitCenter: raw.orbitCenter || raw.lookAt || null,
+        orbitRadius: raw.radius || 220,
+        orbitStartAngle: raw.startAngle ?? 0,
+        orbitEndAngle: raw.endAngle ?? Math.PI * 0.75,
+      };
+    };
+
+    if (raw.transition && raw.transition !== 'cut' && typeof this.onEditTransition === 'function') {
+      this._activeShot = {
+        type: 'transition_wait',
+        from: this.camera.position.clone(),
+        to: this.camera.position.clone(),
+        lookAt: null,
+        startFov: this.camera.fov || 58,
+        endFov: this.camera.fov || 58,
+        duration: 999,
+        elapsed: 0,
+        ease: 'linear',
+      };
+      this.onEditTransition({
+        type: raw.transition,
+        duration: raw.transitionDuration ?? 0.9,
+        feather: raw.transitionFeather,
+        hold: raw.transitionHold,
+        color: raw.transitionColor,
+        onCut: () => {
+          this._activeShot = null;
+          activateShot();
+        },
+      });
       return;
     }
 
-    this._activeShot = {
-      type: raw.type || 'dolly',
-      from: fromVec,
-      to: toVec,
-      lookAt: raw.lookAt || null,
-      startFov: this.camera.fov || 58,
-      endFov: Number.isFinite(raw.fov) ? Math.max(18, Math.min(115, raw.fov)) : (this.camera.fov || 58),
-      duration: dur,
-      elapsed: 0,
-      ease: raw.ease || 'C2',
-      orbitCenter: raw.orbitCenter || raw.lookAt || null,
-      orbitRadius: raw.radius || 220,
-      orbitStartAngle: raw.startAngle ?? 0,
-      orbitEndAngle: raw.endAngle ?? Math.PI * 0.75,
-    };
+    activateShot();
   }
 
   /* -----------------------------------------------------------------------
@@ -1527,6 +1569,9 @@ export class MovieSetDirector {
     }
 
     // 5. Update active camera shot / vehicle pursuit / orbital rig
+    if (this._activeShot && this._activeShot.type === 'transition_wait') {
+      return;
+    }
     if (this._activeShot && this.camera) {
       const sh = this._activeShot;
       sh.elapsed += clampedDt;

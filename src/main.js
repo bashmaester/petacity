@@ -18,8 +18,12 @@ import {
   buildSigns, buildHolos,
   buildTransitInfrastructure, buildBridges, buildHarbor, buildSpaceport,
   buildStreetInfrastructure,
+  PERFORMANCE_PROFILES, createSceneViewCuller,
 } from './scene.js';
-import { makePostProcessor, ART_STYLE_NAMES, LENS_MODE_NAMES, CAMERA_ANGLE_PRESETS } from './post.js';
+import {
+  makePostProcessor, ART_STYLE_NAMES, LENS_MODE_NAMES, CAMERA_ANGLE_PRESETS,
+  SCENE_TRANSITION_MODES, SCENE_TRANSITION_NAMES, resolveTransitionMode,
+} from './post.js';
 import { FlyControls, CAMERA_STYLE_NAMES, CINEMATIC_GAZE_MODES } from './controls.js';
 import { CameraPathRecorder, makeSceneExporter } from './recorder.js';
 import { makeMinimap } from './minimap.js';
@@ -213,6 +217,16 @@ let camStyle = initialExact
 let turnSmooth = initialExact
   ? (initialExact.turnSmooth ?? 1.65)
   : (params.get('tsm') !== null ? clampFloat(params.get('tsm'), 0.2, 5.0, 1.65) : 1.65);
+let gimbalSmooth = initialExact ? (initialExact.gimbalSmooth ?? 1) : 1;
+let leadFraming = initialExact ? (initialExact.leadFraming ?? 0.82) : 0.82;
+let editTransition = initialExact && SCENE_TRANSITION_NAMES.includes(initialExact.editTransition)
+  ? initialExact.editTransition
+  : 'cut';
+let transitionDuration = initialExact ? clampFloat(initialExact.transitionDuration, 0.08, 6.0, 0.95) : 0.95;
+let qualityMode = initialExact && ['auto', 'low', 'medium', 'high', 'ultra'].includes(initialExact.qualityMode)
+  ? initialExact.qualityMode
+  : 'auto';
+let viewCulling = initialExact ? initialExact.viewCulling !== false : true;
 let pathSmooth = initialExact ? (initialExact.pathSmooth ?? 0.65) : 0.65;
 let heightScale = initialExact ? initialExact.heightScale : 1;
 
@@ -465,7 +479,71 @@ function boot() {
   controls.colliderRadius = camRadius;
   controls.smoothness = camSmooth;
   controls.turnSmooth = turnSmooth;
+  controls.gimbalSmooth = gimbalSmooth;
+  controls.leadFraming = leadFraming;
   controls.motionStyle = camStyle;
+
+  let autoTier = 'high';
+  let frameMsEMA = 16.67;
+  let lowFpsTimer = 0;
+  let highFpsTimer = 0;
+  let frameCounter = 0;
+  let perfWarmupFrames = 12;
+
+  const viewCuller = createSceneViewCuller();
+  viewCuller.setEnabled(viewCulling);
+
+  function getEffectiveQualityTier() {
+    return qualityMode === 'auto' ? autoTier : (PERFORMANCE_PROFILES[qualityMode] ? qualityMode : 'high');
+  }
+
+  function applyPerformanceProfile() {
+    const tierName = getEffectiveQualityTier();
+    const prof = PERFORMANCE_PROFILES[tierName] || PERFORMANCE_PROFILES.high;
+    viewCuller.setProfile(prof);
+    viewCuller.setEnabled(viewCulling);
+    U.uPerfQuality.value = prof.perfQuality;
+    if (world.clouds && world.clouds.setQualityFrac) {
+      world.clouds.setQualityFrac(prof.cloudPuffFrac);
+    }
+    if (weather && weather.group && weather.group.children && weather.group.children[0] && weather.group.children[0].geometry) {
+      const wg = weather.group.children[0].geometry;
+      if (wg.attributes && wg.attributes.position) {
+        const total = wg.attributes.position.count;
+        wg.setDrawRange(0, Math.max(256, Math.round(total * prof.weatherCapFrac)));
+      }
+    }
+    post.setQuality({
+      bloomPasses: prof.bloomPasses,
+      bloomScale: prof.bloomScale,
+      cubeMax: prof.cubeMax,
+    });
+    if (!exporter.lockedResolution) {
+      const rawDpr = (typeof window !== 'undefined' && window.devicePixelRatio) ? window.devicePixelRatio : 1;
+      const targetDpr = Math.min(rawDpr, prof.dprCap);
+      if (Math.abs(renderer.getPixelRatio() - targetDpr) > 0.02) {
+        renderer.setPixelRatio(targetDpr);
+        post.setSize(window.innerWidth, window.innerHeight, targetDpr);
+      }
+    }
+  }
+
+  function triggerSceneTransition(opts = {}) {
+    const type = opts.type !== undefined ? opts.type : editTransition;
+    const duration = Number.isFinite(opts.duration) ? opts.duration : transitionDuration;
+    return post.startTransition({
+      type,
+      duration,
+      feather: opts.feather,
+      hold: opts.hold,
+      color: opts.color,
+      scene,
+      camera,
+      time: U.uTime.value,
+      onCut: opts.onCut,
+      onComplete: opts.onComplete,
+    });
+  }
 
   const director = new MovieSetDirector({
     scene,
@@ -474,6 +552,7 @@ function boot() {
     uniforms: U,
     getCity: () => city,
     getVehicles: () => vehicles,
+    onEditTransition: (opts) => triggerSceneTransition(opts),
   });
 
   controls.getLiveProjections = () => {
@@ -802,6 +881,21 @@ function boot() {
     cityGroup.add(harborObj.group);
     cityGroup.add(spaceportObj.group);
     cityGroup.add(streetInfraObj.group);
+    viewCuller.registerCity({
+      city,
+      landmarks: landmarkGroup,
+      places: placeGroup,
+      bridges: bridgeGroup,
+      transitInfra: transitGroup,
+      harborObj,
+      spaceportObj,
+      beams: searchlights,
+      holoGroup,
+      streetInfraObj,
+      vehicles,
+    });
+    applyPerformanceProfile();
+    perfWarmupFrames = 12;
     applyHeight();
 
     $('#stat-towers').textContent = city.towers.toLocaleString('en-US');
@@ -1014,6 +1108,16 @@ function boot() {
     $('#camsmooth-label').textContent = `${Math.round(camSmooth * 100)}%`;
     $('#turnsmooth-label').textContent = `${turnSmooth.toFixed(2)}\u00D7`;
     $('#pathsmooth-label').textContent = `Smooth ${Math.round(pathSmooth * 100)}%`;
+    const tdEl = $('#trans-dur-label');
+    if (tdEl) {
+      tdEl.textContent = editTransition === 'cut' ? 'Instant' : `${transitionDuration.toFixed(2)}s`;
+    }
+    const bCull = $('#b-cull');
+    if (bCull) {
+      bCull.classList.toggle('on', viewCulling);
+      bCull.setAttribute('aria-pressed', String(viewCulling));
+      bCull.title = `Frustum & distance view culling: ${viewCulling ? 'on' : 'off'}`;
+    }
     syncRadioUI();
   }
 
@@ -1023,6 +1127,9 @@ function boot() {
     $('#sl-tint').value = String(tune.tint ?? 0.72);
     $('#sel-camstyle').value = String(camStyle);
     $('#sel-gaze-mode').value = String(gazeMode);
+    if ($('#sel-edit-trans')) $('#sel-edit-trans').value = editTransition;
+    if ($('#sl-trans-dur')) $('#sl-trans-dur').value = String(transitionDuration);
+    if ($('#sel-quality')) $('#sel-quality').value = qualityMode;
     $('#sl-camspeed').value = String(camSpeed);
     $('#sl-camrad').value = String(camRadius);
     $('#sl-camsmooth').value = String(camSmooth);
@@ -1313,8 +1420,14 @@ function boot() {
       camRadius,
       camSmooth,
       turnSmooth,
+      gimbalSmooth,
+      leadFraming,
       camStyle,
       pathSmooth,
+      editTransition,
+      transitionDuration,
+      qualityMode,
+      viewCulling,
       tune: { ...tune },
       post: { ...postState },
       radio: { ...radioState, station: radioEngine.stationIndex },
@@ -1373,13 +1486,22 @@ function boot() {
     camRadius = st.camRadius ?? 2.2;
     camSmooth = st.camSmooth ?? 0.72;
     turnSmooth = st.turnSmooth ?? 1.25;
+    gimbalSmooth = st.gimbalSmooth ?? 1;
+    leadFraming = st.leadFraming ?? 0.82;
     camStyle = st.camStyle ?? 0;
     pathSmooth = st.pathSmooth ?? 0.65;
+    editTransition = st.editTransition || 'cut';
+    transitionDuration = st.transitionDuration ?? 0.95;
+    qualityMode = st.qualityMode || 'auto';
+    viewCulling = st.viewCulling !== false;
     controls.speedMul = camSpeed;
     controls.colliderRadius = camRadius;
     controls.smoothness = camSmooth;
     controls.turnSmooth = turnSmooth;
+    controls.gimbalSmooth = gimbalSmooth;
+    controls.leadFraming = leadFraming;
     controls.motionStyle = camStyle;
+    applyPerformanceProfile();
     weatherMode = st.weatherMode;
     weatherAutoMode = st.weatherAutoMode || 'off';
     weatherInterval = st.weatherInterval || 60;
@@ -1495,20 +1617,33 @@ function boot() {
     activePresetId = val;
     $('#b-preset-del').disabled = !val.startsWith('u:');
     if (!val) return;
+    const savedTrans = editTransition;
+    const savedTransDur = transitionDuration;
+    const applyFound = (found) => {
+      const doCut = () => {
+        applyStateObject(found.state, { applyCamera: true, applyBookmarks: false });
+        // Preserve user's chosen edit transition if preset didn't explicitly specify one
+        if (!found.state || !found.state.editTransition || found.state.editTransition === 'cut') {
+          editTransition = savedTrans;
+          transitionDuration = savedTransDur;
+          syncAllSliders();
+        }
+      };
+      if (savedTrans !== 'cut') {
+        triggerSceneTransition({ type: savedTrans, duration: savedTransDur, onCut: doCut });
+      } else {
+        doCut();
+      }
+      flash(`Preset · ${found.label}`);
+    };
     if (val.startsWith('b:')) {
       const id = val.slice(2);
       const found = WORLD_PRESETS.find((p) => p.id === id);
-      if (found) {
-        applyStateObject(found.state, { applyCamera: true, applyBookmarks: false });
-        flash(`Preset · ${found.label}`);
-      }
+      if (found) applyFound(found);
     } else if (val.startsWith('u:')) {
       const id = val.slice(2);
       const found = userPresets.find((p) => p.id === id);
-      if (found) {
-        applyStateObject(found.state, { applyCamera: true, applyBookmarks: false });
-        flash(`Preset · ${found.label}`);
-      }
+      if (found) applyFound(found);
     }
   };
 
@@ -1565,13 +1700,20 @@ function boot() {
   $('#sel-look').onchange = (ev) => {
     const nextId = ev.target.value;
     if (!LOOK_BY_ID[nextId]) return;
-    if (lookId !== 'custom') prevPresetLookId = lookId;
-    lookId = nextId;
-    timeOfDay = LOOK_BY_ID[lookId].defTime;
-    tune.tint = LOOK_BY_ID[lookId].defTint ?? 0.72;
-    $('#sl-time').value = String(timeOfDay);
-    $('#sl-tint').value = String(tune.tint);
-    refreshLook(true);
+    const doLookSwitch = () => {
+      if (lookId !== 'custom') prevPresetLookId = lookId;
+      lookId = nextId;
+      timeOfDay = LOOK_BY_ID[lookId].defTime;
+      tune.tint = LOOK_BY_ID[lookId].defTint ?? 0.72;
+      $('#sl-time').value = String(timeOfDay);
+      $('#sl-tint').value = String(tune.tint);
+      refreshLook(true);
+    };
+    if (editTransition !== 'cut') {
+      triggerSceneTransition({ type: editTransition, duration: transitionDuration, onCut: doLookSwitch });
+    } else {
+      doLookSwitch();
+    }
   };
 
   // Custom theme / palette controls
@@ -1742,9 +1884,16 @@ function boot() {
   });
 
   $('#b-new').onclick = () => {
-    seed = 1 + Math.floor(Math.random() * 999999998);
-    $('#seed-input').value = String(seed);
-    rebuild();
+    const doNewCity = () => {
+      seed = 1 + Math.floor(Math.random() * 999999998);
+      $('#seed-input').value = String(seed);
+      rebuild();
+    };
+    if (editTransition !== 'cut') {
+      triggerSceneTransition({ type: editTransition, duration: transitionDuration, onCut: doNewCity });
+    } else {
+      doNewCity();
+    }
   };
   $('#seed-input').value = String(seed);
   $('#seed-input').onchange = (ev) => {
@@ -2342,6 +2491,53 @@ function boot() {
   bindSlider($('#sl-temp'), (v) => { postState.temp = v; syncPostUniforms(LOOK_BY_ID[lookId]); });
   bindSlider($('#sl-film'), (v) => { postState.film = v; syncPostUniforms(LOOK_BY_ID[lookId]); });
 
+  // Scene Edit Transitions & Low-End Performance / View Culling controls
+  if ($('#sel-edit-trans')) {
+    $('#sel-edit-trans').value = editTransition;
+    $('#sel-edit-trans').onchange = (ev) => {
+      const next = SCENE_TRANSITION_NAMES.includes(ev.target.value) ? ev.target.value : 'cut';
+      editTransition = next;
+      syncFeatureLabels();
+      syncURL();
+      flash(`Scene Edit · ${editTransition.replace(/_/g, ' ')}`);
+    };
+  }
+  if ($('#b-trans-preview')) {
+    $('#b-trans-preview').onclick = () => {
+      const previewType = editTransition === 'cut' ? 'dissolve' : editTransition;
+      triggerSceneTransition({ type: previewType, duration: transitionDuration });
+      flash(`Transition Preview · ${previewType.replace(/_/g, ' ')} (${transitionDuration.toFixed(2)}s)`);
+    };
+  }
+  if ($('#sl-trans-dur')) {
+    bindSlider($('#sl-trans-dur'), (v) => {
+      transitionDuration = clampFloat(v, 0.15, 3.5, 0.95);
+      syncFeatureLabels();
+    });
+  }
+  if ($('#sel-quality')) {
+    $('#sel-quality').value = qualityMode;
+    $('#sel-quality').onchange = (ev) => {
+      const q = ['auto', 'low', 'medium', 'high', 'ultra'].includes(ev.target.value) ? ev.target.value : 'auto';
+      qualityMode = q;
+      lowFpsTimer = 0;
+      highFpsTimer = 0;
+      applyPerformanceProfile();
+      syncFeatureLabels();
+      syncURL();
+      flash(`Quality Tier · ${qualityMode === 'auto' ? `Auto (${autoTier})` : qualityMode}`);
+    };
+  }
+  if ($('#b-cull')) {
+    $('#b-cull').onclick = () => {
+      viewCulling = !viewCulling;
+      viewCuller.setEnabled(viewCulling);
+      syncFeatureLabels();
+      syncURL();
+      flash(viewCulling ? '\u25C9 View Culling ON' : '\u25CB View Culling OFF');
+    };
+  }
+
   /* ------------------------------ scene render export & path recorder */
 
   let renderingPathVideo = false;
@@ -2770,8 +2966,24 @@ function boot() {
     flash(lm.name);
   }
 
-  function flyToBookmark(bm) {
+  function flyToBookmark(bm, opts = {}) {
     if (!bm) return;
+    const useTrans = opts.skipTransition
+      ? 'cut'
+      : (opts.transition !== undefined ? opts.transition : editTransition);
+    if (opts.instant || useTrans !== 'cut') {
+      const jump = () => {
+        fly = null;
+        controls.setPose(bm);
+      };
+      if (useTrans !== 'cut') {
+        triggerSceneTransition({ type: useTrans, duration: opts.transitionDuration ?? transitionDuration, onCut: jump });
+      } else {
+        jump();
+      }
+      flash(`\u2605 ${bm.name}`);
+      return;
+    }
     const to = new THREE.Vector3(bm.x, bm.y, bm.z);
     const toQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(bm.pitch || 0, bm.yaw || 0, 0, 'YXZ'));
     fly = {
@@ -3030,8 +3242,12 @@ function boot() {
     if (exporter && exporter.lockedResolution) return;
     const w = window.innerWidth;
     const h = window.innerHeight;
+    const prof = PERFORMANCE_PROFILES[getEffectiveQualityTier()] || PERFORMANCE_PROFILES.high;
+    const rawDpr = (typeof window !== 'undefined' && window.devicePixelRatio) ? window.devicePixelRatio : 1;
+    const targetDpr = Math.min(rawDpr, prof.dprCap);
+    renderer.setPixelRatio(targetDpr);
     renderer.setSize(w, h, false);
-    post.setSize(w, h, renderer.getPixelRatio());
+    post.setSize(w, h, targetDpr);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
   }
@@ -3041,7 +3257,39 @@ function boot() {
   const clock = new THREE.Clock();
   function animate() {
     try {
-      const dt = Math.min(clock.getDelta(), 0.05);
+      const rawDt = clock.getDelta();
+      const dt = Math.min(rawDt, 0.05);
+      frameCounter = (frameCounter + 1) | 0;
+
+      // Rolling frame-time telemetry + gentle adaptive FPS governor in `auto` mode
+      if (perfWarmupFrames > 0) {
+        perfWarmupFrames--;
+      } else if (rawDt > 0.001 && rawDt < 0.25) {
+        frameMsEMA += (rawDt * 1000 - frameMsEMA) * 0.08;
+        if (qualityMode === 'auto' && !(exporter && exporter.lockedResolution)) {
+          if (frameMsEMA > 27.5 && autoTier !== 'low') {
+            lowFpsTimer += dt;
+            highFpsTimer = 0;
+            if (lowFpsTimer > 1.8) {
+              autoTier = autoTier === 'high' ? 'medium' : 'low';
+              lowFpsTimer = 0;
+              applyPerformanceProfile();
+            }
+          } else if (frameMsEMA < 14.5 && autoTier !== 'high') {
+            highFpsTimer += dt;
+            lowFpsTimer = 0;
+            if (highFpsTimer > 5.0) {
+              autoTier = autoTier === 'low' ? 'medium' : 'high';
+              highFpsTimer = 0;
+              applyPerformanceProfile();
+            }
+          } else {
+            lowFpsTimer = Math.max(0, lowFpsTimer - dt * 0.5);
+            highFpsTimer = Math.max(0, highFpsTimer - dt * 0.5);
+          }
+        }
+      }
+
       // Seamless 120.0s periodic noise cycle — zero jump across wrap!
       U.uTime.value = (U.uTime.value + dt) % 120.0;
       if (timeCycleOn) {
@@ -3137,11 +3385,27 @@ function boot() {
         pathRecorder.recordSample(dt, camera);
         syncPathUI();
       }
+
+      // Frustum & distance view culling pass before CPU/GPU world updates
+      viewCuller.update(camera, {
+        heightScale,
+        lensMode: postState.lensMode ?? 0,
+        worldCurve,
+      });
+
       if (vehicles) vehicles.update(dt, tune.traffic, heightScale);
-      if (harborObj) harborObj.update(dt);
-      if (spaceportObj) spaceportObj.update(dt);
+      if (harborObj) {
+        if (!viewCuller.enabled || viewCuller.harborVisible) harborObj.update(dt);
+        else if ((frameCounter & 7) === 0) harborObj.update(dt * 8);
+      }
+      if (spaceportObj) {
+        if (!viewCuller.enabled || viewCuller.spaceportVisible) spaceportObj.update(dt);
+        else if ((frameCounter & 7) === 0) spaceportObj.update(dt * 8);
+      }
       if (streetInfraObj) streetInfraObj.update(dt);
-      if (searchlights) searchlights.update(dt);
+      if (searchlights && (!viewCuller.enabled || searchlights.group.visible)) {
+        searchlights.update(dt);
+      }
       if (weather) weather.update(dt, camera.position);
       if (minimap) minimap.render(camera, controls, pathRecorder);
       const nightAmt = 0.5 + 0.5 * Math.cos(((timeOfDay % 24) / 24) * Math.PI * 2);
@@ -3151,10 +3415,11 @@ function boot() {
         speed: camSpd,
         night: nightAmt,
       });
-      if (radioVizCanvas) {
+      if (radioVizCanvas && !document.body.classList.contains('ui-off')) {
         radioEngine.renderScope(radioVizCanvas, LOOK_BY_ID[lookId].accent || '#6be4ff');
       }
       world.sky.position.copy(camera.position);
+      post.updateTransition(dt);
       post.render(scene, camera, U.uTime.value);
       requestAnimationFrame(animate);
     } catch (err) {
@@ -3162,36 +3427,332 @@ function boot() {
     }
   }
 
+  function getPerformanceStats() {
+    const fps = frameMsEMA > 0.1 ? +(1000 / frameMsEMA).toFixed(1) : 60;
+    return {
+      qualityMode,
+      effectiveTier: getEffectiveQualityTier(),
+      viewCulling,
+      postBypass: !!post.bypass,
+      fps,
+      frameMs: +frameMsEMA.toFixed(2),
+      pixelRatio: +renderer.getPixelRatio().toFixed(2),
+      shaderQuality: +U.uPerfQuality.value.toFixed(2),
+      culler: { ...viewCuller.stats },
+    };
+  }
+
+  function setPerformanceOptions(opts = {}) {
+    if (opts.qualityMode !== undefined && ['auto', 'low', 'medium', 'high', 'ultra'].includes(opts.qualityMode)) {
+      qualityMode = opts.qualityMode;
+      lowFpsTimer = 0;
+      highFpsTimer = 0;
+    }
+    if (opts.viewCulling !== undefined) {
+      viewCulling = !!opts.viewCulling;
+    }
+    if (opts.postBypass !== undefined) {
+      post.bypass = !!opts.postBypass;
+    }
+    applyPerformanceProfile();
+    if (Number.isFinite(opts.maxDrawDist) || Number.isFinite(opts.vehDrawDist)) {
+      viewCuller.configure({
+        maxDrawDist: Number.isFinite(opts.maxDrawDist) ? Math.max(600, Math.min(30000, opts.maxDrawDist)) : undefined,
+        vehDrawDist: Number.isFinite(opts.vehDrawDist) ? Math.max(350, Math.min(20000, opts.vehDrawDist)) : undefined,
+      });
+    }
+    viewCuller.update(camera, { heightScale, lensMode: postState.lensMode ?? 0, worldCurve });
+    syncAllSliders();
+    return { ok: true, performance: getPerformanceStats() };
+  }
+
+  function managePresetsAndBookmarks(input = {}) {
+    const act = input.action || 'list';
+    const useTrans = input.skipTransition
+      ? 'cut'
+      : (input.transition !== undefined ? input.transition : 'cut');
+    const transDur = Number.isFinite(input.transitionDuration) ? input.transitionDuration : transitionDuration;
+
+    if (act === 'list') {
+      return {
+        ok: true,
+        builtinPresets: WORLD_PRESETS.map((p, index) => ({ index, id: p.id, name: p.label, blurb: p.blurb })),
+        userPresets: userPresets.map((p, index) => ({ index, id: p.id, name: p.label })),
+        bookmarks: bookmarks.map((b, index) => ({ index, name: b.name, x: b.x, y: b.y, z: b.z, yaw: b.yaw, pitch: b.pitch })),
+        uiVisible: !document.body.classList.contains('ui-off'),
+      };
+    }
+    if (act === 'apply_preset') {
+      const q = String(input.name || '').toLowerCase();
+      let found = null;
+      let isUser = false;
+      if (Number.isInteger(input.index) && input.index >= 0 && input.index < WORLD_PRESETS.length) {
+        found = WORLD_PRESETS[input.index];
+      } else if (q) {
+        found = WORLD_PRESETS.find((p) => p.id.toLowerCase() === q || p.label.toLowerCase().includes(q));
+        if (!found) {
+          found = userPresets.find((p) => p.id.toLowerCase() === q || p.label.toLowerCase().includes(q));
+          if (found) isUser = true;
+        }
+      }
+      if (!found) throw new Error(`Preset not found: ${input.name ?? input.index}`);
+      const doApply = () => {
+        activePresetId = `${isUser ? 'u' : 'b'}:${found.id}`;
+        renderPresetOptions();
+        applyStateObject(found.state, { applyCamera: input.applyCamera !== false, applyBookmarks: false });
+      };
+      if (useTrans !== 'cut') triggerSceneTransition({ type: useTrans, duration: transDur, onCut: doApply });
+      else doApply();
+      return { ok: true, preset: found.label };
+    }
+    if (act === 'save_preset') {
+      const label = (input.name || '').trim() || `Agent Preset ${userPresets.length + 1}`;
+      const id = `up-${Date.now().toString(36)}`;
+      const state = captureExactState();
+      delete state.bookmarks;
+      userPresets.push({ id, label, state });
+      writeStorageJSON(STORAGE_PRESETS_KEY, userPresets);
+      activePresetId = `u:${id}`;
+      renderPresetOptions();
+      return { ok: true, id, name: label, totalUserPresets: userPresets.length };
+    }
+    if (act === 'delete_preset') {
+      const q = String(input.name || '').toLowerCase();
+      const idx = Number.isInteger(input.index)
+        ? input.index
+        : userPresets.findIndex((p) => p.id.toLowerCase() === q || p.label.toLowerCase().includes(q));
+      if (idx < 0 || idx >= userPresets.length) throw new Error('User preset not found');
+      const removed = userPresets.splice(idx, 1)[0];
+      writeStorageJSON(STORAGE_PRESETS_KEY, userPresets);
+      activePresetId = '';
+      renderPresetOptions();
+      return { ok: true, removed: removed.label, totalUserPresets: userPresets.length };
+    }
+    if (act === 'go_bookmark') {
+      const q = String(input.name || '').toLowerCase();
+      const idx = Number.isInteger(input.index)
+        ? input.index
+        : bookmarks.findIndex((b) => (b.name || '').toLowerCase().includes(q));
+      if (idx < 0 || idx >= bookmarks.length) throw new Error('Bookmark not found');
+      flyToBookmark(bookmarks[idx], {
+        instant: !!input.instant,
+        transition: useTrans,
+        transitionDuration: transDur,
+        skipTransition: !!input.skipTransition,
+      });
+      return { ok: true, bookmark: bookmarks[idx] };
+    }
+    if (act === 'add_bookmark') {
+      const name = (input.name || '').trim() || `Viewpoint ${bookmarks.length + 1}`;
+      const pose = controls.getPose();
+      const entry = { name, ...pose };
+      bookmarks.push(entry);
+      writeStorageJSON(STORAGE_BOOKMARKS_KEY, bookmarks);
+      renderBookmarks(bookmarks.length - 1);
+      return { ok: true, index: bookmarks.length - 1, bookmark: entry };
+    }
+    if (act === 'delete_bookmark') {
+      const idx = Number.isInteger(input.index) ? input.index : -1;
+      if (idx < 0 || idx >= bookmarks.length) throw new Error('Bookmark index out of range');
+      const removed = bookmarks.splice(idx, 1)[0];
+      writeStorageJSON(STORAGE_BOOKMARKS_KEY, bookmarks);
+      renderBookmarks(Math.max(0, idx - 1));
+      return { ok: true, removed: removed.name, remaining: bookmarks.length };
+    }
+    if (act === 'export_state') {
+      const state = captureExactState();
+      const token = buildCompactShareToken();
+      const shareUrl = buildExactShareURL();
+      return { ok: true, shareToken: token, shareUrl, tokenLength: token.length, state };
+    }
+    if (act === 'import_state') {
+      const decoded = decodeExactState(input.tokenOrJson || '');
+      if (!decoded) throw new Error('Could not decode state token or JSON');
+      const doImport = () => applyStateObject(decoded, { applyCamera: input.applyCamera !== false, applyBookmarks: true });
+      if (useTrans !== 'cut') triggerSceneTransition({ type: useTrans, duration: transDur, onCut: doImport });
+      else doImport();
+      return { ok: true, seed, lookId };
+    }
+    if (act === 'new_seed') {
+      const nextSeed = Number.isInteger(input.index) && input.index > 0
+        ? input.index
+        : (1 + Math.floor(Math.random() * 999999998));
+      const doRebuild = () => {
+        seed = nextSeed;
+        $('#seed-input').value = String(seed);
+        rebuild();
+        refreshLook(false);
+      };
+      if (useTrans !== 'cut') triggerSceneTransition({ type: useTrans, duration: transDur, onCut: doRebuild });
+      else doRebuild();
+      return { ok: true, seed };
+    }
+    if (act === 'set_hud') {
+      const wantVis = input.hudVisible !== undefined ? !!input.hudVisible : document.body.classList.contains('ui-off');
+      const isOff = document.body.classList.contains('ui-off');
+      if (wantVis === isOff) toggleUI();
+      return { ok: true, uiVisible: !document.body.classList.contains('ui-off') };
+    }
+    throw new Error(`Unsupported preset/bookmark action: ${act}`);
+  }
+
+  function resolveGazeModeInput(val) {
+    if (typeof val === 'number' && Number.isFinite(val)) return clampInt(val, 0, 5, 1);
+    const s = String(val || '').toLowerCase().trim();
+    const map = {
+      off: 0, locked: 0, none: 0,
+      drone: 1, drone_cinema: 1, cinema: 1, balanced: 1,
+      architectural: 2, landmarks: 2, towers: 2,
+      skyline: 3, canyons: 3, vertical: 3,
+      projections: 4, holograms: 4, neon: 4,
+      kinetic: 5, sweep: 5, bank: 5,
+    };
+    if (s in map) return map[s];
+    const parsed = parseInt(s, 10);
+    return Number.isFinite(parsed) ? clampInt(parsed, 0, 5, 1) : 1;
+  }
+
+  function resolveMotionStyleInput(val) {
+    if (typeof val === 'number' && Number.isFinite(val)) return clampInt(val, 0, 4, 0);
+    const s = String(val || '').toLowerCase().trim();
+    const map = { silk: 0, chase: 1, fpv: 2, orbit: 3, dolly: 4 };
+    if (s in map) return map[s];
+    const parsed = parseInt(s, 10);
+    return Number.isFinite(parsed) ? clampInt(parsed, 0, 4, 0) : 0;
+  }
+
+  function resolveArtStyleInput(val) {
+    if (typeof val === 'number' && Number.isFinite(val)) return clampInt(val, 0, ART_STYLE_NAMES.length - 1, 0);
+    const s = String(val || '').toLowerCase().trim();
+    const map = { cinema: 0, xray: 1, 'x-ray': 1, blueprint: 2, sketch: 3, ink: 3, watercolor: 4, oil: 5 };
+    if (s in map) return map[s];
+    const parsed = parseInt(s, 10);
+    return Number.isFinite(parsed) ? clampInt(parsed, 0, ART_STYLE_NAMES.length - 1, 0) : 0;
+  }
+
   function applyPartialWebMCPState(patch = {}) {
     if (!patch || typeof patch !== 'object') return;
     let needRebuild = false;
     let needRefreshLook = false;
 
-    if (patch.look !== undefined && LOOK_BY_ID[patch.look]) {
-      lookId = patch.look;
+    const nextLook = patch.look ?? patch.lookId;
+    if (nextLook !== undefined && LOOK_BY_ID[nextLook]) {
+      lookId = nextLook;
       needRefreshLook = true;
     }
-    if (patch.postStyle !== undefined) {
-      postState.artStyle = clampInt(patch.postStyle, 0, ART_STYLE_NAMES.length - 1, 0);
+    if (patch.tint !== undefined) {
+      tune.tint = clampFloat(patch.tint, 0, 1, tune.tint ?? 0.72);
       needRefreshLook = true;
     }
-    if (patch.time !== undefined) {
-      timeOfDay = ((Number(patch.time) % 24) + 24) % 24;
+    if (patch.customPalette && typeof patch.customPalette === 'object') {
+      const cp = patch.customPalette;
+      const curCfg = { ...(LOOK_BY_ID.custom.customConfig || DEFAULT_CUSTOM) };
+      if (cp.seedFromLook && LOOK_BY_ID[cp.seedFromLook] && cp.seedFromLook !== 'custom') {
+        const src = LOOK_BY_ID[cp.seedFromLook];
+        curCfg.zen = src.sky.zenith;
+        curCfg.hor = src.sky.horizon;
+        curCfg.base = src.building.base;
+        curCfg.win = src.building.warm;
+        curCfg.accent = src.accent;
+        curCfg.sec = src.building.cool;
+      }
+      for (const k of ['zen', 'hor', 'base', 'win', 'accent', 'sec']) {
+        if (typeof cp[k] === 'string' && /^#[0-9a-fA-F]{6}$/.test(cp[k])) curCfg[k] = cp[k];
+      }
+      if (cp.style !== undefined) curCfg.style = clampInt(cp.style, 0, 6, curCfg.style);
+      if (cp.mono !== undefined) curCfg.mono = !!cp.mono;
+      syncCustomLook(curCfg);
+      syncCustomInputs();
+      if (cp.activate !== false) lookId = 'custom';
       needRefreshLook = true;
     }
+
+    const artVal = patch.artStyle ?? patch.postStyle;
+    if (artVal !== undefined) {
+      postState.artStyle = resolveArtStyleInput(artVal);
+      needRefreshLook = true;
+    }
+    if (patch.artStrength !== undefined) { postState.artStrength = clampFloat(patch.artStrength, 0, 1.4, 1); needRefreshLook = true; }
+    if (patch.bloom !== undefined) { postState.bloom = clampFloat(patch.bloom, 0, 2.2, postState.bloom); needRefreshLook = true; }
+    if (patch.lens !== undefined) { postState.lens = clampFloat(patch.lens, 0, 1.5, postState.lens); needRefreshLook = true; }
+    if (patch.contrast !== undefined) { postState.contrast = clampFloat(patch.contrast, 0.7, 1.5, postState.contrast); needRefreshLook = true; }
+    if (patch.temp !== undefined) { postState.temp = clampFloat(patch.temp, -1, 1, postState.temp); needRefreshLook = true; }
+    if (patch.film !== undefined) { postState.film = clampFloat(patch.film, 0, 1, postState.film); needRefreshLook = true; }
+
+    if (patch.editTransition !== undefined && SCENE_TRANSITION_NAMES.includes(patch.editTransition)) {
+      editTransition = patch.editTransition;
+    }
+    if (patch.transitionDuration !== undefined) {
+      transitionDuration = clampFloat(patch.transitionDuration, 0.08, 6.0, transitionDuration);
+    }
+    if (patch.qualityMode !== undefined || patch.viewCulling !== undefined || patch.postBypass !== undefined) {
+      setPerformanceOptions({
+        qualityMode: patch.qualityMode,
+        viewCulling: patch.viewCulling,
+        postBypass: patch.postBypass,
+      });
+    }
+
+    const timeVal = patch.time ?? patch.timeOfDay;
+    if (timeVal !== undefined) {
+      timeOfDay = ((Number(timeVal) % 24) + 24) % 24;
+      needRefreshLook = true;
+    }
+    if (patch.dayCycle !== undefined) timeCycleOn = !!patch.dayCycle;
+    if (patch.daySpeed !== undefined) daySpeed = clampFloat(patch.daySpeed, 0.05, 5, daySpeed);
+
+    if (patch.sun !== undefined) { tune.sun = clampFloat(patch.sun, 0, 2, 1); needRefreshLook = true; }
+    if (patch.vib !== undefined) { tune.vib = clampFloat(patch.vib, 0, 2, 1); needRefreshLook = true; }
+    if (patch.haze !== undefined) { tune.haze = clampFloat(patch.haze, 0, 2, 1); needRefreshLook = true; }
+    if (patch.moon !== undefined) { tune.moon = clampFloat(patch.moon, 0, 2.5, 1); needRefreshLook = true; }
+    if (patch.moonsz !== undefined) { tune.moonsz = clampFloat(patch.moonsz, 0.25, 3.5, 1); needRefreshLook = true; }
+    if (patch.moonph !== undefined) { tune.moonph = ((Number(patch.moonph) % 2) + 2) % 2; needRefreshLook = true; }
+
     if (patch.waterShader !== undefined) {
       tune.waterShader = clampInt(patch.waterShader, 0, 4, 0);
       U.uWaterShader.value = tune.waterShader;
       needRefreshLook = true;
     }
     if (patch.waterMode !== undefined) { waterMode = clampInt(patch.waterMode, 0, 4, waterMode); needRebuild = true; }
+    if (patch.waterAmount !== undefined) { waterAmount = clampFloat(patch.waterAmount, 0.2, 2.0, waterAmount); needRebuild = true; }
     if (patch.shoreDist !== undefined) { shoreDist = clampFloat(patch.shoreDist, 0.35, 2.5, shoreDist); needRebuild = true; }
     if (patch.waterWave !== undefined) { tune.waterScale = clampFloat(patch.waterWave, 0.2, 4, 1); needRefreshLook = true; }
     if (patch.waterChop !== undefined) { tune.waterChop = clampFloat(patch.waterChop, 0, 2.5, 1); needRefreshLook = true; }
     if (patch.waterFoam !== undefined) { tune.waterFoam = clampFloat(patch.waterFoam, 0, 2.5, 0.85); needRefreshLook = true; }
+    if (patch.waterRefl !== undefined) { tune.waterRefl = clampFloat(patch.waterRefl, 0, 2.5, 1.15); needRefreshLook = true; }
+    if (patch.waterContrast !== undefined) { tune.waterContrast = clampFloat(patch.waterContrast, 0, 1, 0.12); needRefreshLook = true; }
+    if (patch.waterWarp !== undefined) { tune.waterWarp = clampFloat(patch.waterWarp, 0, 2, 0.4); needRefreshLook = true; }
+
+    if (patch.terrainMode !== undefined) { terrainMode = clampInt(patch.terrainMode, 0, 4, terrainMode); needRebuild = true; }
+    if (patch.terrainScale !== undefined) { terrainScale = clampFloat(patch.terrainScale, 0, 2.5, terrainScale); needRebuild = true; }
+    if (patch.treeMode !== undefined) {
+      treeMode = clampInt(patch.treeMode, 0, 6, treeMode);
+      if (trees) trees.setNature(LOOK_BY_ID[lookId], treeMode);
+      needRefreshLook = true;
+    }
+    if (patch.vegCover !== undefined) { vegCover = clampFloat(patch.vegCover, 0, 2, vegCover); needRebuild = true; }
+    if (patch.vegScale !== undefined) { vegScale = clampFloat(patch.vegScale, 0.4, 2.4, vegScale); needRebuild = true; }
+
+    if (patch.worldCurve !== undefined) {
+      worldCurve = clampFloat(patch.worldCurve, 0, 1, worldCurve);
+      syncWorldGeometry();
+      needRefreshLook = true;
+    }
+    if (patch.heightScale !== undefined) {
+      heightScale = clampFloat(patch.heightScale, 0.35, 2.6, heightScale);
+      applyHeight();
+      needRefreshLook = true;
+    }
+
     if (patch.clouds !== undefined) { tune.clouds = clampFloat(patch.clouds, 0, 2.4, 1); needRefreshLook = true; }
     if (patch.cloudPuffs !== undefined) { tune.cloudPuffs = clampFloat(patch.cloudPuffs, 0, 2, 1); needRefreshLook = true; }
+    if (patch.cloudType !== undefined) { tune.cloudType = clampInt(patch.cloudType, 0, 5, 0); needRefreshLook = true; }
+    if (patch.cloudStyle !== undefined) { tune.cloudStyle = clampInt(patch.cloudStyle, 0, 6, 0); needRefreshLook = true; }
+    if (patch.cloudSeed !== undefined) { tune.cloudSeed = clampFloat(patch.cloudSeed, 0, 100, 0); needRefreshLook = true; }
+    if (patch.cloudEvol !== undefined) { tune.cloudEvol = clampFloat(patch.cloudEvol, 0, 2.5, 0.35); needRefreshLook = true; }
+    if (patch.cloudLac !== undefined) { tune.cloudLac = clampFloat(patch.cloudLac, 1.4, 3.2, 2.08); needRefreshLook = true; }
     if (patch.cloudElev !== undefined) { tune.cloudElev = clampFloat(patch.cloudElev, 0.05, 2.4, 1); needRefreshLook = true; }
+    if (patch.cloudRange !== undefined) { tune.cloudRange = clampFloat(patch.cloudRange, 0.3, 3.0, 1); needRefreshLook = true; }
     if (patch.weatherMode !== undefined) {
       weatherMode = clampInt(patch.weatherMode, 0, 6, 0);
       weather.transitionTo(weatherMode, 2.2);
@@ -3205,6 +3766,11 @@ function boot() {
     if (patch.weatherInterval !== undefined) {
       weatherInterval = clampInt(patch.weatherInterval, 15, 240, 60);
     }
+    const dustVal = patch.dust ?? patch.dustLevel;
+    if (dustVal !== undefined) {
+      dustLevel = clampFloat(dustVal, 0, 2, dustLevel);
+      weather.setDust(dustLevel);
+    }
     if (patch.cloudLayer !== undefined) {
       const m = clampInt(patch.cloudLayer, 0, 7, 1);
       tune.cloudLayersMode = m;
@@ -3214,6 +3780,21 @@ function boot() {
         tune.cloudLayerThick = [...pr.thick];
         tune.cloudLayerDens = [...pr.dens];
       }
+      needRefreshLook = true;
+    }
+    if (Array.isArray(patch.cloudLayerElev) && patch.cloudLayerElev.length === 3) {
+      tune.cloudLayersMode = 7;
+      tune.cloudLayerElev = patch.cloudLayerElev.map((v, i) => clampFloat(v, 0.05, 3.0, tune.cloudLayerElev[i]));
+      needRefreshLook = true;
+    }
+    if (Array.isArray(patch.cloudLayerThick) && patch.cloudLayerThick.length === 3) {
+      tune.cloudLayersMode = 7;
+      tune.cloudLayerThick = patch.cloudLayerThick.map((v, i) => clampFloat(v, 0.05, 2.5, tune.cloudLayerThick[i]));
+      needRefreshLook = true;
+    }
+    if (Array.isArray(patch.cloudLayerDens) && patch.cloudLayerDens.length === 3) {
+      tune.cloudLayersMode = 7;
+      tune.cloudLayerDens = patch.cloudLayerDens.map((v, i) => clampFloat(v, 0, 2.5, tune.cloudLayerDens[i]));
       needRefreshLook = true;
     }
     if (patch.windAngle !== undefined) {
@@ -3232,11 +3813,35 @@ function boot() {
       weather.setMode(weatherMode);
       needRefreshLook = true;
     }
-    if (patch.trafficCount !== undefined) {
-      tune.traffic = Math.max(0, Math.min(MAX_TRAFFIC_DENSITY, Number(patch.trafficCount) / 320));
+
+    if (patch.win !== undefined) { tune.win = clampFloat(patch.win, 0, 2, 1); needRefreshLook = true; }
+    if (patch.glow !== undefined) { tune.glow = clampFloat(patch.glow, 0, 2.5, 1); needRefreshLook = true; }
+    if (patch.lights !== undefined) { tune.lights = clampFloat(patch.lights, 0, 2.5, 1); needRefreshLook = true; }
+    if (patch.lampDensity !== undefined) { tune.lampDensity = clampFloat(patch.lampDensity, 0, 2, 1); needRefreshLook = true; }
+    if (patch.searchLight !== undefined) { tune.searchLight = clampFloat(patch.searchLight, 0, 2.5, 1); needRefreshLook = true; }
+    if (patch.searchCount !== undefined) { tune.searchCount = clampFloat(patch.searchCount, 0, 2, 1); needRefreshLook = true; }
+    if (patch.trafficLight !== undefined) { tune.trafficLight = clampFloat(patch.trafficLight, 0, 2.5, 1); needRefreshLook = true; }
+    if (patch.sigDensity !== undefined) { tune.sigDensity = clampFloat(patch.sigDensity, 0, 1.5, 1); needRefreshLook = true; }
+    if (patch.vehLight !== undefined) { tune.vehLight = clampFloat(patch.vehLight, 0, 2.5, 1); needRefreshLook = true; }
+
+    const rawTrafficCount = patch.trafficCount ?? patch.traffic;
+    if (rawTrafficCount !== undefined) {
+      tune.traffic = Math.max(0, Math.min(MAX_TRAFFIC_DENSITY, Number(rawTrafficCount) / 320));
       if (vehicles) vehicles.update(0, tune.traffic, heightScale);
       syncTrafficLabel();
     }
+    if (patch.trafficSpeed !== undefined) {
+      trafficSpeed = clampFloat(patch.trafficSpeed, 0, 3, trafficSpeed);
+      if (vehicles && vehicles.setTrafficSpeed) vehicles.setTrafficSpeed(trafficSpeed);
+    }
+    if (patch.transitAmt !== undefined) { transitAmt = clampFloat(patch.transitAmt, 0, 2, transitAmt); needRebuild = true; }
+    if (patch.maritimeAmt !== undefined) { maritimeAmt = clampFloat(patch.maritimeAmt, 0, 2, maritimeAmt); needRebuild = true; }
+    if (patch.airAmt !== undefined) { airAmt = clampFloat(patch.airAmt, 0, 2, airAmt); needRebuild = true; }
+    if (patch.signAmt !== undefined) { signAmt = clampFloat(patch.signAmt, 0, 2, signAmt); needRebuild = true; }
+    if (patch.megaWrap !== undefined) { megaWrap = clampFloat(patch.megaWrap, 0, 2, megaWrap); needRebuild = true; }
+    if (patch.glyphStyle !== undefined) { tune.glyphStyle = clampInt(patch.glyphStyle, 0, 2, 0); needRefreshLook = true; }
+    if (patch.signAnim !== undefined) { tune.signAnim = clampFloat(patch.signAnim, 0, 2.5, 1); needRefreshLook = true; }
+
     if (patch.holoDensity !== undefined) {
       tune.holoDensity = clampFloat(patch.holoDensity, 0, 2.5, 1);
       needRefreshLook = true;
@@ -3251,7 +3856,7 @@ function boot() {
     }
     if (patch.trailMode !== undefined) {
       const tm = typeof patch.trailMode === 'string'
-        ? { off: 0, classic: 1, subtle: 1, some: 2, express: 2, transit: 3, ships: 3, maritime: 3, traffic: 4, all: 5 }[patch.trailMode.toLowerCase()]
+        ? { off: 0, classic: 1, subtle: 1, hero_ships_trains: 1, some: 2, express: 2, aircraft_trains: 2, transit: 3, ships: 3, maritime: 3, fast_traffic: 3, traffic: 4, dense_traffic: 4, all: 5, all_moving: 5 }[patch.trailMode.toLowerCase()]
         : Number(patch.trailMode);
       if (Number.isFinite(tm)) {
         tune.trailMode = clampInt(tm, 0, 5, 1);
@@ -3263,12 +3868,17 @@ function boot() {
       needRefreshLook = true;
     }
     if (patch.seed !== undefined) { seed = clampInt(patch.seed, 1, 999999999, seed); needRebuild = true; }
-    if (patch.radius !== undefined) { cityRadius = clampInt(patch.radius, 1, 15, cityRadius); needRebuild = true; }
+    if (patch.radius !== undefined) { cityRadius = clampInt(patch.radius, 2, 22, cityRadius); needRebuild = true; }
+    if (patch.suburbReach !== undefined) { suburbReach = clampFloat(patch.suburbReach, 0, 3, suburbReach); needRebuild = true; }
+
     if (patch.fov !== undefined) {
       camFov = clampFloat(patch.fov, 15, 150, 58);
       syncCameraOptics();
     }
-    if (patch.roll !== undefined) {
+    if (patch.rollDeg !== undefined) {
+      camRollDeg = clampFloat(Number(patch.rollDeg), -180, 180, 0);
+      syncCameraOptics();
+    } else if (patch.roll !== undefined) {
       camRollDeg = clampFloat(Number(patch.roll), -180, 180, 0);
       syncCameraOptics();
     }
@@ -3296,27 +3906,46 @@ function boot() {
       const q = String(patch.anglePreset).toLowerCase();
       const idx = Number.isFinite(Number(patch.anglePreset))
         ? clampInt(patch.anglePreset, 0, CAMERA_ANGLE_PRESETS.length - 1, 0)
-        : CAMERA_ANGLE_PRESETS.findIndex((p) => p.id === q || p.label.toLowerCase().includes(q));
+        : CAMERA_ANGLE_PRESETS.findIndex((p) => (p.key || p.id || '').toLowerCase() === q || (p.name || p.label || '').toLowerCase().includes(q));
       if (idx >= 0) applyAnglePresetByIndex(idx);
     }
     if (patch.motionStyle !== undefined) {
-      camStyle = clampInt(patch.motionStyle, 0, 4, 0);
+      camStyle = resolveMotionStyleInput(patch.motionStyle);
       controls.motionStyle = camStyle;
+    }
+    if (patch.glideSpeed !== undefined) {
+      controls.glideSpeed = clampFloat(patch.glideSpeed, 1, 260, 32);
     }
     if (patch.camSpeed !== undefined) {
       camSpeed = clampFloat(patch.camSpeed, 0.02, 5.0, 1);
       controls.speedMul = camSpeed;
     }
-    if (patch.camSmooth !== undefined) {
-      camSmooth = clampFloat(patch.camSmooth, 0, 6.0, 0.88);
+    const radVal = patch.colliderRadius ?? patch.camRadius;
+    if (radVal !== undefined) {
+      camRadius = clampFloat(radVal, 0.5, 12, 2.2);
+      controls.colliderRadius = camRadius;
+    }
+    const smVal = patch.smoothness ?? patch.camSmooth;
+    if (smVal !== undefined) {
+      camSmooth = clampFloat(smVal, 0, 6.0, 0.88);
       controls.smoothness = camSmooth;
     }
     if (patch.turnSmooth !== undefined) {
       turnSmooth = clampFloat(patch.turnSmooth, 0.2, 6.0, 1.65);
       controls.turnSmooth = turnSmooth;
     }
+    if (patch.gimbalSmooth !== undefined) {
+      gimbalSmooth = clampFloat(patch.gimbalSmooth, 0.15, 2.5, 1);
+      controls.gimbalSmooth = gimbalSmooth;
+    }
+    if (patch.leadFraming !== undefined) {
+      leadFraming = clampFloat(patch.leadFraming, 0, 1.5, 0.82);
+      controls.leadFraming = leadFraming;
+    }
+    if (patch.avoidance !== undefined) setAvoidanceState(!!patch.avoidance, false);
+    if (patch.collision !== undefined) setCollisionState(!!patch.collision, false);
     if (patch.glide !== undefined) setGlideState(!!patch.glide, false);
-    if (patch.gazeMode !== undefined) setGazeModeState(clampInt(patch.gazeMode, 0, 5, 1), false);
+    if (patch.gazeMode !== undefined) setGazeModeState(resolveGazeModeInput(patch.gazeMode), false);
     else if (patch.autoLook !== undefined) setAutoLookState(!!patch.autoLook, false);
     if (patch.freelook !== undefined) setFreelookState(!!patch.freelook, false);
     if (Array.isArray(patch.autoLoop) && patch.autoLoop.length >= 3) {
@@ -3341,7 +3970,7 @@ function boot() {
     if (patch.radioSpace !== undefined) { radioState.space = clampFloat(patch.radioSpace, 0, 1.5, 0.9); radioEngine.setSpace(radioState.space); }
     if (patch.radioWarmth !== undefined) { radioState.warmth = clampFloat(patch.radioWarmth, 0.1, 1.5, 0.8); radioEngine.setWarmth(radioState.warmth); }
     if (patch.radioPulse !== undefined) { radioState.pulse = clampFloat(patch.radioPulse, 0, 1.5, 0.55); radioEngine.setPulse(radioState.pulse); }
-    if (patch.radioReact !== undefined) { radioState.react = clampFloat(patch.radioReact, 0, 1, 0.65); radioEngine.setCityReactivity(radioState.react); }
+    if (patch.radioReact !== undefined) { radioState.react = clampFloat(patch.radioReact, 0, 1.5, 0.65); radioEngine.setCityReactivity(radioState.react); }
 
     if (needRebuild) rebuild();
     if (needRefreshLook || needRebuild) refreshLook(false);
@@ -3394,6 +4023,7 @@ function boot() {
   registerPetacityWebMCP({
     director,
     getState: captureExactState,
+    getFullState: captureExactState,
     applyPartialState: applyPartialWebMCPState,
     getCity: () => city,
     getVehicles: () => vehicles,
@@ -3402,8 +4032,12 @@ function boot() {
     radio: radioEngine,
     recorder: pathRecorder,
     exporter,
-    exportDemoHTML: triggerStandaloneDemoExport,
     enqueueSpotRoute,
+    triggerTransition: triggerSceneTransition,
+    getTransitionState: () => post.getTransitionState(),
+    managePresetsAndBookmarks,
+    setPerformance: setPerformanceOptions,
+    getPerformanceStats,
   });
   $('#loading').classList.add('out');
   animate();

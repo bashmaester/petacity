@@ -7,21 +7,26 @@ Petacity exposes its entire 3D procedural world, camera rig, raycast perception 
 ## 1. Three Ways to Connect
 
 ### A. W3C / Chrome WebMCP (`navigator.modelContext`)
-On startup, `registerPetacityWebMCP` (`src/webmcp.js`) registers all **14 JSON-Schema-typed tools** with `navigator.modelContext` (`registerTool` / `provideContext`). Any WebMCP-capable browser agent can discover and invoke `petacity_*` tools natively with zero configuration.
+On startup, `registerPetacityWebMCP` (`src/webmcp.js`) registers all **20 JSON-Schema-typed tools** with `navigator.modelContext` (`registerTool` / `provideContext`). Any WebMCP-capable browser agent can discover and invoke `petacity_*` tools natively with zero configuration.
 *(In browsers without native WebMCP enabled yet, Petacity installs a standards-compatible `navigator.modelContext` dispatcher automatically: `navigator.modelContext.listTools()` and `await navigator.modelContext.callTool(name, args)`.)*
 
 ### B. In-Page JavaScript / Playwright / DevTools SDK (`window.petacity`)
 Every tool and direct Movie-Set helper is available synchronously/asynchronously on `window.petacity`:
 
 ```js
-// List all 14 structured WebMCP tools + JSON schemas
+// List all 20 structured WebMCP tools + JSON schemas
 window.petacity.listTools();
+
+// Inspect 100% of normalized settings + full enum catalog + FPS/culling telemetry
+await window.petacity.fullState();
 
 // Call any WebMCP tool by name
 const view = await window.petacity.callTool('petacity_what_am_i_looking_at', {});
 
 // Or use ergonomic shorthand methods directly:
 window.petacity.whatAmILookingAt();
+window.petacity.stepPilot({ forward: 0.8, yawDeltaDeg: -10, pitchDeltaDeg: 2, dt: 0.25 });
+window.petacity.transition({ type: 'wipe_left', duration: 0.9, applyState: { look: 'outrun', time: 19.2 } });
 window.petacity.takeoverBuilding({ building: 'lookingAt', message: 'WAKE UP', color: '#00ffcc' });
 window.petacity.takeoverSignage({ sign: 'lookingAt', text: 'SECTOR 09', subtext: 'RESTRICTED' });
 window.petacity.projectInFrontOfCamera({ text: 'INCOMING CALL', shape: 'diamond', followCamera: true });
@@ -49,23 +54,29 @@ iframe.contentWindow.postMessage({
 
 ---
 
-## 2. Complete WebMCP Tool Catalog (14 Tools)
+## 2. Complete WebMCP Tool Catalog (20 Tools)
 
 | Tool Name | Purpose |
 | :--- | :--- |
-| `petacity_get_world_status` | Snapshot of active look, post-FX, city topology, landmarks, water shader, clouds/wind, camera pose, autopilot route, radio movement & active movie-set overrides. |
+| `petacity_get_world_status` | Snapshot of active look, post-FX, city topology, landmarks, water shader, clouds/wind, camera pose & Drone-DP gimbal state, edit transition status, performance/culling stats, radio & active movie-set overrides. |
+| `petacity_get_full_control_state` | Complete normalized Petacity state object + `PETACITY_CONTROL_CATALOG` enum reference, saved presets/bookmarks, path recorder playhead, transition state & live FPS/culling telemetry. |
 | `petacity_what_am_i_looking_at` | Exact 3D raycast from screen coordinates `(ndcX, ndcY)` (`0,0` = center crosshair) + frustum scan across buildings, landmarks, billboards, holograms, vehicles, river, ocean & parks. |
-| `petacity_list_entities` | List world entities (`landmarks`, `buildings`, `billboards`, `holograms`, `vehicles`, `transit`, `bridges`, `parks`) sorted by proximity to camera. |
-| `petacity_set_camera_pose` | Position or aim the camera, set `fov` (`15..150°`), `lensMode` (`0..9` incl. Panini, Anamorphic, Tilt-Shift, 180° Fisheye, 360° Panorama, Little Planet, Inception Fold, 250° Probe, Kaleidoscope), `lensDistort`, `lensZoom`, `roll` (`-180..+180°` Dutch/inverted), `anamorphic`, `tiltShift`, `anglePreset`, `motionStyle`, `smoothness`, `turnSmooth`, and `freelook`. |
-| `petacity_autopilot_route` | Control smooth Autopilot Loop / route cruise (`0.02×..5.0×` speed), hover (`speed: 0`), POI `autoLook` cinematography, and multi-stop `waypoints` / landmark routes. |
-| `petacity_run_camera_script` | Run multi-shot keyframed camera choreography (`cut`, `dolly`, `orbit` with C2 quintic easing), `followVehicleId` pursuit chase-cam, or continuous `orbitTarget`. |
+| `petacity_list_entities` | List world entities (`visible`, `landmarks`, `places`, `buildings`, `signs`, `holograms`, `vehicles`, `infrastructure`) with proximity (`nearX`, `nearZ`, `radius`) and `minHeight` filters. |
+| `petacity_set_camera_pose` | Position/aim camera, configure Drone-DP fluid-head (`gazeMode` `0..5`, `gimbalSmooth`, `leadFraming`), `fov` (`15..150°`), `lensMode` (`0..9`), `rollDeg`, `anamorphic`, `tiltShift`, `anglePreset`, `motionStyle`, `camSpeed`, `colliderRadius`, and optional cinema `transition`. |
+| `petacity_step_pilot` | Relative drone stick & fluid-head gimbal piloting (`forward`, `right`, `up`, `yawDeltaDeg`, `pitchDeltaDeg`, `rollDeg`, `fov`, `speedMul`, `dt`, `steps`) with full building/terrain collision safety. |
+| `petacity_autopilot_route` | Queue smooth Autopilot destinations (`destinationName` or `waypoints`), tune `gazeMode`/`gimbalSmooth`/`leadFraming`/`speedMul`, and inspect/edit the closed spline `autopilotLoop` (`setLoop`, `insertLoopNode`, `updateLoopNode`, `removeLoopNode`, `resetLoop`). |
+| `petacity_run_camera_script` | Run multi-shot keyframed camera choreography (`dolly`, `orbit`, `flyover`, `crane`, `chase`, `static`) with per-shot film edit `transition` (`cut`, `fade_black`, `fade_white`, `dissolve`, `wipe_*`, `iris`, `shutter_bars`), `transitionDuration`, `rollDeg`, and `fov`. |
+| `petacity_scene_transition` | Trigger any of the 11 GPU scene edit transitions (`cut`, `fade_black`, `fade_white`, `dissolve`, `wipe_left`, `wipe_right`, `wipe_up`, `wipe_down`, `wipe_diagonal`, `iris`, `shutter_bars`) with atomic `cameraPose`, `applyState`, `presetName`, `bookmarkIndex`, or `newSeed` at the edit cut! |
+| `petacity_set_post_and_grade` | Configure ACES color grading (`bloom`, `lens`, `contrast`, `temp`, `film`), 6 artistic/diagnostic render styles (`artStyle` `0..5`, `artStrength`), 10 optical/360° projections, 14 angle presets, and default HUD `editTransition`. |
+| `petacity_manage_presets_and_bookmarks` | List, apply, save, or delete curated/user World Presets and Camera Bookmarks; export/import compact `#s=` share tokens & JSON state; randomize city seed; or toggle HUD (`set_hud`). |
+| `petacity_set_performance_quality` | Read live FPS / frame-time / view-culling telemetry and configure `qualityMode` (`auto` adaptive FPS governor, `low`, `medium`, `high`, `ultra`), `viewCulling`, `maxDrawDist`, `vehDrawDist`, and `postBypass`. |
 | `petacity_takeover_building` | Override any skyscraper's window shader (`normal`, `blackout`, `solid`, `pulse`, `strobe`, `dim`) and/or wrap a **4-sided glowing LED window-matrix message marquee** around its facade. |
 | `petacity_takeover_signage` | Hijack any city billboard or mega-screen (`lookingAt` or `signId`) with custom pure-code neon glyph typography, subtext, colors & marquee scroll. |
-| `petacity_project_hologram` | Spawn a volumetric hologram (`billboard`, `diamond`, `prism`, `ring`) right in front of the camera — complete with an armored drone projector pod and **corner-terminating volumetric light frustum**. |
-| `petacity_control_vehicle` | Puppeteer any car, spinner, transit train, or blimp (`nearest`, `lookingAt`, `car`, `spinner`, `train`, or `vehicleId`): teleport, park in front of camera, circle camera, drive `waypoints`, repaint `color`, or set twin `headlights` (`on`, `glow-only`, `off`). |
-| `petacity_set_environment` | Live-switch visual `look`, `postStyle` (`0..12`), `time` (`0..24h`), `waterShader` (`0..4`), `waterMode`, `shoreDist`, `clouds`, `cloudLayer`, `windAngle`, `windStrength`, `rain`, `fog`, `trafficCount`, `seed`, or `radius`. |
-| `petacity_control_music` | Start/stop the pure-code generative radio, switch between the 6 original stations, configure Playlist Auto-DJ (`seq` / `shuffle` / `loop` + `playlistInterval`), tune `volume`, `space`, `warmth`, `pulse`, `cityReact`, and read live chord/movement evolution. |
-| `petacity_capture_media` | Drive `CameraPathRecorder`, capture clean PNG stills (`Viewport`/`720p`/`1080p`/`1440p`/`2x`/`4K`), record high-bitrate (`16..115 Mbps`) video with muxed WebAudio synth sound (`startVideo`/`stopVideo`), or export a standalone single-file HTML autoloop demo (`exportDemoHTML`). |
+| `petacity_project_hologram` | Spawn a volumetric hologram (`billboard`, `panel`, `disc`, `diamond`, `cuboctahedron`, `icosahedron`, `knot`, `prism`, `ring`) in front of the camera with an armored drone projector pod and **corner-terminating volumetric light frustum**. |
+| `petacity_control_vehicle` | Puppeteer any car, spinner, transit train, or blimp (`nearest`, `lookingAt`, `car`, `spinner`, `train`, or `vehicleId`): teleport, park in front of camera, circle camera, drive `waypoints`, repaint `color`, `follow`, or set `headlights`. |
+| `petacity_set_environment` | Live-switch `look`, `tint`, `customPalette`, `terrainMode`/`terrainScale`, `treeMode`/`vegCover`/`vegScale`, `waterMode`/`waterShader`, `time`/`dayCycle`, 3-deck `clouds`/`cloudLayerElev`/`cloudLayerDens`, `weatherMode`/`weatherAutoMode`, all light & district dials, `holoDensity`/`holoScale`/`holoScan`, and `trailMode`/`trailLength`. |
+| `petacity_control_music` | Start/stop the pure-code generative radio, switch stations, reseed voice-leading, configure Playlist Auto-DJ (`seq` / `shuffle` / `loop` + `playlistInterval`), and tune `volume`, `space`, `warmth`, `pulse`, and `react`. |
+| `petacity_capture_media` | Capture clean PNG stills (`Viewport`/`720p`/`1080p`/`1440p`/`4K`), start/stop HQ video + synth audio (`start_video`/`stop_video`), and record/keyframe/smooth/seek/loop/import/export spline camera paths. |
 | `petacity_reset_movie_set` | Cleanly restore all building lights/facades, hijacked billboards, projected holograms, overridden vehicles, and camera scripts in one call. |
 
 ---
@@ -237,4 +248,77 @@ await window.petacity.callTool('petacity_set_environment', {
   trailLength: 1.6,             // 0..2.5x trail length & luminous intensity
 });
 ```
+
+### Recipe 10 — Cinema Scene Edit Transitions (Fade, Dissolve, Wipe, Iris & Shutter Bars)
+```js
+// Cut atomically to a sunset Synthwave skyline behind a soft diagonal wipe or Kurosawa horizontal wipe:
+await window.petacity.callTool('petacity_scene_transition', {
+  type: 'wipe_diagonal',        // 'cut' | 'fade_black' | 'fade_white' | 'dissolve' | 'wipe_left' | 'wipe_right' | 'wipe_up' | 'wipe_down' | 'wipe_diagonal' | 'iris' | 'shutter_bars'
+  duration: 1.05,
+  feather: 0.07,
+  applyState: { look: 'outrun', time: 18.8, weatherMode: 0 },
+  cameraPose: { x: 240, y: 145, z: 420, lookAt: { x: 0, y: 110, z: 0 }, fov: 50 },
+});
+
+// Multi-shot automated cinematography sequence with per-shot film edit transitions:
+await window.petacity.callTool('petacity_run_camera_script', {
+  shots: [
+    {
+      name: 'Establishing Wide',
+      type: 'dolly',
+      from: [420, 210, 520],
+      to: [280, 175, 360],
+      lookAt: [0, 110, 0],
+      duration: 4.5,
+      transition: 'fade_black',
+      transitionDuration: 1.2,
+    },
+    {
+      name: 'Low Canyon Reveal',
+      type: 'dolly',
+      from: [-60, 48, 260],
+      to: [-20, 54, -80],
+      lookAt: [0, 140, -240],
+      fov: 68,
+      rollDeg: -5,
+      duration: 5.0,
+      transition: 'wipe_left',
+      transitionDuration: 0.75,
+    },
+  ],
+});
+```
+
+### Recipe 11 — Professional Drone-DP Fluid-Head Gimbal & Step-by-Step Agent Piloting
+```js
+// Configure the 3rd-order fluid-head Drone Cinematographer for ultra-silky motivated reveals:
+await window.petacity.callTool('petacity_set_camera_pose', {
+  glide: true,
+  gazeMode: 'drone_cinema',     // 'off' | 'drone_cinema' | 'architectural' | 'skyline' | 'projections' | 'kinetic'
+  gimbalSmooth: 1.35,           // heavier cinema fluid-head inertia (0.15..2.5)
+  leadFraming: 0.9,             // turn-anticipation & rule-of-thirds lead framing
+});
+
+// Or pilot the drone incrementally step-by-step with collision-safe stick & gimbal deltas:
+await window.petacity.callTool('petacity_step_pilot', {
+  forward: 1.0,
+  right: 0.2,
+  up: 0.1,
+  yawDeltaDeg: -8,
+  pitchDeltaDeg: 1.5,
+  dt: 0.25,
+  steps: 4,
+});
+```
+
+### Recipe 12 — Low-End Device Optimization & View-Culling Telemetry
+```js
+// Inspect live FPS, frame time, and frustum/distance view-culling counters, or lock to low-power mode:
+const perf = await window.petacity.callTool('petacity_set_performance_quality', {
+  qualityMode: 'auto',          // 'auto' (adaptive FPS governor) | 'low' | 'medium' | 'high' | 'ultra'
+  viewCulling: true,
+});
+console.log(perf.performance);
+```
+
 

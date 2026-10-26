@@ -129,10 +129,23 @@ test('main.js boots end-to-end (jsdom + fake WebGL)', { skip: JSDOM ? false : 'j
   window.document.querySelector('#b-fold-all').click();
   window.document.querySelector('#b-glide').click();
   window.document.querySelector('#b-collide').click();
+  window.document.querySelector('#b-trans-preview').click();
+  window.document.querySelector('#b-cull').click();
   for (const btn of window.document.querySelectorAll('button')) {
     const txt = (btn.textContent || '').trim();
     assert.equal(/[A-Za-z0-9]/.test(txt), false, `live button #${btn.id} stays pure glyph after JS toggle (got ${JSON.stringify(txt)})`);
   }
+
+  // Verify Phase-21 live WebMCP SDK (`window.petacity`) controls full scene end-to-end
+  assert.ok(window.petacity && window.petacity.listTools().length === 20, '20 WebMCP tools live on window.petacity');
+  const fullCtrl = await window.petacity.fullState();
+  assert.equal(fullCtrl.state.lookId, 'tron');
+  const stepRes = await window.petacity.stepPilot({ forward: 0.5, yawDeltaDeg: 8, dt: 0.2 });
+  assert.equal(stepRes.ok, true);
+  const perfRes = await window.petacity.setPerformance({ qualityMode: 'low', viewCulling: true });
+  assert.equal(perfRes.performance.qualityMode, 'low');
+  const presetList = await window.petacity.presets({ action: 'list' });
+  assert.ok(presetList.builtinPresets.length >= 6);
 
   assert.deepEqual(pageErrors, [], 'no page errors');
   assert.deepEqual(uncaught.map((e) => e.stack || String(e)), [], 'no uncaught exceptions');

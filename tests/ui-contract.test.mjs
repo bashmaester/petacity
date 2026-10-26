@@ -361,6 +361,43 @@ test('Phase-20 UI contract: hologram projection density/scale/scanlines, moving-
   }
 });
 
+test('Phase-21 UI contract: Drone-DP gaze, 11 scene edit transitions, low-end quality/view-culling HUD controls & full 20-tool WebMCP exposure', () => {
+  const webmcp = readFileSync(join(root, 'src', 'webmcp.js'), 'utf8');
+
+  for (const id of [
+    'sel-edit-trans', 'b-trans-preview', 'sl-trans-dur', 'trans-dur-label',
+    'sel-quality', 'b-cull',
+  ]) {
+    assert.ok(html.includes(`id="${id}"`), `#${id} exists in index.html`);
+  }
+
+  for (const tr of [
+    'cut', 'fade_black', 'fade_white', 'dissolve',
+    'wipe_left', 'wipe_right', 'wipe_up', 'wipe_down',
+    'wipe_diagonal', 'iris', 'shutter_bars',
+  ]) {
+    assert.match(html, new RegExp(`<select[^>]*id="sel-edit-trans"[\\s\\S]*?<option[^>]*value="${tr}"`), `#sel-edit-trans includes option "${tr}"`);
+  }
+
+  for (const q of ['auto', 'low', 'medium', 'high', 'ultra']) {
+    assert.match(html, new RegExp(`<select[^>]*id="sel-quality"[\\s\\S]*?<option[^>]*value="${q}"`), `#sel-quality includes option "${q}"`);
+  }
+
+  assert.ok(html.includes('Drone DP'), '#sel-gaze-mode describes professional Drone DP modes');
+
+  for (const toolName of [
+    'petacity_get_full_control_state',
+    'petacity_step_pilot',
+    'petacity_scene_transition',
+    'petacity_set_post_and_grade',
+    'petacity_manage_presets_and_bookmarks',
+    'petacity_set_performance_quality',
+  ]) {
+    assert.ok(webmcp.includes(toolName), `src/webmcp.js exposes "${toolName}"`);
+  }
+});
+
+
 
 
 

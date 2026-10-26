@@ -19,6 +19,60 @@ export const ART_STYLE_NAMES = [
   'Impressionist Nocturne',
 ];
 
+export const SCENE_TRANSITION_MODES = [
+  { id: 'cut',           mode: 0,  label: 'Clean Cut (Instant)' },
+  { id: 'fade_black',    mode: 1,  label: 'Fade to Black' },
+  { id: 'fade_white',    mode: 2,  label: 'Dip to White' },
+  { id: 'dissolve',      mode: 3,  label: 'Cross-Dissolve' },
+  { id: 'wipe_left',     mode: 4,  label: 'Wipe — Left to Right' },
+  { id: 'wipe_right',    mode: 5,  label: 'Wipe — Right to Left' },
+  { id: 'wipe_up',       mode: 6,  label: 'Wipe — Rising Curtain' },
+  { id: 'wipe_down',     mode: 7,  label: 'Wipe — Top Curtain' },
+  { id: 'wipe_diagonal', mode: 8,  label: 'Wipe — Anamorphic Slash' },
+  { id: 'iris',          mode: 9,  label: 'Cinema Iris Reveal' },
+  { id: 'shutter_bars',  mode: 10, label: 'Venetian Shutter Wipe' },
+];
+
+export const SCENE_TRANSITION_NAMES = SCENE_TRANSITION_MODES.map((m) => m.label);
+
+export function resolveTransitionMode(input) {
+  if (typeof input === 'number' && Number.isFinite(input)) {
+    const idx = Math.max(0, Math.min(SCENE_TRANSITION_MODES.length - 1, Math.round(input)));
+    return SCENE_TRANSITION_MODES[idx];
+  }
+  const s = String(input || 'cut').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (s === 'fade_out_black') return { id: 'fade_out_black', mode: 1, label: 'Fade Out to Black' };
+  if (s === 'fade_in_black') return { id: 'fade_in_black', mode: 1, label: 'Fade In from Black' };
+  const aliases = {
+    none: 'cut',
+    clean_cut: 'cut',
+    instant: 'cut',
+    fade: 'fade_black',
+    dip_to_black: 'fade_black',
+    fade_to_black: 'fade_black',
+    black: 'fade_black',
+    dip_white: 'fade_white',
+    dip_to_white: 'fade_white',
+    flash: 'fade_white',
+    white: 'fade_white',
+    cross_dissolve: 'dissolve',
+    crossfade: 'dissolve',
+    mix: 'dissolve',
+    wipe: 'wipe_left',
+    wipe_horizontal: 'wipe_left',
+    wipe_vertical: 'wipe_up',
+    diagonal_wipe: 'wipe_diagonal',
+    slash: 'wipe_diagonal',
+    circle: 'iris',
+    iris_wipe: 'iris',
+    shutter: 'shutter_bars',
+    bars: 'shutter_bars',
+  };
+  const norm = aliases[s] || s;
+  const hit = SCENE_TRANSITION_MODES.find((m) => m.id === norm);
+  return hit || SCENE_TRANSITION_MODES[0];
+}
+
 export const LENS_MODE_NAMES = [
   'Rectilinear Cinema Lens',
   'Panini Architectural Wide',
@@ -236,6 +290,12 @@ uniform float uLensZoom;
 uniform float uAnamorphic;
 uniform float uTiltShift;
 uniform float uTiltAngle;
+uniform sampler2D tTransFrom;
+uniform float uTransMode;
+uniform float uTransProg;
+uniform float uTransFeather;
+uniform vec3 uTransColor;
+uniform float uTransHasSnap;
 varying vec2 vUv;
 
 float grainHash(vec2 v) {
@@ -600,6 +660,47 @@ void main() {
   col *= mix(1.0, vig, clamp(uVignette, 0.0, 1.0));
   col *= frameMask;
 
+  // Cinema Scene Edit Transitions (Fade to Black, Dip to White, Cross-Dissolve, Wipes, Iris & Shutter)
+  if (uTransMode > 0.5 && uTransProg > 0.0001) {
+    vec3 outgoing = uTransHasSnap > 0.5 ? texture2D(tTransFrom, vUv).rgb : uTransColor;
+    float tp = clamp(uTransProg, 0.0, 1.0);
+    float cp = tp * tp * (3.0 - 2.0 * tp);
+    float fe = max(0.003, uTransFeather);
+    if (uTransMode < 2.5) {
+      // Dip to Black / Dip to White (tp represents curtain closure 0..1)
+      float aspT = uRes.x / max(1.0, uRes.y);
+      float irisV = 0.72 + 0.28 * smoothstep(0.95, 0.15, length((vUv - 0.5) * vec2(aspT, 1.0)));
+      col = mix(col * mix(1.0, irisV, tp * 0.55), uTransColor, tp);
+    } else if (uTransMode < 3.5) {
+      // Optical Cross-Dissolve (outgoing snapshot -> live incoming scene)
+      col = mix(outgoing, col, cp);
+    } else {
+      float coord = vUv.x;
+      if (uTransMode < 4.5) {
+        coord = vUv.x; // wipe_left: left -> right
+      } else if (uTransMode < 5.5) {
+        coord = 1.0 - vUv.x; // wipe_right: right -> left
+      } else if (uTransMode < 6.5) {
+        coord = vUv.y; // wipe_up: bottom -> top
+      } else if (uTransMode < 7.5) {
+        coord = 1.0 - vUv.y; // wipe_down: top -> bottom
+      } else if (uTransMode < 8.5) {
+        coord = clamp(vUv.x * 0.74 + (1.0 - vUv.y) * 0.26, 0.0, 1.0); // diagonal slash
+      } else if (uTransMode < 9.5) {
+        float aspI = uRes.x / max(1.0, uRes.y);
+        vec2 dUv = vec2((vUv.x - 0.5) * aspI, vUv.y - 0.5);
+        float maxR = length(vec2(0.5 * aspI, 0.5)) + fe;
+        coord = clamp(length(dUv) / max(0.001, maxR), 0.0, 1.0); // circular cinema iris
+      } else {
+        coord = fract(vUv.y * 8.0 + vUv.x * 0.08); // Venetian shutter slats
+      }
+      float sweep = cp * (1.0 + fe * 2.0) - fe;
+      float reveal = 1.0 - smoothstep(sweep - fe, sweep + fe, coord);
+      float seamGlow = exp(-pow((coord - sweep) / max(0.004, fe * 0.55), 2.0)) * 0.12 * sin(cp * 3.14159265);
+      col = mix(outgoing, col, reveal) + vec3(seamGlow);
+    }
+  }
+
   gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }
 `;
@@ -700,19 +801,298 @@ export function makePostProcessor(renderer) {
       uAnamorphic: { value: 0 },
       uTiltShift: { value: 0 },
       uTiltAngle: { value: 0 },
+      tTransFrom: { value: null },
+      uTransMode: { value: 0 },
+      uTransProg: { value: 0 },
+      uTransFeather: { value: 0.045 },
+      uTransColor: { value: new THREE.Color('#000000') },
+      uTransHasSnap: { value: 0 },
     },
     depthTest: false,
     depthWrite: false,
   });
 
+  const fallbackBlackTex = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, THREE.RGBAFormat);
+  fallbackBlackTex.needsUpdate = true;
+  compMat.uniforms.tTransFrom.value = fallbackBlackTex;
+
   const quad = new THREE.Mesh(quadGeo, brightMat);
   quad.frustumCulled = false;
   quadScene.add(quad);
 
+  let pwCur = 512;
+  let phCur = 512;
   let bw = 256;
   let bh = 256;
+  let bloomScale = 0.35;
+  let bloomPasses = 2;
+  let cubeMax = 1024;
   let bypass = false;
+  let hasRenderedOnce = false;
+  let snapRT = null;
   const tmpEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+
+  // Active cinema edit transition state
+  const transState = {
+    running: false,
+    type: 'cut',
+    mode: 0,
+    elapsed: 0,
+    duration: 0,
+    hold: 0,
+    feather: 0.045,
+    cutFired: false,
+    holdOnEnd: false,
+    onCut: null,
+    onComplete: null,
+  };
+
+  function quinticStep01(x) {
+    const t = Math.max(0, Math.min(1, x));
+    return t * t * t * (10 - 15 * t + 6 * t * t);
+  }
+
+  function ensureSnapTarget() {
+    if (!snapRT) {
+      snapRT = new THREE.WebGLRenderTarget(pwCur, phCur, {
+        type: THREE.HalfFloatType,
+        minFilter: THREE.LinearFilter,
+        magFilter: THREE.LinearFilter,
+        depthBuffer: false,
+        stencilBuffer: false,
+      });
+    } else if (snapRT.width !== pwCur || snapRT.height !== phCur) {
+      snapRT.setSize(pwCur, phCur);
+    }
+    return snapRT;
+  }
+
+  function captureOutgoingSnapshot() {
+    if (!renderer || !hasRenderedOnce || bypass) return false;
+    const target = ensureSnapTarget();
+    const prevMode = compMat.uniforms.uTransMode.value;
+    const prevProg = compMat.uniforms.uTransProg.value;
+    compMat.uniforms.uTransMode.value = 0;
+    compMat.uniforms.uTransProg.value = 0;
+    quad.material = compMat;
+    compMat.uniforms.tScene.value = sceneRT.texture;
+    compMat.uniforms.tBloom.value = bloomA.texture;
+    compMat.uniforms.tDepth.value = sceneRT.depthTexture;
+    renderer.setRenderTarget(target);
+    renderer.render(quadScene, quadCam);
+    renderer.setRenderTarget(null);
+    compMat.uniforms.uTransMode.value = prevMode;
+    compMat.uniforms.uTransProg.value = prevProg;
+    compMat.uniforms.tTransFrom.value = target.texture;
+    compMat.uniforms.uTransHasSnap.value = 1;
+    return true;
+  }
+
+  function startTransition(opts = {}) {
+    const spec = resolveTransitionMode(opts.type ?? 'cut');
+    const onCut = typeof opts.onCut === 'function' ? opts.onCut : null;
+    const onComplete = typeof opts.onComplete === 'function' ? opts.onComplete : null;
+    const feather = Number.isFinite(opts.feather) ? Math.max(0.003, Math.min(0.35, opts.feather)) : 0.045;
+    compMat.uniforms.uTransFeather.value = feather;
+
+    if (spec.id === 'cut') {
+      transState.running = false;
+      transState.type = 'cut';
+      transState.mode = 0;
+      transState.holdOnEnd = false;
+      compMat.uniforms.uTransMode.value = 0;
+      compMat.uniforms.uTransProg.value = 0;
+      compMat.uniforms.uTransHasSnap.value = 0;
+      if (onCut) onCut();
+      if (onComplete) onComplete();
+      return { ok: true, type: 'cut', mode: 0, duration: 0 };
+    }
+
+    const dur = Math.max(0.08, Math.min(12.0, Number.isFinite(opts.duration) ? Number(opts.duration) : 0.95));
+    const hold = Math.max(0, Math.min(4.0, Number.isFinite(opts.hold) ? Number(opts.hold) : (spec.mode <= 2 ? 0.10 : 0)));
+    const defaultCol = spec.id === 'fade_white' ? '#ffffff' : '#000000';
+    compMat.uniforms.uTransColor.value.set(opts.color || defaultCol);
+
+    if (spec.id === 'fade_out_black' || spec.id === 'fade_in_black') {
+      transState.running = true;
+      transState.type = spec.id;
+      transState.mode = 1;
+      transState.elapsed = 0;
+      transState.duration = dur;
+      transState.hold = 0;
+      transState.feather = feather;
+      transState.cutFired = spec.id === 'fade_in_black';
+      transState.holdOnEnd = spec.id === 'fade_out_black' ? (opts.holdOnEnd !== false) : false;
+      transState.onCut = onCut;
+      transState.onComplete = onComplete;
+      if (spec.id === 'fade_in_black' && onCut) onCut();
+      compMat.uniforms.uTransMode.value = 1;
+      compMat.uniforms.uTransHasSnap.value = 0;
+      compMat.uniforms.uTransProg.value = spec.id === 'fade_in_black' ? 1.0 : 0.001;
+      return { ok: true, type: spec.id, mode: 1, duration: dur };
+    }
+
+    if (spec.mode <= 2) {
+      // Two-stage Dip (Fade to Black / Dip to White): fades out -> calls onCut at 100% curtain -> fades in!
+      transState.running = true;
+      transState.type = spec.id;
+      transState.mode = spec.mode;
+      transState.elapsed = 0;
+      transState.duration = dur;
+      transState.hold = hold;
+      transState.feather = feather;
+      transState.cutFired = false;
+      transState.holdOnEnd = false;
+      transState.onCut = onCut;
+      transState.onComplete = onComplete;
+      compMat.uniforms.uTransMode.value = spec.mode;
+      compMat.uniforms.uTransHasSnap.value = 0;
+      compMat.uniforms.uTransProg.value = 0.001;
+      return { ok: true, type: spec.id, mode: spec.mode, duration: dur + hold };
+    }
+
+    // Dual-shot optical transition (Dissolve, Wipes, Iris, Shutter Bars):
+    // Capture outgoing graded frame into `snapRT`, immediately apply `onCut`, then reveal live incoming scene!
+    const snapped = captureOutgoingSnapshot();
+    if (!snapped) {
+      compMat.uniforms.tTransFrom.value = fallbackBlackTex;
+      compMat.uniforms.uTransHasSnap.value = 0;
+    }
+    if (onCut) onCut();
+    transState.running = true;
+    transState.type = spec.id;
+    transState.mode = spec.mode;
+    transState.elapsed = 0;
+    transState.duration = dur;
+    transState.hold = 0;
+    transState.feather = feather;
+    transState.cutFired = true;
+    transState.holdOnEnd = false;
+    transState.onCut = null;
+    transState.onComplete = onComplete;
+    compMat.uniforms.uTransMode.value = spec.mode;
+    compMat.uniforms.uTransProg.value = 0.001;
+    return { ok: true, type: spec.id, mode: spec.mode, duration: dur, capturedSnapshot: snapped };
+  }
+
+  function updateTransition(dt = 0) {
+    if (!transState.running) return false;
+    const step = Math.max(0, Math.min(0.25, Number(dt) || 0));
+    transState.elapsed += step;
+
+    if (transState.type === 'fade_out_black') {
+      const p = quinticStep01(transState.elapsed / Math.max(0.05, transState.duration));
+      compMat.uniforms.uTransProg.value = Math.max(0.001, p);
+      if (transState.elapsed >= transState.duration) {
+        if (!transState.cutFired && transState.onCut) {
+          transState.cutFired = true;
+          transState.onCut();
+        }
+        transState.running = false;
+        if (!transState.holdOnEnd) {
+          compMat.uniforms.uTransMode.value = 0;
+          compMat.uniforms.uTransProg.value = 0;
+        } else {
+          compMat.uniforms.uTransProg.value = 1.0;
+        }
+        const cb = transState.onComplete;
+        transState.onComplete = null;
+        if (cb) cb();
+      }
+      return true;
+    }
+
+    if (transState.type === 'fade_in_black') {
+      const p = 1.0 - quinticStep01(transState.elapsed / Math.max(0.05, transState.duration));
+      compMat.uniforms.uTransProg.value = Math.max(0, p);
+      if (transState.elapsed >= transState.duration) {
+        transState.running = false;
+        compMat.uniforms.uTransMode.value = 0;
+        compMat.uniforms.uTransProg.value = 0;
+        const cb = transState.onComplete;
+        transState.onComplete = null;
+        if (cb) cb();
+      }
+      return true;
+    }
+
+    if (transState.mode <= 2) {
+      const half = Math.max(0.04, transState.duration * 0.5);
+      const total = half * 2 + transState.hold;
+      const t = transState.elapsed;
+      let curtain = 0;
+      if (t < half) {
+        curtain = quinticStep01(t / half);
+      } else if (t < half + transState.hold) {
+        curtain = 1.0;
+        if (!transState.cutFired) {
+          transState.cutFired = true;
+          if (transState.onCut) transState.onCut();
+        }
+      } else {
+        if (!transState.cutFired) {
+          transState.cutFired = true;
+          if (transState.onCut) transState.onCut();
+        }
+        curtain = 1.0 - quinticStep01((t - half - transState.hold) / half);
+      }
+      compMat.uniforms.uTransProg.value = Math.max(0.0005, curtain);
+      if (t >= total) {
+        transState.running = false;
+        compMat.uniforms.uTransMode.value = 0;
+        compMat.uniforms.uTransProg.value = 0;
+        const cb = transState.onComplete;
+        transState.onComplete = null;
+        if (cb) cb();
+      }
+      return true;
+    }
+
+    // Dual-shot wipe / dissolve / iris / shutter progress 0 -> 1
+    const prog = Math.min(1.0, transState.elapsed / Math.max(0.05, transState.duration));
+    compMat.uniforms.uTransProg.value = Math.max(0.0005, prog);
+    if (transState.elapsed >= transState.duration) {
+      transState.running = false;
+      compMat.uniforms.uTransMode.value = 0;
+      compMat.uniforms.uTransProg.value = 0;
+      compMat.uniforms.uTransHasSnap.value = 0;
+      const cb = transState.onComplete;
+      transState.onComplete = null;
+      if (cb) cb();
+    }
+    return true;
+  }
+
+  function getTransitionState() {
+    return {
+      active: transState.running,
+      running: transState.running,
+      type: transState.type,
+      mode: compMat.uniforms.uTransMode.value,
+      progress: Math.round(compMat.uniforms.uTransProg.value * 1000) / 1000,
+      duration: transState.duration,
+      holdOnEnd: transState.holdOnEnd,
+    };
+  }
+
+  function setQuality(q = {}) {
+    if (q.bloomPasses !== undefined) {
+      bloomPasses = Math.max(0, Math.min(2, Math.round(Number(q.bloomPasses))));
+    }
+    if (q.bloomScale !== undefined) {
+      const nextScale = Math.max(0.16, Math.min(0.5, Number(q.bloomScale) || 0.35));
+      if (Math.abs(nextScale - bloomScale) > 0.01) {
+        bloomScale = nextScale;
+        bw = Math.max(2, Math.floor(pwCur * bloomScale));
+        bh = Math.max(2, Math.floor(phCur * bloomScale));
+        bloomA.setSize(bw, bh);
+        bloomB.setSize(bw, bh);
+      }
+    }
+    if (q.cubeMax !== undefined) {
+      cubeMax = Math.max(256, Math.min(1024, Math.round(Number(q.cubeMax) || 1024)));
+    }
+  }
 
   function ensureCubeTarget(near = 2.0, far = 28000.0) {
     if (!cubeRT) {
@@ -732,18 +1112,20 @@ export function makePostProcessor(renderer) {
   function setSize(w, h, dpr = 1) {
     const pw = Math.max(2, Math.floor(w * dpr));
     const ph = Math.max(2, Math.floor(h * dpr));
+    pwCur = pw;
+    phCur = ph;
     sceneRT.setSize(pw, ph);
     if (sceneRT.depthTexture) {
       sceneRT.depthTexture.image.width = pw;
       sceneRT.depthTexture.image.height = ph;
     }
-    bw = Math.max(2, Math.floor(pw * 0.35));
-    bh = Math.max(2, Math.floor(ph * 0.35));
+    bw = Math.max(2, Math.floor(pw * bloomScale));
+    bh = Math.max(2, Math.floor(ph * bloomScale));
     bloomA.setSize(bw, bh);
     bloomB.setSize(bw, bh);
     compMat.uniforms.uRes.value.set(pw, ph);
     cubeLensMat.uniforms.uRes.value.set(pw, ph);
-    const wantCube = Math.max(512, Math.min(1024, Math.floor(Math.max(pw, ph) * 0.55)));
+    const wantCube = Math.max(256, Math.min(cubeMax, Math.floor(Math.max(pw, ph) * 0.55)));
     if (cubeRT && Math.abs(wantCube - cubeSize) >= 192) {
       cubeSize = wantCube;
       cubeRT.setSize(cubeSize, cubeSize);
@@ -830,35 +1212,38 @@ export function makePostProcessor(renderer) {
       renderer.render(scene, camera);
     }
 
-    // 2. Extract bright regions into bloomA
-    quad.material = brightMat;
-    brightMat.uniforms.tDiffuse.value = sceneRT.texture;
-    renderer.setRenderTarget(bloomA);
-    renderer.render(quadScene, quadCam);
-
-    // 3. Two-iteration separable Gaussian blur (H -> V -> wider H -> wider V)
-    quad.material = blurMat;
-    for (let pass = 0; pass < 2; pass++) {
-      const spread = pass === 0 ? 1.0 : 2.1;
-      blurMat.uniforms.tDiffuse.value = bloomA.texture;
-      blurMat.uniforms.uDir.value.set(spread / bw, 0);
-      renderer.setRenderTarget(bloomB);
-      renderer.render(quadScene, quadCam);
-
-      blurMat.uniforms.tDiffuse.value = bloomB.texture;
-      blurMat.uniforms.uDir.value.set(0, spread / bh);
+    // 2. Extract bright regions into bloomA (+ optional low-power single/zero pass scaling)
+    if (bloomPasses > 0) {
+      quad.material = brightMat;
+      brightMat.uniforms.tDiffuse.value = sceneRT.texture;
       renderer.setRenderTarget(bloomA);
       renderer.render(quadScene, quadCam);
+
+      // 3. Separable Gaussian blur (`bloomPasses` = 2 default cinema, 1 on low/medium GPUs)
+      quad.material = blurMat;
+      for (let pass = 0; pass < bloomPasses; pass++) {
+        const spread = pass === 0 ? 1.0 : 2.1;
+        blurMat.uniforms.tDiffuse.value = bloomA.texture;
+        blurMat.uniforms.uDir.value.set(spread / bw, 0);
+        renderer.setRenderTarget(bloomB);
+        renderer.render(quadScene, quadCam);
+
+        blurMat.uniforms.tDiffuse.value = bloomB.texture;
+        blurMat.uniforms.uDir.value.set(0, spread / bh);
+        renderer.setRenderTarget(bloomA);
+        renderer.render(quadScene, quadCam);
+      }
     }
 
-    // 4. Final composite + optics + grading + artistic style + film grain to screen
+    // 4. Final composite + optics + grading + artistic style + film grain + edit transitions to screen
     quad.material = compMat;
     compMat.uniforms.tScene.value = sceneRT.texture;
-    compMat.uniforms.tBloom.value = bloomA.texture;
+    compMat.uniforms.tBloom.value = bloomPasses > 0 ? bloomA.texture : fallbackBlackTex;
     compMat.uniforms.tDepth.value = sceneRT.depthTexture;
     compMat.uniforms.uTime.value = time;
     renderer.setRenderTarget(null);
     renderer.render(quadScene, quadCam);
+    hasRenderedOnce = true;
   }
 
   function setBypass(v) {
@@ -869,6 +1254,8 @@ export function makePostProcessor(renderer) {
     sceneRT.dispose();
     bloomA.dispose();
     bloomB.dispose();
+    if (snapRT) snapRT.dispose();
+    fallbackBlackTex.dispose();
     if (cubeRT) cubeRT.dispose();
     quadGeo.dispose();
     brightMat.dispose();
@@ -880,7 +1267,10 @@ export function makePostProcessor(renderer) {
   return {
     sceneRT, bloomA, bloomB, brightMat, blurMat, cubeLensMat, compMat,
     get cubeRT() { return cubeRT; },
+    get snapRT() { return snapRT; },
     get bypass() { return bypass; },
-    setBypass, setSize, configure, render, dispose,
+    setBypass, setQuality, setSize, configure, render,
+    startTransition, updateTransition, getTransitionState, captureOutgoingSnapshot,
+    dispose,
   };
 }

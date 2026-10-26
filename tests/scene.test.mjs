@@ -9,6 +9,7 @@ import { WEATHER_VERT, SKY_FRAG, GROUND_FRAG, CLOUD_VERT, CLOUD_FRAG } from '../
 import * as POST from '../src/post.js';
 import {
   makePostProcessor, ART_STYLE_NAMES, LENS_MODE_NAMES, CAMERA_ANGLE_PRESETS,
+  SCENE_TRANSITION_MODES, SCENE_TRANSITION_NAMES, resolveTransitionMode,
   POST_VERT, BRIGHT_FRAG, BLUR_FRAG, CUBE_LENS_FRAG, COMP_FRAG,
 } from '../src/post.js';
 import {
@@ -23,6 +24,7 @@ import {
   buildSigns, buildHolos, projectorFrustumGeometry, beamGeometry,
   buildTransitInfrastructure, buildBridges, buildHarbor, buildSpaceport,
   buildStreetInfrastructure, evalTrafficSignalState,
+  PERFORMANCE_PROFILES, createSceneViewCuller,
 } from '../src/scene.js';
 import {
   WORLD_PRESETS, DEFAULT_BOOKMARKS, normalizeExactState, encodeExactState, decodeExactState,
@@ -2022,7 +2024,7 @@ test('Phase-15 scene, motion, audio evolution & WebMCP Movie-Set Director end-to
 
     assert.ok(globalThis.navigator.modelContext, 'navigator.modelContext registered');
     assert.ok(globalThis.window.petacity === mcp, 'window.petacity SDK exposed');
-    assert.equal(mcp.listTools().length, 14, 'all 14 Movie-Set WebMCP tools registered');
+    assert.equal(mcp.listTools().length, 20, 'all 20 Movie-Set & Full-Cinematography WebMCP tools registered');
 
     // Aim directly at a tall building and ask WebMCP `petacity_what_am_i_looking_at`
     let targetBoxIdx = 0;
@@ -2852,6 +2854,328 @@ test('Phase-20 single-sided cone/pyramid planar holos, Archimedean & abstract 3D
     globalThis.window = prevWin;
   }
 });
+
+test('Phase-21 Drone-DP fluid-head cinematography, 11 scene edit transitions, full 20-tool WebMCP control & low-end view culling', async () => {
+  const prevWin = globalThis.window;
+  const prevNav = globalThis.navigator;
+  globalThis.window = {
+    addEventListener() {},
+    removeEventListener() {},
+    btoa: (s) => Buffer.from(s, 'binary').toString('base64'),
+    atob: (s) => Buffer.from(s, 'base64').toString('binary'),
+  };
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: {},
+  });
+
+  try {
+    // 1) Drone-DP fluid-head gimbal: deterministic target choice (zero Math.random), C² jerk-limited smoothness & stepPilot
+    const makeDroneRig = () => {
+      const cam = new THREE.PerspectiveCamera(58, 16 / 9, 2, 28000);
+      const ctl = new FlyControls(cam, { addEventListener() {}, removeEventListener() {} });
+      ctl.setPose({ x: 0, y: 110, z: 320, yaw: 0, pitch: -0.05 });
+      ctl.poiList = [
+        { name: 'Solar Ziggurat', x: 115, y: 185, lookY: 130, z: 120, priority: 1.65 },
+        { name: 'Helix Arcology', x: -135, y: 210, lookY: 145, z: -90, priority: 1.55 },
+        { name: 'Harbor Spire', x: 95, y: 160, lookY: 105, z: -280, priority: 1.35 },
+      ];
+      ctl.setAutopilotLoop([
+        { x: 0, y: 110, z: 320 },
+        { x: 25, y: 115, z: 0 },
+        { x: -20, y: 120, z: -320 },
+        { x: -180, y: 115, z: 40 },
+      ]);
+      ctl.setGazeMode(1);
+      ctl.setGlide(true);
+      ctl.gimbalSmooth = 1.15;
+      ctl.leadFraming = 0.85;
+      return { cam, ctl };
+    };
+
+    const rigA = makeDroneRig();
+    const rigB = makeDroneRig();
+    const yawSeries = [];
+    for (let i = 0; i < 180; i++) {
+      rigA.ctl.update(1 / 60);
+      rigB.ctl.update(1 / 60);
+      yawSeries.push(rigA.ctl.yaw);
+    }
+    assert.equal(rigA.ctl.yaw, rigB.ctl.yaw, 'Drone-DP gaze is 100% deterministic (zero random jitter)');
+    assert.equal(rigA.ctl.pitch, rigB.ctl.pitch, 'Drone-DP pitch is 100% deterministic');
+    assert.equal(rigA.ctl.autoLookSubject, rigB.ctl.autoLookSubject, 'identical flight path picks identical hero subject');
+
+    // Verify 3rd-order fluid-head angular velocity and frame-to-frame delta remain silky-smooth (no snap)
+    let maxStepRad = 0;
+    let maxSecondDiff = 0;
+    for (let i = 1; i < yawSeries.length; i++) {
+      const d1 = Math.abs(yawSeries[i] - yawSeries[i - 1]);
+      if (d1 > maxStepRad) maxStepRad = d1;
+      if (i >= 2) {
+        const d2 = Math.abs((yawSeries[i] - yawSeries[i - 1]) - (yawSeries[i - 1] - yawSeries[i - 2]));
+        if (d2 > maxSecondDiff) maxSecondDiff = d2;
+      }
+    }
+    assert.ok(maxStepRad < 0.035, `fluid-head per-frame yaw step stays bounded (${maxStepRad.toFixed(4)} rad/frame)`);
+    assert.ok(maxSecondDiff < 0.008, `fluid-head angular acceleration stays jerk-limited (${maxSecondDiff.toFixed(5)} rad/frame²)`);
+
+    // Sudden wall occlusion fades _sightlineConfidence smoothly instead of snapping gaze instantaneously
+    rigA.ctl.collider = makeCityCollider({
+      count: 1,
+      x: new Float32Array([rigA.cam.position.x + 15]),
+      y: new Float32Array([100]),
+      z: new Float32Array([rigA.cam.position.z - 15]),
+      w: new Float32Array([180]),
+      h: new Float32Array([260]),
+      d: new Float32Array([40]),
+    });
+    const yawBeforeOcclude = rigA.ctl.yaw;
+    rigA.ctl.update(1 / 60);
+    assert.ok(Math.abs(rigA.ctl.yaw - yawBeforeOcclude) < 0.03, 'sudden sightline occlusion fades smoothly without snapping');
+
+    // Relative stepPilot moves camera forward/right/up and steps yaw/pitch/roll/fov
+    rigB.ctl.setGlide(false);
+    rigB.ctl.setPose({ x: 0, y: 110, z: 320, yaw: 0, pitch: 0 });
+    const zBefore = rigB.cam.position.z;
+    const stepPose = rigB.ctl.stepPilot({ forward: 1.0, up: 0.25, yawDeltaDeg: 12, pitchDeltaDeg: -4, rollDeg: 6, fov: 48, dt: 0.5 });
+    assert.ok(rigB.cam.position.z < zBefore - 5, 'stepPilot advances drone forward along heading');
+    assert.equal(rigB.cam.fov, 48, 'stepPilot updates camera FOV');
+    assert.ok(Math.abs(stepPose.roll - (6 * Math.PI) / 180) < 1e-3, 'stepPilot applies Dutch roll');
+
+    // 2) Scene Edit Transitions: 11 modes, dip midpoint cut (`snapRT === null`), wipe/dissolve lazy `snapRT` capture, steady-state 7 passes
+    assert.equal(SCENE_TRANSITION_NAMES.length, 11, '11 cinema scene edit transition modes');
+    assert.equal(resolveTransitionMode('fade_black').mode, 1);
+    assert.equal(resolveTransitionMode('dip_white').mode, 2);
+    assert.equal(resolveTransitionMode('wipe_diagonal').mode, 8);
+    assert.equal(resolveTransitionMode('shutter_bars').mode, 10);
+
+    let renderCalls = 0;
+    const mockRenderer = {
+      coordinateSystem: THREE.WebGLCoordinateSystem,
+      xr: { enabled: false },
+      getRenderTarget() { return null; },
+      getActiveCubeFace() { return 0; },
+      getActiveMipmapLevel() { return 0; },
+      setRenderTarget() {},
+      render() { renderCalls++; },
+    };
+    const post = makePostProcessor(mockRenderer);
+    post.setSize(640, 360, 1);
+    const dummyScene = new THREE.Scene();
+
+    // Steady-state keeps 7 render calls & zero allocated snapRT
+    renderCalls = 0;
+    post.render(dummyScene, rigB.cam, 1.0);
+    assert.equal(renderCalls, 7, 'steady-state post.render uses 7 passes');
+    assert.equal(post.snapRT, null, 'snapRT not allocated before dual-frame transition');
+
+    // Fade-to-black delays `onCut` until midpoint and never allocates `snapRT`
+    let fadeCutFired = 0;
+    post.startTransition({
+      type: 'fade_black',
+      duration: 1.0,
+      scene: dummyScene,
+      camera: rigB.cam,
+      onCut: () => { fadeCutFired++; },
+    });
+    assert.equal(fadeCutFired, 0, 'fade_black waits until midpoint black hold before firing onCut');
+    assert.equal(post.snapRT, null, 'fade_black does not allocate snapRT');
+    for (let s = 0; s < 6; s++) post.updateTransition(0.1);
+    assert.equal(fadeCutFired, 1, 'fade_black fires onCut cleanly at midpoint');
+    for (let s = 0; s < 8; s++) post.updateTransition(0.1);
+    assert.equal(post.getTransitionState().active, false, 'fade_black completes cleanly');
+
+    // Wipe / Dissolve / Iris capture outgoing snapshot into `snapRT`, fire `onCut` immediately, and complete cleanly
+    let wipeCutFired = 0;
+    let wipeDoneFired = 0;
+    post.startTransition({
+      type: 'wipe_left',
+      duration: 0.8,
+      feather: 0.08,
+      scene: dummyScene,
+      camera: rigB.cam,
+      onCut: () => { wipeCutFired++; },
+      onComplete: () => { wipeDoneFired++; },
+    });
+    assert.ok(post.snapRT instanceof THREE.WebGLRenderTarget, 'wipe_left lazily allocates snapRT for outgoing frame');
+    assert.equal(wipeCutFired, 1, 'wipe_left fires onCut immediately after capturing outgoing snapshot');
+    assert.equal(post.compMat.uniforms.uTransMode.value, resolveTransitionMode('wipe_left').mode);
+    for (let s = 0; s < 4; s++) post.updateTransition(0.1);
+    assert.ok(post.compMat.uniforms.uTransProg.value > 0.45 && post.compMat.uniforms.uTransProg.value < 0.55);
+    for (let s = 0; s < 5; s++) post.updateTransition(0.1);
+    assert.equal(wipeDoneFired, 1, 'wipe_left fires onComplete when finished');
+    assert.equal(post.compMat.uniforms.uTransMode.value, 0, 'uTransMode resets to 0 after completion');
+
+    // Low-end `post.setQuality({ bloomPasses: 1 })` drops steady-state render calls from 7 down to 5!
+    post.setQuality({ bloomPasses: 1, bloomScale: 0.35, cubeMax: 512 });
+    renderCalls = 0;
+    post.render(dummyScene, rigB.cam, 2.0);
+    assert.equal(renderCalls, 5, 'low-tier bloomPasses=1 reduces post.render from 7 passes down to 5');
+
+    // 3) View Culling & Low-End Performance Profiles (`PERFORMANCE_PROFILES`, `createSceneViewCuller`, `uPerfQuality`)
+    assert.ok(PERFORMANCE_PROFILES.low.perfQuality < PERFORMANCE_PROFILES.high.perfQuality, 'low tier reduces volumetric shader raymarch cost');
+    assert.ok(SKY_FRAG.includes('uPerfQuality') && CLOUD_FRAG.includes('uPerfQuality'), 'SKY_FRAG and CLOUD_FRAG scale raymarch work via uPerfQuality');
+
+    const U = makeUniforms();
+    const world = makeWorld(U);
+    const fullPuffInstances = world.clouds.children[0].geometry.instanceCount;
+    world.clouds.setQualityFrac(PERFORMANCE_PROFILES.low.cloudPuffFrac);
+    const lowPuffInstances = world.clouds.children[0].geometry.instanceCount;
+    assert.ok(lowPuffInstances < fullPuffInstances, `low tier trims volumetric cloud puff instances (${lowPuffInstances}/${fullPuffInstances})`);
+    world.clouds.setQualityFrac(1.0);
+
+    const grown = growCity(4417, 5, world.towerMat, 0.8, { waterMode: 1, airAmt: 1.0, maritimeAmt: 1.0, transitAmt: 1.0, signAmt: 1.0, U });
+    const city = grown.city;
+    const look = LOOK_BY_ID.bladerunner;
+    const lmGroup = buildLandmarks(city, U, look);
+    const plGroup = buildPlaces(city, U, look);
+    const brGroup = buildBridges(city, U, world.beaconMat, world.lampMat);
+    const trGroup = buildTransitInfrastructure(city, U, world.lampMat);
+    const hbObj = buildHarbor(city, U, world.beaconMat, world.lampMat);
+    const spObj = buildSpaceport(city, U, world.beaconMat, world.lampMat, world.beamMat);
+    const slObj = makeSearchlights(city, world.beamMat);
+    const holoGrp = buildHolos(city, world.holoMat, world.beamMat, { density: 1.0 });
+    const stInfra = buildStreetInfrastructure(city, U);
+    const veh = makeVehicles(city, world.trailMat, 400, grown.collider, { swarmMat: world.swarmMat, swarmCount: 1200, U });
+    veh.update(0.05, 8.0, 1.0);
+
+    const culler = createSceneViewCuller();
+    culler.registerCity({
+      city,
+      landmarks: lmGroup,
+      places: plGroup,
+      bridges: brGroup,
+      transitInfra: trGroup,
+      harborObj: hbObj,
+      spaceportObj: spObj,
+      beams: slObj,
+      holoGroup: holoGrp,
+      streetInfraObj: stInfra,
+      vehicles: veh,
+    });
+    culler.setProfile('low');
+
+    // Place camera far outside the city looking AWAY from the origin -> off-screen districts & vehicles are culled!
+    const cullCam = new THREE.PerspectiveCamera(50, 16 / 9, 2, 28000);
+    cullCam.position.set(0, 120, 6200);
+    cullCam.lookAt(0, 120, 9500);
+    cullCam.updateMatrixWorld();
+    culler.update(cullCam, { heightScale: 1, lensMode: 0, worldCurve: 0 });
+    veh.update(0.05, 8.0, 1.0);
+    culler.update(cullCam, { heightScale: 1, lensMode: 0, worldCurve: 0 });
+    assert.ok(culler.stats.culledGroups > 0, `view culler hides off-frustum scene groups (${culler.stats.culledGroups} culled)`);
+    assert.ok(culler.stats.culledVehicles > 0, `view culler hides off-frustum vehicles (${culler.stats.culledVehicles} culled)`);
+    assert.equal(stInfra.detailVisible, false, 'far camera culls fine street furniture (benches, kiosks, bollards)');
+
+    // Omnidirectional 360 lens (`lensMode = 4`) automatically bypasses frustum culling so rear cube faces stay intact!
+    culler.update(cullCam, { heightScale: 1, lensMode: 4, worldCurve: 0 });
+    assert.equal(culler.stats.culledGroups, 0, '360 omnidirectional lens bypasses directional frustum culling');
+
+    // 4) Full 20-tool WebMCP control coverage + MovieSetDirector per-shot transitions + compact #s= state round-trip
+    let transTriggered = null;
+    const scene = new THREE.Scene();
+    const director = new MovieSetDirector({
+      scene,
+      camera: rigB.cam,
+      controls: rigB.ctl,
+      uniforms: U,
+      getCity: () => city,
+      getVehicles: () => veh,
+      onEditTransition: (opts) => {
+        transTriggered = opts.type;
+        if (opts.onCut) opts.onCut();
+        return { active: true, type: opts.type, duration: opts.duration || 0.8 };
+      },
+    });
+    const rec = new CameraPathRecorder();
+    const radio = new ModularRadioEngine({ seed: 17 });
+    let perfState = { qualityMode: 'auto', viewCulling: true };
+    const mcp = registerPetacityWebMCP({
+      director,
+      getState: () => ({ seed: 4417, lookId: 'bladerunner', ...perfState }),
+      getFullState: () => normalizeExactState({ seed: 4417, lookId: 'bladerunner', editTransition: 'dissolve', qualityMode: perfState.qualityMode, viewCulling: perfState.viewCulling }),
+      applyPartialState: (p) => { Object.assign(perfState, p); },
+      getCity: () => city,
+      getVehicles: () => veh,
+      controls: rigB.ctl,
+      camera: rigB.cam,
+      radio,
+      recorder: rec,
+      enqueueSpotRoute: (sp, opts) => rigB.ctl.enqueueWaypoint(sp, opts),
+      triggerTransition: (opts) => {
+        transTriggered = opts.type;
+        if (opts.onCut) opts.onCut();
+        return { active: true, type: opts.type, duration: opts.duration || 0.95 };
+      },
+      getTransitionState: () => ({ active: false, type: transTriggered || 'cut', progress: 0 }),
+      managePresetsAndBookmarks: (inp) => ({ ok: true, action: inp.action, builtinPresets: WORLD_PRESETS.length }),
+      setPerformance: (inp) => { Object.assign(perfState, inp); return { ok: true, performance: perfState }; },
+      getPerformanceStats: () => ({ ...perfState, fps: 60, culler: culler.stats }),
+    });
+
+    const fullRes = await mcp.callTool('petacity_get_full_control_state', {});
+    assert.ok(Array.isArray(fullRes.catalog.sceneTransitions) && fullRes.catalog.sceneTransitions.length === 11, 'full control catalog exposes all 11 scene transitions');
+
+    const pilotRes = await mcp.callTool('petacity_step_pilot', { forward: 0.8, right: -0.2, yawDeltaDeg: -10, dt: 0.2, steps: 2 });
+    assert.equal(pilotRes.ok, true);
+    assert.equal(pilotRes.steps, 2);
+
+    const transRes = await mcp.callTool('petacity_scene_transition', {
+      type: 'iris',
+      duration: 1.1,
+      cameraPose: { x: 80, y: 150, z: 220, fov: 52 },
+    });
+    assert.equal(transRes.ok, true);
+    assert.equal(transTriggered, 'iris', 'petacity_scene_transition triggers iris edit transition');
+    assert.equal(rigB.cam.position.x, 80, 'petacity_scene_transition applies incoming cameraPose at cut');
+
+    // Scripted shot with per-shot edit transition
+    await mcp.callTool('petacity_run_camera_script', {
+      shots: [{
+        type: 'dolly',
+        from: [40, 130, 180],
+        to: [90, 145, 90],
+        duration: 1.2,
+        transition: 'shutter_bars',
+        transitionDuration: 0.65,
+      }],
+    });
+    assert.equal(transTriggered, 'shutter_bars', 'MovieSetDirector triggers per-shot shutter_bars edit transition');
+
+    const perfRes = await mcp.callTool('petacity_set_performance_quality', { qualityMode: 'low', viewCulling: true });
+    assert.equal(perfRes.performance.qualityMode, 'low');
+
+    // Record & seek path via WebMCP
+    await mcp.callTool('petacity_capture_media', { action: 'add_keyframe' });
+    rigB.cam.position.set(140, 165, 95);
+    await mcp.callTool('petacity_capture_media', { action: 'add_keyframe' });
+    const seekRes = await mcp.callTool('petacity_capture_media', { action: 'seek_path', seekNormalized: 0.5 });
+    assert.equal(seekRes.ok, true);
+
+    // Compact _v:2 #s= codec round-trips all Phase-21 fields cleanly
+    const p21Token = encodeExactState(normalizeExactState({
+      seed: 4417,
+      gimbalSmooth: 1.45,
+      leadFraming: 0.95,
+      editTransition: 'wipe_diagonal',
+      transitionDuration: 1.25,
+      qualityMode: 'low',
+      viewCulling: false,
+    }));
+    assert.ok(p21Token.length < 300, `Phase-21 delta token stays compact (${p21Token.length} chars)`);
+    const p21Dec = decodeExactState(p21Token);
+    assert.equal(p21Dec.gimbalSmooth, 1.45);
+    assert.equal(p21Dec.leadFraming, 0.95);
+    assert.equal(p21Dec.editTransition, 'wipe_diagonal');
+    assert.equal(p21Dec.transitionDuration, 1.25);
+    assert.equal(p21Dec.qualityMode, 'low');
+    assert.equal(p21Dec.viewCulling, false);
+  } finally {
+    globalThis.window = prevWin;
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, value: prevNav });
+  }
+});
+
 
 
 
