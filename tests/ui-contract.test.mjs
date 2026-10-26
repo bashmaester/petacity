@@ -397,6 +397,45 @@ test('Phase-21 UI contract: Drone-DP gaze, 11 scene edit transitions, low-end qu
   }
 });
 
+test('Phase-22 UI contract: 14 radio stations, Music->Environment sync controls, P (Autopilot) & M (Music) shortcuts, and localStorage starting state persistence', () => {
+  const webmcp = readFileSync(join(root, 'src', 'webmcp.js'), 'utf8');
+
+  // 14 radio station options in #sel-radio-station
+  const stationSelect = html.match(/<select[^>]*id="sel-radio-station"[\s\S]*?<\/select>/);
+  assert.ok(stationSelect, '#sel-radio-station exists');
+  const stationOpts = [...stationSelect[0].matchAll(/<option\b/g)];
+  assert.equal(stationOpts.length, 14, '14 pure-code generative radio stations in #sel-radio-station');
+
+  // Music -> Environment UI controls
+  for (const id of [
+    'sel-music-sync',
+    'b-msync-traffic', 'b-msync-clouds', 'b-msync-diurnal', 'b-msync-lights', 'b-msync-atmo',
+    'sl-music-env', 'music-env-label',
+  ]) {
+    assert.ok(html.includes(`id="${id}"`), `#${id} exists in index.html`);
+  }
+  for (const syncVal of ['off', 'all', 'kinetic', 'sky', 'subtle', 'custom']) {
+    assert.match(html, new RegExp(`<select[^>]*id="sel-music-sync"[\\s\\S]*?<option[^>]*value="${syncVal}"`), `#sel-music-sync includes "${syncVal}"`);
+  }
+
+  // P shortcut toggles Autopilot (`toggleGlide`) & Shift+P toggles Path Playback (`togglePathPlay`), M toggles Music (`toggleRadio`)
+  assert.match(main, /\(e\.key === 'p' \|\| e\.key === 'P'\)\s*&&\s*e\.shiftKey\)\s*togglePathPlay\(\)/, 'Shift+P toggles camera path playback');
+  assert.match(main, /else if \(e\.key === 'p' \|\| e\.key === 'P'\)\s*toggleGlide\(\)/, 'P shortcut toggles Autopilot');
+  assert.match(main, /else if \(e\.key === 'm' \|\| e\.key === 'M'\)\s*toggleRadio\(\)/, 'M shortcut toggles Music');
+  assert.match(html, /<span title="Autopilot"><kbd>P<\/kbd>/, '#keys legend shows P for Autopilot');
+  assert.match(html, /<span title="Music"><kbd>M<\/kbd>/, '#keys legend shows M for Music');
+
+  // localStorage starting state load & save (`petacity.lastState.v1`)
+  assert.ok(main.includes("const STORAGE_LAST_STATE_KEY = 'petacity.lastState.v1'"), 'defines STORAGE_LAST_STATE_KEY');
+  assert.ok(main.includes('readStoredStartingState'), 'loads starting state from localStorage when URL does not specify state');
+  assert.ok(main.includes('persistStartingState'), 'persists state to localStorage');
+
+  // WebMCP exposes Music -> Environment sync parameters
+  for (const key of ['syncPreset', 'syncStrength', 'syncTraffic', 'syncClouds', 'syncDiurnal', 'syncLights', 'syncAtmo']) {
+    assert.ok(webmcp.includes(key), `src/webmcp.js exposes Music->Environment "${key}"`);
+  }
+});
+
 
 
 

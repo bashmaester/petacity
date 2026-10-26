@@ -147,7 +147,59 @@ test('main.js boots end-to-end (jsdom + fake WebGL)', { skip: JSDOM ? false : 'j
   const presetList = await window.petacity.presets({ action: 'list' });
   assert.ok(presetList.builtinPresets.length >= 6);
 
+  // Verify Phase-22: P shortcut toggles Autopilot, M shortcut toggles Music, Music->Environment WebMCP, and localStorage state persistence
+  assert.equal(window.document.querySelector('#b-glide').getAttribute('aria-pressed'), 'true', '#b-glide was turned ON earlier');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'p', bubbles: true }));
+  assert.equal(window.document.querySelector('#b-glide').getAttribute('aria-pressed'), 'false', 'pressing P toggles Autopilot OFF');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'P', bubbles: true }));
+  assert.equal(window.document.querySelector('#b-glide').getAttribute('aria-pressed'), 'true', 'pressing P again toggles Autopilot back ON');
+  const radioBeforeM = window.document.querySelector('#b-radio').getAttribute('aria-pressed');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'm', bubbles: true }));
+  assert.notEqual(
+    window.document.querySelector('#b-radio').getAttribute('aria-pressed'),
+    radioBeforeM,
+    'pressing M toggles Music (#b-radio)',
+  );
+  const musicRes = await window.petacity.music({
+    station: 10,
+    syncPreset: 'all',
+    syncStrength: 1.1,
+  });
+  assert.equal(musicRes.stationIndex, 10, 'switched to station #10 via WebMCP');
+  assert.equal(musicRes.worldSync.syncPreset, 'all', 'Music->Environment syncPreset enabled via WebMCP');
+  assert.equal(musicRes.worldSync.syncTraffic, true);
+  const savedTok = window.localStorage.getItem('petacity.lastState.v1');
+  assert.ok(savedTok && savedTok.length > 8, 'starting state persisted into localStorage (petacity.lastState.v1)');
+
   assert.deepEqual(pageErrors, [], 'no page errors');
   assert.deepEqual(uncaught.map((e) => e.stack || String(e)), [], 'no uncaught exceptions');
   window.close();
+
+  // Boot a second clean-URL session (`http://localhost/`, no query or hash) with `petacity.lastState.v1` in localStorage
+  const dom2 = new JSDOM(realHtml, { url: 'http://localhost/', pretendToBeVisual: true });
+  const win2 = dom2.window;
+  win2.localStorage.setItem('petacity.lastState.v1', savedTok);
+  defineGlobal('window', win2);
+  defineGlobal('document', win2.document);
+  defineGlobal('navigator', win2.navigator);
+  defineGlobal('location', win2.location);
+  defineGlobal('history', win2.history);
+  defineGlobal('requestAnimationFrame', win2.requestAnimationFrame.bind(win2));
+  defineGlobal('cancelAnimationFrame', win2.cancelAnimationFrame.bind(win2));
+  win2.HTMLCanvasElement.prototype.getContext = (type) => (type === 'webgl2' || type === 'webgl' ? fakeGL() : null);
+
+  await import('../src/main.js?boot-localstorage-restore');
+  await new Promise((r) => setTimeout(r, 150));
+  defineGlobal('requestAnimationFrame', () => 0);
+  defineGlobal('cancelAnimationFrame', () => 0);
+  await new Promise((r) => setTimeout(r, 30));
+
+  const restored = await win2.petacity.fullState();
+  assert.equal(restored.state.seed, 42, 'clean URL restores seed from localStorage');
+  assert.equal(restored.state.lookId, 'tron', 'clean URL restores lookId from localStorage');
+  assert.equal(restored.state.glide, true, 'clean URL restores Autopilot state from localStorage');
+  assert.equal(restored.state.radio.station, 10, 'clean URL restores music station from localStorage');
+  assert.equal(restored.state.radio.syncPreset, 'all', 'clean URL restores Music->Environment sync from localStorage');
+  assert.equal(win2.location.search, '', 'clean URL stays clean so future reloads continue loading localStorage');
+  win2.close();
 });

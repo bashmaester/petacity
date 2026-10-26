@@ -33,7 +33,7 @@ import { FlyControls, CAMERA_STYLE_NAMES, CINEMATIC_GAZE_MODES } from '../src/co
 import { CameraPathRecorder, makeSceneExporter, VIDEO_QUALITY_PRESETS } from '../src/recorder.js';
 import { makeMinimap } from '../src/minimap.js';
 import {
-  RADIO_STATIONS, RADIO_MOVEMENTS, midiToHz, buildSpaceImpulseData, evalStationHarmony, ModularRadioEngine,
+  RADIO_STATIONS, RADIO_MOVEMENTS, MUSIC_SYNC_PRESETS, midiToHz, buildSpaceImpulseData, evalStationHarmony, ModularRadioEngine,
 } from '../src/audio.js';
 import { MovieSetDirector, buildGlyphMatrixTexture } from '../src/director.js';
 import { registerPetacityWebMCP } from '../src/webmcp.js';
@@ -1772,8 +1772,8 @@ test('Phase-14 scene: anti-aliased multi-band water shader controls, selectable 
   infra.setDensity(0);
   assert.equal(infra.activeSignalCount, 0);
 
-  // 4) Pure-code Modular Synth Radio (6 original evocative stations + 4-movement evolution, zero audio samples)
-  assert.equal(RADIO_STATIONS.length, 6, '6 evocative original generative stations');
+  // 4) Pure-code Modular Synth Radio (14 original evocative stations + 4-movement evolution, zero audio samples)
+  assert.equal(RADIO_STATIONS.length, 14, '14 evocative original generative stations');
   for (const st of RADIO_STATIONS) {
     const joined = `${st.id} ${st.name} ${st.shortName} ${st.artistHint}`.toLowerCase();
     assert.ok(!/vangelis|aphex|tyrell|selected ambient|polygon window|cs-80|albedo/.test(joined), `station ${st.id} uses 100% original evocative titles`);
@@ -3174,6 +3174,125 @@ test('Phase-21 Drone-DP fluid-head cinematography, 11 scene edit transitions, fu
     globalThis.window = prevWin;
     Object.defineProperty(globalThis, 'navigator', { configurable: true, value: prevNav });
   }
+});
+
+test('Phase-22: slow desynchronized 3D holos, zero-wobble camera flight & critically-damped gimbal, 14 pure-code music stations + Music->Environment telemetry & state codec', async () => {
+  // 1) 3D Hologram shader uses slow, independent per-instance harmonics (zero 1.0 Hz synced lockstep oscillation!)
+  assert.doesNotMatch(SHADERS.HOLO_VERT, /loopSin\(\s*uTime\s*\*\s*animRate\s*,\s*1\.0\b/, 'HOLO_VERT removed 1.0Hz synced nutation oscillation');
+  assert.match(SHADERS.HOLO_VERT, /kTiltX/, 'HOLO_VERT derives independent per-seed tilt harmonics');
+  assert.match(SHADERS.HOLO_VERT, /kTiltZ/, 'HOLO_VERT derives independent 3-axis precession');
+  assert.match(SHADERS.HOLO_VERT, /kBob/, 'HOLO_VERT includes slow asynchronous levitation drift');
+  assert.match(SHADERS.HOLO_FRAG, /kRefresh/, 'HOLO_FRAG desynchronizes scanline refresh sweeps per instance');
+  assert.match(SHADERS.HOLO_FRAG, /kSlice/, 'HOLO_FRAG desynchronizes 3D solid slice bands per instance');
+  assert.match(SHADERS.HOLO_FRAG, /kPulse/, 'HOLO_FRAG desynchronizes 3D sculpture pulses per instance');
+
+  // 2) Zero Unexplained Left-to-Right Camera Wobble:
+  //    a) Passing a single building on the right/left of a clear avenue (`fwdPass == 1.0`) must NOT deflect yaw!
+  {
+    const cam = new THREE.PerspectiveCamera(58, 16 / 9, 2, 34000);
+    cam.position.set(0, 80, 200);
+    cam.lookAt(0, 80, -200);
+    const ctl = new FlyControls(cam, { addEventListener() {}, removeEventListener() {}, style: {} });
+    ctl.syncFromCamera();
+    // Single flanking tower 10m to the right (+X), completely clear straight ahead along -Z!
+    ctl.collider = makeCityCollider({
+      count: 1,
+      x: new Float32Array([15]),
+      y: new Float32Array([90]),
+      z: new Float32Array([80]),
+      w: new Float32Array([10]),
+      h: new Float32Array([180]),
+      d: new Float32Array([60]),
+      rot: new Float32Array([0]),
+      landmarks: [],
+      places: [],
+    });
+    ctl.autopilotLoop = [];
+    ctl.setGazeMode(0);
+    ctl.setGlide(true);
+    const startYaw = ctl.yaw;
+    for (let i = 0; i < 90; i++) ctl.update(1 / 60);
+    assert.ok(
+      Math.abs(ctl.moveYaw - startYaw) < 1e-3 && Math.abs(ctl.yaw - startYaw) < 1e-3,
+      `flying past a single side tower on an open street produces zero lateral yaw wobble (got moveYaw=${ctl.moveYaw}, start=${startYaw})`,
+    );
+  }
+
+  //    b) Critically-damped (`zeta = 1.0`) `_stepDampedAngle` converges monotonically with ZERO overshoot/ringing!
+  {
+    const cam = new THREE.PerspectiveCamera(58, 16 / 9, 2, 34000);
+    const ctl = new FlyControls(cam, { addEventListener() {}, removeEventListener() {}, style: {} });
+    let ang = 0;
+    const target = 0.65;
+    let maxSeen = 0;
+    for (let i = 0; i < 300; i++) {
+      ang = ctl._stepDampedAngle(ang, target, '_yawVel', 0.48, 1.2, 3.2, 1 / 60, '_yawAccel');
+      if (ang > maxSeen) maxSeen = ang;
+    }
+    assert.ok(maxSeen <= target + 1e-5, `critically-damped gimbal has zero overshoot (maxSeen=${maxSeen}, target=${target})`);
+    assert.ok(Math.abs(ang - target) < 1e-3, `critically-damped gimbal converges cleanly to target (got ${ang})`);
+  }
+
+  // 3) All 14 pure-code generative radio stations synthesize cleanly & expose live Music -> Environment telemetry
+  assert.equal(RADIO_STATIONS.length, 14);
+  assert.equal(MUSIC_SYNC_PRESETS.length, 6);
+  const bpms = RADIO_STATIONS.map((s) => s.bpm);
+  assert.ok(Math.min(...bpms) <= 48 && Math.max(...bpms) >= 125, 'stations span glacial ambient (<=48 BPM) to high-energy drive (>=125 BPM)');
+  const uniqueIds = new Set(RADIO_STATIONS.map((s) => s.id));
+  assert.equal(uniqueIds.size, 14, 'all 14 station IDs are unique');
+
+  const simRadio = new ModularRadioEngine({ seed: 777, station: 10 });
+  simRadio.start();
+  for (let s = 0; s < 14; s++) {
+    simRadio.setStation(s);
+    simRadio.update(0.5);
+    const tel = simRadio.getMusicalTelemetry();
+    assert.equal(tel.playing, true);
+    assert.equal(tel.stationIndex, s);
+    assert.equal(tel.bpm, RADIO_STATIONS[s].bpm);
+    assert.ok(tel.tempoRatio > 0.3 && tel.tempoRatio < 2.0);
+    assert.ok(tel.chordBrightness >= 0 && tel.chordBrightness <= 1);
+  }
+  const seqBefore = simRadio.getMusicalTelemetry().chordChangeSeq;
+  // Advance past one 32-step chord boundary
+  for (let k = 0; k < 40; k++) simRadio.update(0.5);
+  assert.ok(simRadio.getMusicalTelemetry().chordChangeSeq > seqBefore, 'chordChangeSeq increments on harmonic chord changes');
+
+  // 4) Compact `#s=` _v:2 codec round-trips station 0..13, playing, and all Music -> Environment sync fields
+  const p22Token = encodeExactState(normalizeExactState({
+    seed: 4417,
+    glide: true,
+    radio: {
+      station: 12,
+      volume: 0.72,
+      space: 0.95,
+      warmth: 0.85,
+      pulse: 0.78,
+      react: 0.7,
+      playlistMode: 'shuffle',
+      playlistInterval: 60,
+      playing: true,
+      syncPreset: 'all',
+      syncStrength: 1.15,
+      syncTraffic: true,
+      syncClouds: true,
+      syncDiurnal: true,
+      syncLights: true,
+      syncAtmo: true,
+    },
+  }));
+  assert.ok(p22Token.length < 320, `Phase-22 music-sync delta token stays compact (${p22Token.length} chars)`);
+  const p22Dec = decodeExactState(p22Token);
+  assert.equal(p22Dec.glide, true);
+  assert.equal(p22Dec.radio.station, 12);
+  assert.equal(p22Dec.radio.playing, true);
+  assert.equal(p22Dec.radio.syncPreset, 'all');
+  assert.equal(p22Dec.radio.syncStrength, 1.15);
+  assert.equal(p22Dec.radio.syncTraffic, true);
+  assert.equal(p22Dec.radio.syncClouds, true);
+  assert.equal(p22Dec.radio.syncDiurnal, true);
+  assert.equal(p22Dec.radio.syncLights, true);
+  assert.equal(p22Dec.radio.syncAtmo, true);
 });
 
 

@@ -20,8 +20,9 @@ import {
 } from './post.js';
 import { CAMERA_STYLE_NAMES, CINEMATIC_GAZE_MODES } from './controls.js';
 import { PERFORMANCE_PROFILES } from './scene.js';
+import { RADIO_STATIONS, MUSIC_SYNC_PRESETS } from './audio.js';
 
-export const WEBMCP_PROTOCOL_VERSION = '2026.10.21';
+export const WEBMCP_PROTOCOL_VERSION = '2026.10.22';
 
 function asMcpResult(data) {
   const payload = typeof data === 'string' ? { message: data } : data;
@@ -57,6 +58,8 @@ export const PETACITY_CONTROL_CATALOG = Object.freeze({
   terrainModes: ['flat', 'gentle_hills', 'coastal_ridge', 'highland_basin', 'mesa_canyon'],
   treeModes: ['mixed_urban', 'lush_canopy', 'pine_conifer', 'palm_tropical', 'cherry_autumn', 'cyber_biolum', 'none'],
   trailModes: ['off', 'hero_ships_trains', 'aircraft_trains', 'fast_traffic', 'dense_traffic', 'all_moving'],
+  radioStations: RADIO_STATIONS.map((s, index) => ({ index, id: s.id, name: s.name, bpm: s.bpm })),
+  musicSyncPresets: MUSIC_SYNC_PRESETS.map((p) => ({ id: p.id, label: p.label })),
 });
 
 /**
@@ -1138,7 +1141,7 @@ export function registerPetacityWebMCP({
     /* ----------------------------------------------------------------- 18 */
     {
       name: 'petacity_control_music',
-      description: 'Control the pure-software generative WebAudio synthesizer radio & Auto-DJ: play/pause, pick any of the 8 original evolving stations (`0..7`), advance/crossfade to the next station, reseed melodic voice-leading, or configure Auto-DJ playlist mode (`loop`, `seq`, `shuffle`), interval, volume, reverb space, analog warmth, pulse, and world-reactivity.',
+      description: 'Control the pure-software generative WebAudio synthesizer radio, Auto-DJ & Music-to-Environment choreography: play/pause, pick any of the 14 original evolving stations (`0..13` or `stationName`), crossfade next, reseed melodies, configure Auto-DJ (`loop`, `seq`, `shuffle`), and map musical elements onto the environment (`syncPreset`, `syncStrength`, `syncTraffic` BPM->traffic tempo, `syncClouds` chord->cloud shifts, `syncDiurnal` chord->sky cycle, `syncLights` beat->city lights/holos, `syncAtmo` movement->bloom/haze).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1146,9 +1149,10 @@ export function registerPetacityWebMCP({
           station: {
             type: 'integer',
             minimum: 0,
-            maximum: 7,
-            description: '0=Nocturne Brass Horizon, 1= Moss Crystal Drift, 2=Acid Polyhedron, 3=Neon Grid Runner, 4=Velvet Rain Terminal, 5=Orbital Cathedral, 6=Subterranean Pulse, 7=Solar Dawn Horizon.',
+            maximum: 13,
+            description: '0=Rain on Neon Glass, 1=Velvet Sub-Level, 2=Midnight Monorail, 3=Sodium & Mercury, 4=Foghorn & Starlight, 5=Hanging Sky-Gardens, 6=Cobalt Atrium, 7=Orbital Shipyard, 8=Sunset Overpass, 9=Clockwork Observatory, 10=Subterranean Arcade, 11=Glacier & Monolith, 12=Monsoon Market, 13=Solar Sail Serenata.',
           },
+          stationName: { type: 'string', description: 'Optional case-insensitive station name or id substring to select.' },
           next: { type: 'boolean', description: 'Crossfade to the next station in the playlist.' },
           reseed: { type: 'boolean', description: 'Generate a fresh melodic/harmonic seed.' },
           playlistMode: { type: 'string', enum: ['loop', 'seq', 'shuffle'], description: 'Auto-DJ station progression mode.' },
@@ -1158,11 +1162,28 @@ export function registerPetacityWebMCP({
           warmth: { type: 'number', minimum: 0, maximum: 1.5, description: 'Filter & tape saturation warmth.' },
           pulse: { type: 'number', minimum: 0, maximum: 1.5, description: 'Arpeggiator & rhythmic drive.' },
           react: { type: 'number', minimum: 0, maximum: 1.5, description: 'Camera altitude/speed & weather audio reactivity.' },
+          syncPreset: {
+            type: 'string',
+            enum: ['off', 'all', 'kinetic', 'sky', 'subtle', 'custom'],
+            description: 'Music -> Environment mapping preset (`all` enables all 5 couplings; `off` disables).',
+          },
+          syncStrength: { type: 'number', minimum: 0, maximum: 1.5, description: 'Music -> Environment coupling intensity (0 = off .. 1.5 = dramatic).' },
+          syncTraffic: { type: 'boolean', description: 'Match vehicle & transit traffic speed to musical BPM & beat pulse.' },
+          syncClouds: { type: 'boolean', description: 'Shift volumetric cloud formations & drift on musical chord changes.' },
+          syncDiurnal: { type: 'boolean', description: 'Glide diurnal sun/moon cycle forward on musical chord changes.' },
+          syncLights: { type: 'boolean', description: 'Pulse city windows, neon signs, searchlights & holograms with musical beat & spectrum.' },
+          syncAtmo: { type: 'boolean', description: 'Couple atmospheric bloom & color warmth to musical movements & chord brightness.' },
         },
       },
       execute: async (input = {}) => {
         if (!radio) throw new Error('Generative synth radio unavailable');
-        if (Number.isInteger(input.station)) radio.setStation(input.station, { smooth: radio.playing });
+        if (typeof input.stationName === 'string' && input.stationName.trim() && Array.isArray(RADIO_STATIONS)) {
+          const q = input.stationName.trim().toLowerCase();
+          const idx = RADIO_STATIONS.findIndex((s) => s.id.includes(q) || s.name.toLowerCase().includes(q));
+          if (idx >= 0) radio.setStation(idx);
+        } else if (Number.isInteger(input.station)) {
+          radio.setStation(input.station);
+        }
         if (input.next) radio.nextStation({ smooth: radio.playing });
         if (input.reseed) radio.reseed();
         if (input.playlistMode !== undefined || input.playlistInterval !== undefined) {
@@ -1173,12 +1194,13 @@ export function registerPetacityWebMCP({
           space: input.space,
           warmth: input.warmth,
           pulse: input.pulse,
-          react: input.react,
+          cityReact: input.react,
         });
         if (input.playing === true && !radio.playing) radio.start();
         else if (input.playing === false && radio.playing) radio.stop();
         applyPartialState({
           radioStation: radio.stationIndex,
+          radioPlaying: input.playing,
           playlistMode: radio.playlistMode,
           playlistInterval: radio.playlistInterval,
           radioVol: input.volume,
@@ -1186,14 +1208,33 @@ export function registerPetacityWebMCP({
           radioWarmth: input.warmth,
           radioPulse: input.pulse,
           radioReact: input.react,
+          musicSyncPreset: input.syncPreset,
+          musicSyncStrength: input.syncStrength,
+          musicSyncTraffic: input.syncTraffic,
+          musicSyncClouds: input.syncClouds,
+          musicSyncDiurnal: input.syncDiurnal,
+          musicSyncLights: input.syncLights,
+          musicSyncAtmo: input.syncAtmo,
         });
+        const full = typeof getFullState === 'function' ? getFullState() : null;
         return asMcpResult({
           ok: true,
           playing: radio.playing,
           stationIndex: radio.stationIndex,
           station: radio.station ? radio.station.name : null,
+          bpm: radio.station ? radio.station.bpm : null,
           playlistMode: radio.playlistMode,
           playlistInterval: radio.playlistInterval,
+          worldSync: full && full.radio ? {
+            syncPreset: full.radio.syncPreset,
+            syncStrength: full.radio.syncStrength,
+            syncTraffic: full.radio.syncTraffic,
+            syncClouds: full.radio.syncClouds,
+            syncDiurnal: full.radio.syncDiurnal,
+            syncLights: full.radio.syncLights,
+            syncAtmo: full.radio.syncAtmo,
+          } : null,
+          telemetry: typeof radio.getMusicalTelemetry === 'function' ? radio.getMusicalTelemetry() : null,
         });
       },
     },
@@ -1458,6 +1499,7 @@ export function registerPetacityWebMCP({
     controlVehicle: (opts) => invokeTool('petacity_control_vehicle', opts),
     setEnvironment: (opts = {}) => invokeTool('petacity_set_environment', opts),
     controlMusic: (opts = {}) => invokeTool('petacity_control_music', opts),
+    music: (opts = {}) => invokeTool('petacity_control_music', opts),
     capture: (opts) => invokeTool('petacity_capture_media', opts),
     reset: () => invokeTool('petacity_reset_movie_set', {}),
   };

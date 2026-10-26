@@ -284,6 +284,14 @@ const DEF_TUNE = {
 const DEF_RADIO = {
   station: 0, volume: 0.68, space: 0.9, warmth: 0.8, pulse: 0.55, react: 0.65,
   playlistMode: 'seq', playlistInterval: 75,
+  playing: false,
+  syncPreset: 'off',
+  syncStrength: 0,
+  syncTraffic: false,
+  syncClouds: false,
+  syncDiurnal: false,
+  syncLights: false,
+  syncAtmo: false,
 };
 
 const DEF_POST = {
@@ -443,8 +451,11 @@ export function normalizeExactState(raw = {}) {
     }
   }
   if (raw.radio && typeof raw.radio === 'object') {
+    const syncPreset = ['off', 'all', 'kinetic', 'sky', 'subtle', 'custom'].includes(raw.radio.syncPreset)
+      ? raw.radio.syncPreset
+      : 'off';
     out.radio = {
-      station: Math.max(0, Math.min(5, Math.round(Number(raw.radio.station) || 0))),
+      station: Math.max(0, Math.min(13, Math.round(Number(raw.radio.station) || 0))),
       volume: roundN(Number(raw.radio.volume ?? 0.68), 2),
       space: roundN(Number(raw.radio.space ?? 0.90), 2),
       warmth: roundN(Number(raw.radio.warmth ?? 0.80), 2),
@@ -452,6 +463,14 @@ export function normalizeExactState(raw = {}) {
       react: roundN(Number(raw.radio.react ?? 0.65), 2),
       playlistMode: ['loop', 'seq', 'shuffle'].includes(raw.radio.playlistMode) ? raw.radio.playlistMode : 'seq',
       playlistInterval: Math.max(15, Math.min(300, Math.round(Number(raw.radio.playlistInterval ?? 75)))),
+      playing: !!raw.radio.playing,
+      syncPreset,
+      syncStrength: Math.max(0, Math.min(1.5, roundN(Number(raw.radio.syncStrength ?? 0), 2))),
+      syncTraffic: !!raw.radio.syncTraffic,
+      syncClouds: !!raw.radio.syncClouds,
+      syncDiurnal: !!raw.radio.syncDiurnal,
+      syncLights: !!raw.radio.syncLights,
+      syncAtmo: !!raw.radio.syncAtmo,
     };
   }
   if (Array.isArray(raw.autoLoop) && raw.autoLoop.length >= 3) {

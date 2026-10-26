@@ -517,8 +517,8 @@ button.icon-btn.rec-on, button.action.rec-on {
 <aside class="panel">
   <div class="panel-head">
     <div class="head-actions">
-      <button id="b-glide" class="icon-btn head-pill" type="button" aria-pressed="false" aria-label="Autopilot glide mode" title="Start Autopilot Loop Glide — drag or A/D to steer smoothly, wheel for speed (G)">&#x2708;&#xFE0E;</button>
-      <button id="b-radio" class="icon-btn head-pill" type="button" aria-pressed="false" aria-label="Toggle synth radio" title="Play / mute pure-code evolving generative synth radio (M)">&#x266B;</button>
+      <button id="b-glide" class="icon-btn head-pill" type="button" aria-pressed="false" aria-label="Autopilot glide mode" title="Start Autopilot Loop Glide — drag or A/D to steer smoothly, wheel for speed (P)">&#x2708;&#xFE0E;</button>
+      <button id="b-radio" class="icon-btn head-pill" type="button" aria-pressed="false" aria-label="Toggle synth music" title="Play / mute pure-code evolving generative synth music (M)">&#x266B;</button>
       <button id="b-fold-all" class="icon-btn head-pill" type="button" aria-label="Collapse or expand all subpanels" title="Collapse / expand all control subpanels">&#x229F;</button>
       <button id="b-export" class="icon-btn head-pill" type="button" aria-pressed="false" aria-label="Export or share exact state" title="Share compact URL, export JSON state, or export standalone HTML demo">&#x2912;</button>
       <button id="b-ui" class="icon-btn" type="button" aria-pressed="false" aria-label="Show or minimize interface" title="Show interface (H)">&#x2630;</button>
@@ -1089,8 +1089,16 @@ button.icon-btn.rec-on, button.action.rec-on {
             <option value="3">106.8 FM · Sodium &amp; Mercury</option>
             <option value="4">88.9 FM · Foghorn &amp; Starlight</option>
             <option value="5">93.1 FM · Hanging Sky-Gardens</option>
+            <option value="6">95.6 FM · Cobalt Atrium</option>
+            <option value="7">108.1 FM · Orbital Shipyard</option>
+            <option value="8">90.3 FM · Sunset Overpass</option>
+            <option value="9">97.8 FM · Clockwork Observatory</option>
+            <option value="10">103.5 FM · Subterranean Arcade</option>
+            <option value="11">87.5 FM · Glacier &amp; Monolith</option>
+            <option value="12">105.4 FM · Monsoon Market</option>
+            <option value="13">91.9 FM · Solar Sail Serenata</option>
           </select>
-          <button id="b-radio-play" type="button" class="icon-btn" aria-pressed="false" aria-label="Play or pause modular synth radio" title="Play / stop pure-code modular synth radio (M)">&#x25B6;</button>
+          <button id="b-radio-play" type="button" class="icon-btn" aria-pressed="false" aria-label="Play or pause modular synth radio" title="Play / stop pure-code modular synth music (M)">&#x25B6;</button>
           <button id="b-radio-next" type="button" class="icon-btn" aria-label="Next radio station" title="Crossfade to next generative synth station">&#x23ED;</button>
           <button id="b-radio-seed" type="button" class="icon-btn" aria-label="New generative music variation" title="Reseed generative melody &amp; harmonic variation">&#x21BB;</button>
         </div>
@@ -1101,7 +1109,29 @@ button.icon-btn.rec-on, button.action.rec-on {
             <option value="loop">Playlist · Hold Single Station</option>
           </select>
         </div>
+        <div class="drop-row" style="margin-bottom: 6px;" title="Map musical tempo, beats, chord changes &amp; movements directly onto the city environment">
+          <select id="sel-music-sync" aria-label="Music to environment sync mode" title="Music → Environment mapping preset">
+            <option value="off" selected>World Sync · Off</option>
+            <option value="all">World Sync · Full Symphonic City</option>
+            <option value="kinetic">World Sync · Tempo → Traffic &amp; Lights</option>
+            <option value="sky">World Sync · Chords → Clouds &amp; Diurnal Sky</option>
+            <option value="subtle">World Sync · Subtle Ambient Coupling</option>
+            <option value="custom">World Sync · Custom Channels</option>
+          </select>
+        </div>
+        <div class="cap-row" style="margin-bottom: 6px;" title="Individual Music → Environment channels: Traffic Tempo, Chord Cloud Shifts, Chord Diurnal Sky, Beat City Lights, Harmonic Atmosphere">
+          <button id="b-msync-traffic" type="button" class="icon-btn" aria-pressed="false" aria-label="Sync traffic tempo to music BPM" title="Traffic Tempo ← Music BPM &amp; Beat">&#x21F6;</button>
+          <button id="b-msync-clouds" type="button" class="icon-btn" aria-pressed="false" aria-label="Shift clouds on chord changes" title="Cloud Shifts &amp; Drift ← Chord Changes">&#x2601;&#xFE0E;</button>
+          <button id="b-msync-diurnal" type="button" class="icon-btn" aria-pressed="false" aria-label="Advance diurnal sky cycle on chord changes" title="Diurnal Sun/Moon Cycle ← Chord Changes">&#x25D0;</button>
+          <button id="b-msync-lights" type="button" class="icon-btn" aria-pressed="false" aria-label="Pulse city lights and holograms with music beat" title="City Neon, Windows &amp; Holos ← Beat &amp; Spectrum">&#x2726;</button>
+          <button id="b-msync-atmo" type="button" class="icon-btn" aria-pressed="false" aria-label="Couple atmospheric haze and bloom to musical dynamics" title="Atmosphere &amp; Bloom ← Musical Movements">&#x224B;</button>
+        </div>
         <div class="slider-grid">
+          <div class="slider-row wide" title="Music → Environment coupling strength (0% = off … 150% = dramatic world choreography)">
+            <span>&#x229B;</span>
+            <input id="sl-music-env" type="range" min="0" max="1.5" step="0.05" value="0" aria-label="Music to environment coupling strength">
+            <em id="music-env-label">Sync Off</em>
+          </div>
           <div class="slider-row wide" title="Playlist Auto-DJ track crossfade interval (seconds per station)">
             <span>&#x29D6;</span>
             <input id="sl-radio-interval" type="range" min="20" max="240" step="5" value="75" aria-label="Playlist auto-switch interval">
@@ -1338,10 +1368,10 @@ button.icon-btn.rec-on, button.action.rec-on {
             <option value="vp8">WebM VP8</option>
           </select>
         </div>
-        <div class="cap-row" title="Camera path recorder — record live flight (R), add keyframe (K), replay smoothly (P)">
+        <div class="cap-row" title="Camera path recorder — record live flight (R), add keyframe (K), replay smoothly (Shift+P)">
           <button id="b-rec" type="button" class="icon-btn" aria-pressed="false" aria-label="Record camera path" title="Record live camera flight path (R)">&#x25CF;</button>
           <button id="b-kf-add" type="button" class="icon-btn" aria-label="Add camera keyframe" title="Add camera keyframe at current pose (K)">&#x25C7;</button>
-          <button id="b-play" type="button" class="icon-btn" aria-pressed="false" aria-label="Play or pause camera path" title="Play / pause smooth camera path (P)" disabled>&#x25B6;</button>
+          <button id="b-play" type="button" class="icon-btn" aria-pressed="false" aria-label="Play or pause camera path" title="Play / pause smooth camera path (Shift+P)" disabled>&#x25B6;</button>
           <button id="b-loop" type="button" class="icon-btn on" aria-pressed="true" aria-label="Loop camera path playback" title="Loop camera path playback">&#x21BB;</button>
           <button id="b-path-exp" type="button" class="icon-btn" aria-label="Export camera path JSON" title="Download recorded camera path JSON" disabled>&#x2913;</button>
           <button id="b-path-clear" type="button" class="icon-btn" aria-label="Clear recorded camera path" title="Clear recorded camera path" disabled>&#x2715;</button>
@@ -1382,13 +1412,13 @@ button.icon-btn.rec-on, button.action.rec-on {
   <span title="Up / down"><kbd>E</kbd><kbd>Q</kbd>&#x2195;</span>
   <span title="Boost"><kbd>&#x21E7;</kbd>&#x00BB;</span>
   <span title="Dolly / speed"><kbd>&#x27F3;</kbd>&#x00B1;</span>
-  <span title="Glide mode"><kbd>G</kbd>&#x2708;&#xFE0E;</span>
+  <span title="Autopilot"><kbd>P</kbd>&#x2708;&#xFE0E;</span>
   <span title="Free look-around"><kbd>L</kbd>&#x25CE;</span>
-  <span title="Synth radio"><kbd>M</kbd>&#x266B;</span>
+  <span title="Music"><kbd>M</kbd>&#x266B;</span>
   <span title="Anticipatory steer"><kbd>V</kbd>&#x2934;</span>
   <span title="Collision"><kbd>C</kbd>&#x2B21;</span>
   <span title="Record path"><kbd>R</kbd>&#x25CF;</span>
-  <span title="Play path"><kbd>P</kbd>&#x25B6;</span>
+  <span title="Play path"><kbd>&#x21E7;P</kbd>&#x25B6;</span>
   <span title="Toggle UI"><kbd>H</kbd>&#x25E7;</span>
 </div>
 

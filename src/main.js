@@ -27,7 +27,7 @@ import {
 import { FlyControls, CAMERA_STYLE_NAMES, CINEMATIC_GAZE_MODES } from './controls.js';
 import { CameraPathRecorder, makeSceneExporter } from './recorder.js';
 import { makeMinimap } from './minimap.js';
-import { ModularRadioEngine, RADIO_STATIONS } from './audio.js';
+import { ModularRadioEngine, RADIO_STATIONS, MUSIC_SYNC_PRESETS } from './audio.js';
 import { MovieSetDirector } from './director.js';
 import { registerPetacityWebMCP } from './webmcp.js';
 import { exportStandaloneDemoHTML } from './demo-export.js';
@@ -76,6 +76,24 @@ const $ = (sel) => {
 const STORAGE_PRESETS_KEY = 'petacity.presets.v1';
 const STORAGE_BOOKMARKS_KEY = 'petacity.bookmarks.v1';
 const STORAGE_PATH_KEY = 'petacity.campath.v1';
+const STORAGE_LAST_STATE_KEY = 'petacity.lastState.v1';
+
+const URL_SCENE_PARAM_KEYS = [
+  's', 'seed', 'look', 'r', 't', 'sub', 'wm', 'wa', 'sd', 'tm', 'ts', 'tr', 'vc', 'vs',
+  'pt', 'hr', 'ap', 'sg', 'mw', 'cl', 'gl', 'curve', 'w', 'ct', 'cs', 'art', 'as', 'pal',
+  'ds', 'tsp', 'csp', 'crad', 'csm', 'cst', 'tsm', 'tn', 'sl', 'sc', 'tl', 'sgd', 'vl', 'ld',
+  'wsh', 'ws', 'wc', 'wf', 'wr', 'lm', 'lz', 'ana', 'fov', 'roll',
+];
+
+function readStoredStartingState() {
+  try {
+    const raw = window.localStorage && window.localStorage.getItem(STORAGE_LAST_STATE_KEY);
+    if (!raw) return null;
+    return decodeExactState(raw);
+  } catch {
+    return null;
+  }
+}
 
 function readStorageJSON(key, fallback) {
   try {
@@ -117,9 +135,13 @@ const demoBoot = (typeof window !== 'undefined' && window.__PETACITY_DEMO_BOOT__
 const params = new URLSearchParams(location.search);
 const hashParams = new URLSearchParams((location.hash || '').replace(/^#/, ''));
 const initialStateToken = hashParams.get('s') || params.get('s');
+const hasExplicitUrlState = Boolean(initialStateToken) || URL_SCENE_PARAM_KEYS.some((k) => params.has(k));
+const storedStartingState = (!hasExplicitUrlState && !demoBoot) ? readStoredStartingState() : null;
 const initialExact = initialStateToken
   ? decodeExactState(initialStateToken)
-  : (demoBoot && demoBoot.state ? normalizeExactState(demoBoot.state) : null);
+  : (demoBoot && demoBoot.state
+    ? normalizeExactState(demoBoot.state)
+    : storedStartingState);
 
 if (initialExact && initialExact.custom) {
   syncCustomLook(initialExact.custom);
@@ -290,9 +312,15 @@ const tune = initialExact
       moon: 1, moonsz: 1, moonph: 0.85,
     };
 let cloudEditLayer = 1;
+const DEF_RADIO_INIT = {
+  station: 0, volume: 0.68, space: 0.9, warmth: 0.8, pulse: 0.55, react: 0.65,
+  playlistMode: 'seq', playlistInterval: 75, playing: false,
+  syncPreset: 'off', syncStrength: 0,
+  syncTraffic: false, syncClouds: false, syncDiurnal: false, syncLights: false, syncAtmo: false,
+};
 const radioState = initialExact && initialExact.radio
-  ? { station: 0, volume: 0.68, space: 0.9, warmth: 0.8, pulse: 0.55, react: 0.65, playlistMode: 'seq', playlistInterval: 75, ...initialExact.radio }
-  : { station: 0, volume: 0.68, space: 0.9, warmth: 0.8, pulse: 0.55, react: 0.65, playlistMode: 'seq', playlistInterval: 75 };
+  ? { ...DEF_RADIO_INIT, ...initialExact.radio }
+  : { ...DEF_RADIO_INIT };
 let weatherMode = initialExact ? initialExact.weatherMode : clampInt(params.get('w'), 0, 6, 0);
 let weatherAutoMode = initialExact && ['off', 'seq', 'shuffle', 'cinematic'].includes(initialExact.weatherAutoMode)
   ? initialExact.weatherAutoMode
@@ -489,6 +517,25 @@ function boot() {
   let highFpsTimer = 0;
   let frameCounter = 0;
   let perfWarmupFrames = 12;
+  let bootCompleted = false;
+  let storageSaveTimer = 0;
+
+  // Non-destructive baseline snapshot for live Music -> Environment modulation
+  const baseUniformSnap = {
+    winGlow: 1,
+    billK: 1,
+    cloud: 0.3,
+    cloudSeed: 0,
+    cloudEvol: 0.35,
+    holoScale: 1,
+  };
+  let lastMusicChordSeq = -1;
+  let musicTrafficMul = 1.0;
+  let musicCloudOffset = 0;
+  let musicCloudTargetOffset = 0;
+  let musicDiurnalPendingHours = 0;
+  let musicLightEnv = 0;
+  let musicAtmoEnv = 0;
 
   const viewCuller = createSceneViewCuller();
   viewCuller.setEnabled(viewCulling);
@@ -664,16 +711,17 @@ function boot() {
       candidates.push({ name: city.spaceport.name || 'Spaceport', x: city.spaceport.x * 0.72, z: city.spaceport.z * 0.72, baseY: 138 });
     }
 
-    // Build 8 angular sectors around city core so the closed loop is smooth and non-self-intersecting
-    const loop = [];
+    // Build 8 angular sectors around city core and circularly smooth radii/altitudes
+    // so the closed Catmull-Rom loop forms a sweeping, graceful grand arc with zero S-bend wobble!
+    const rawPts = [];
     const nSectors = 8;
     for (let s = 0; s < nSectors; s++) {
       const targetAng = -Math.PI + (s / nSectors) * Math.PI * 2;
       let best = null;
-      let bestDiff = 0.52;
+      let bestDiff = 0.48;
       for (const c of candidates) {
         const r = Math.hypot(c.x, c.z);
-        if (r < 140 || r > span * 1.65) continue;
+        if (r < span * 0.42 || r > span * 1.35) continue;
         let diff = Math.atan2(c.z, c.x) - targetAng;
         while (diff > Math.PI) diff -= Math.PI * 2;
         while (diff < -Math.PI) diff += Math.PI * 2;
@@ -682,14 +730,30 @@ function boot() {
           best = c;
         }
       }
-      const rad = span * (0.72 + 0.18 * Math.sin(s * 1.7));
-      const wx = best ? best.x : Math.cos(targetAng) * rad;
-      const wz = best ? best.z : Math.sin(targetAng) * rad;
+      const baseRad = span * (0.78 + 0.08 * Math.sin(s * Math.PI * 0.5));
+      const candRad = best ? Math.hypot(best.x, best.z) : baseRad;
+      const blendedRad = baseRad * 0.68 + candRad * 0.32;
+      rawPts.push({
+        ang: targetAng,
+        rad: blendedRad,
+        alt: (best ? Math.max(105, Math.min(185, best.baseY)) : 132) * heightScale,
+        name: best ? best.name : `Loop ${s + 1}`,
+      });
+    }
+    const loop = [];
+    for (let s = 0; s < nSectors; s++) {
+      const prev = rawPts[(s - 1 + nSectors) % nSectors];
+      const cur = rawPts[s];
+      const next = rawPts[(s + 1) % nSectors];
+      const smRad = prev.rad * 0.25 + cur.rad * 0.5 + next.rad * 0.25;
+      const smAlt = prev.alt * 0.25 + cur.alt * 0.5 + next.alt * 0.25;
+      const wx = Math.cos(cur.ang) * smRad;
+      const wz = Math.sin(cur.ang) * smRad;
       const terrY = cityCollider && cityCollider.groundHeightAt ? cityCollider.groundHeightAt(wx, wz) : 0;
-      const wy = Math.max(terrY + 58, (best ? best.baseY : 122) * heightScale);
+      const wy = Math.max(terrY + 68, smAlt);
       const curved = bendWorldPoint(wx, wy, wz, worldCurve, U.uPlanetR.value);
       loop.push({
-        name: best ? best.name : `Loop ${s + 1}`,
+        name: cur.name,
         x: Math.round(curved.x * 10) / 10,
         y: Math.round(curved.y * 10) / 10,
         z: Math.round(curved.z * 10) / 10,
@@ -1020,6 +1084,47 @@ function boot() {
     $('#clayer-thick-label').textContent = `${Math.round(tArr[idx])}m`;
   }
 
+  function inferMusicSyncPreset() {
+    const anyOn = Boolean(
+      radioState.syncTraffic || radioState.syncClouds || radioState.syncDiurnal || radioState.syncLights || radioState.syncAtmo
+    );
+    if (!anyOn || (radioState.syncStrength ?? 0) <= 0.005) return 'off';
+    for (const pr of MUSIC_SYNC_PRESETS) {
+      if (pr.id === 'off' || pr.id === 'custom') continue;
+      if (
+        pr.traffic === !!radioState.syncTraffic &&
+        pr.clouds === !!radioState.syncClouds &&
+        pr.diurnal === !!radioState.syncDiurnal &&
+        pr.lights === !!radioState.syncLights &&
+        pr.atmo === !!radioState.syncAtmo
+      ) {
+        return pr.id;
+      }
+    }
+    return 'custom';
+  }
+
+  function applyMusicSyncPreset(presetId) {
+    const pr = MUSIC_SYNC_PRESETS.find((p) => p.id === presetId);
+    if (!pr) return;
+    radioState.syncPreset = pr.id;
+    if (pr.id !== 'custom') {
+      radioState.syncStrength = pr.strength;
+      radioState.syncTraffic = pr.traffic;
+      radioState.syncClouds = pr.clouds;
+      radioState.syncDiurnal = pr.diurnal;
+      radioState.syncLights = pr.lights;
+      radioState.syncAtmo = pr.atmo;
+    } else if ((radioState.syncStrength ?? 0) <= 0.01) {
+      radioState.syncStrength = 1.0;
+    }
+    if (pr.id === 'off') {
+      // Restore unmodulated baselines immediately
+      if (vehicles && vehicles.setTrafficSpeed) vehicles.setTrafficSpeed(trafficSpeed);
+      refreshLook(false, true);
+    }
+  }
+
   function syncRadioUI() {
     const on = radioEngine.playing;
     const st = radioEngine.station;
@@ -1045,8 +1150,30 @@ function boot() {
     $('#radio-warmth-label').textContent = `Tone ${Math.round(radioState.warmth * 100)}%`;
     $('#radio-pulse-label').textContent = radioState.pulse <= 0.01 ? 'Beatless' : `Pulse ${Math.round(radioState.pulse * 100)}%`;
     $('#radio-react-label').textContent = `City ${Math.round(radioState.react * 100)}%`;
+
+    const syncPres = radioState.syncPreset || inferMusicSyncPreset();
+    $('#sel-music-sync').value = syncPres;
+    const syncMap = [
+      [$('#b-msync-traffic'), !!radioState.syncTraffic],
+      [$('#b-msync-clouds'), !!radioState.syncClouds],
+      [$('#b-msync-diurnal'), !!radioState.syncDiurnal],
+      [$('#b-msync-lights'), !!radioState.syncLights],
+      [$('#b-msync-atmo'), !!radioState.syncAtmo],
+    ];
+    let activeSyncChannels = 0;
+    for (const [btn, active] of syncMap) {
+      btn.classList.toggle('on', active);
+      btn.setAttribute('aria-pressed', String(active));
+      if (active) activeSyncChannels++;
+    }
+    const syncK = radioState.syncStrength ?? 0;
+    $('#sl-music-env').value = String(syncK);
+    $('#music-env-label').textContent = (syncK <= 0.005 || activeSyncChannels === 0)
+      ? 'Sync Off'
+      : `Sync ${Math.round(syncK * 100)}%`;
+
     $('#radio-status').textContent = on
-      ? `\u266B ${st.shortName} \u00B7 ${radioEngine.currentChordName} \u00B7 ${radioEngine.movementName}`
+      ? `\u266B ${st.shortName} \u00B7 ${st.bpm} BPM \u00B7 ${radioEngine.currentChordName} \u00B7 ${radioEngine.movementName}`
       : `Standby \u00B7 ${st.shortName} (press M)`;
   }
 
@@ -1328,10 +1455,29 @@ function boot() {
     syncMoonLabel();
     syncFeatureLabels();
     syncPostUniforms(look);
+    baseUniformSnap.winGlow = U.uWinGlow.value;
+    baseUniformSnap.billK = U.uBillK.value;
+    baseUniformSnap.cloud = U.uCloud.value;
+    baseUniformSnap.cloudSeed = U.uCloudSeed.value;
+    baseUniformSnap.cloudEvol = U.uCloudEvol.value;
+    baseUniformSnap.holoScale = U.uHoloScale.value;
     if (!skipURL) syncURL();
   }
 
+  function persistStartingState() {
+    if (!bootCompleted || demoBoot) return;
+    try {
+      if (window.localStorage) {
+        const compactTok = encodeExactState(captureExactState(), { compact: true });
+        window.localStorage.setItem(STORAGE_LAST_STATE_KEY, compactTok);
+      }
+    } catch {
+      /* sandboxed / quota storage — keep in-memory */
+    }
+  }
+
   function syncURL(includeExactToken = false) {
+    persistStartingState();
     const p = new URLSearchParams();
     p.set('seed', String(seed));
     p.set('look', lookId);
@@ -1376,7 +1522,11 @@ function boot() {
       history.replaceState(null, '', `${location.pathname}?${shortP}#s=${hashToken}`);
       return;
     }
-    history.replaceState(null, '', `${location.pathname}?${p}`);
+    // Keep clean root URL intact when booted without explicit URL state so browser reload
+    // restores the complete saved starting state from localStorage (`petacity.lastState.v1`)!
+    if (hasExplicitUrlState) {
+      history.replaceState(null, '', `${location.pathname}?${p}`);
+    }
   }
 
   /* --------------------------------------- exact state & world presets */
@@ -1430,7 +1580,11 @@ function boot() {
       viewCulling,
       tune: { ...tune },
       post: { ...postState },
-      radio: { ...radioState, station: radioEngine.stationIndex },
+      radio: {
+        ...radioState,
+        station: radioEngine.stationIndex,
+        playing: !!radioEngine.playing,
+      },
       custom: LOOK_BY_ID.custom.customConfig ? { ...LOOK_BY_ID.custom.customConfig } : { ...DEFAULT_CUSTOM },
       camera: { ...controls.getPose(), fov: camFov },
       bookmarks,
@@ -1526,6 +1680,8 @@ function boot() {
         mode: radioState.playlistMode || 'seq',
         interval: radioState.playlistInterval || 75,
       });
+      if (st.radio.playing && !radioEngine.playing) radioEngine.start();
+      else if (st.radio.playing === false && radioEngine.playing) radioEngine.stop();
     }
     if (Array.isArray(st.autoLoop) && st.autoLoop.length >= 3) {
       userLoopOverride = st.autoLoop.map((p) => ({ ...p }));
@@ -1948,10 +2104,12 @@ function boot() {
 
   const toggleRadio = () => {
     const on = radioEngine.toggle();
+    radioState.playing = on;
     syncRadioUI();
+    persistStartingState();
     flash(on
-      ? `\u266B Radio ON \u00B7 ${radioEngine.station.name}`
-      : '\u266B Synth radio paused');
+      ? `\u266B Music ON \u00B7 ${radioEngine.station.name}`
+      : '\u266B Synth music paused');
   };
   $('#b-radio').onclick = toggleRadio;
   $('#b-radio-play').onclick = toggleRadio;
@@ -1961,8 +2119,10 @@ function boot() {
     if (!wasPlaying) {
       radioState.station = radioEngine.stationIndex;
       radioEngine.start();
+      radioState.playing = true;
     }
     syncRadioUI();
+    persistStartingState();
     flash(wasPlaying ? `\u266B Crossfading \u2192 ${st.name}` : `\u266B ${st.name}`);
   };
   $('#b-radio-seed').onclick = () => {
@@ -1975,6 +2135,7 @@ function boot() {
     const st = radioEngine.setStation(idx);
     radioState.station = radioEngine.stationIndex;
     syncRadioUI();
+    persistStartingState();
     flash(`\u266B ${st.name}`);
   };
   $('#sel-radio-playlist').onchange = (ev) => {
@@ -1982,6 +2143,7 @@ function boot() {
     radioState.playlistMode = mode;
     radioEngine.setPlaylist({ mode });
     syncRadioUI();
+    persistStartingState();
     flash(mode === 'shuffle'
       ? '\u266B Playlist · Shuffle Crossfade'
       : (mode === 'seq' ? '\u266B Playlist · Sequential Crossfade' : '\u266B Playlist · Hold Current Station'));
@@ -1991,20 +2153,72 @@ function boot() {
     radioState.playlistInterval = sec;
     radioEngine.setPlaylist({ interval: sec });
     syncRadioUI();
+    persistStartingState();
+  });
+
+  // Music -> Environment mapping preset, per-channel toggles & coupling strength
+  $('#sel-music-sync').onchange = (ev) => {
+    applyMusicSyncPreset(ev.target.value);
+    syncRadioUI();
+    persistStartingState();
+    const pr = MUSIC_SYNC_PRESETS.find((p) => p.id === radioState.syncPreset);
+    flash(`\u266B ${pr ? pr.label : 'World Sync updated'}`);
+  };
+  const bindMusicSyncChannel = (btnEl, field, label) => {
+    btnEl.onclick = () => {
+      radioState[field] = !radioState[field];
+      if (radioState[field] && (radioState.syncStrength ?? 0) <= 0.01) {
+        radioState.syncStrength = 1.0;
+      }
+      radioState.syncPreset = inferMusicSyncPreset();
+      if (radioState.syncPreset === 'off') {
+        if (vehicles && vehicles.setTrafficSpeed) vehicles.setTrafficSpeed(trafficSpeed);
+        refreshLook(false, true);
+      }
+      syncRadioUI();
+      persistStartingState();
+      flash(`\u266B ${label} \u00B7 ${radioState[field] ? 'ON' : 'OFF'}`);
+    };
+  };
+  bindMusicSyncChannel($('#b-msync-traffic'), 'syncTraffic', 'Traffic Tempo \u2190 Music BPM');
+  bindMusicSyncChannel($('#b-msync-clouds'), 'syncClouds', 'Cloud Shifts \u2190 Chord Changes');
+  bindMusicSyncChannel($('#b-msync-diurnal'), 'syncDiurnal', 'Diurnal Sky \u2190 Chord Changes');
+  bindMusicSyncChannel($('#b-msync-lights'), 'syncLights', 'City Lights & Holos \u2190 Beat');
+  bindMusicSyncChannel($('#b-msync-atmo'), 'syncAtmo', 'Atmosphere & Bloom \u2190 Harmony');
+  bindSlider($('#sl-music-env'), (v) => {
+    const nextK = clampFloat(v, 0, 1.5, 0);
+    radioState.syncStrength = nextK;
+    if (nextK > 0.01 && !radioState.syncTraffic && !radioState.syncClouds && !radioState.syncDiurnal && !radioState.syncLights && !radioState.syncAtmo) {
+      // Enabling strength from 0 turns on Full Symphonic City channels automatically
+      radioState.syncTraffic = true;
+      radioState.syncClouds = true;
+      radioState.syncDiurnal = true;
+      radioState.syncLights = true;
+      radioState.syncAtmo = true;
+    }
+    radioState.syncPreset = inferMusicSyncPreset();
+    if (nextK <= 0.005) {
+      if (vehicles && vehicles.setTrafficSpeed) vehicles.setTrafficSpeed(trafficSpeed);
+      refreshLook(false, true);
+    }
+    syncRadioUI();
+    persistStartingState();
   });
 
   window.addEventListener('keydown', (e) => {
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === 'h' || e.key === 'H') toggleUI();
+    else if ((e.key === 'p' || e.key === 'P') && e.shiftKey) togglePathPlay();
+    else if (e.key === 'p' || e.key === 'P') toggleGlide();
     else if (e.key === 'g' || e.key === 'G') toggleGlide();
+    else if (e.key === 'm' || e.key === 'M') toggleRadio();
     else if (e.key === 'o' || e.key === 'O') toggleAutoLook();
     else if (e.key === 'l' || e.key === 'L') toggleFreelook();
-    else if (e.key === 'm' || e.key === 'M') toggleRadio();
     else if (e.key === 'v' || e.key === 'V') toggleAvoidance();
     else if (e.key === 'c' || e.key === 'C') toggleCollision();
     else if (e.key === 't' || e.key === 'T') toggleTimeCycle();
     else if (e.key === 'r' || e.key === 'R') togglePathRecord();
-    else if (e.key === 'p' || e.key === 'P') togglePathPlay();
     else if (e.key === 'k' || e.key === 'K') addPathKeyframe();
   });
 
@@ -2850,7 +3064,8 @@ function boot() {
     b.textContent = '\u2708\uFE0E';
     b.classList.toggle('on', glideOn);
     b.setAttribute('aria-pressed', String(glideOn));
-    b.title = (glideOn ? 'Stop' : 'Start') + ' Autopilot Loop Glide — drag to steer, wheel for speed (G)';
+    b.title = (glideOn ? 'Stop' : 'Start') + ' Autopilot Loop Glide — drag to steer, wheel for speed (P)';
+    persistStartingState();
     if (announce) {
       if (glideOn) {
         const n = syncGlideNode();
@@ -3415,6 +3630,108 @@ function boot() {
         speed: camSpd,
         night: nightAmt,
       });
+
+      // Live Music -> Environment Coupling (Tempo->Traffic, Chords->Clouds/Diurnal, Beat->Lights/Holos, Harmony->Atmo)
+      const mt = radioEngine.getMusicalTelemetry();
+      const anyMusicSync = Boolean(
+        radioState.syncTraffic || radioState.syncClouds || radioState.syncDiurnal || radioState.syncLights || radioState.syncAtmo
+      );
+      const syncK = (mt.playing && anyMusicSync) ? Math.max(0, Math.min(1.5, radioState.syncStrength ?? 0)) : 0;
+
+      if (mt.playing) {
+        if (lastMusicChordSeq < 0) {
+          lastMusicChordSeq = mt.chordChangeSeq;
+        } else if (mt.chordChangeSeq !== lastMusicChordSeq) {
+          const chordSteps = Math.max(1, Math.min(4, Math.abs(mt.chordChangeSeq - lastMusicChordSeq)));
+          lastMusicChordSeq = mt.chordChangeSeq;
+          if (syncK > 0.005) {
+            if (radioState.syncClouds) {
+              musicCloudTargetOffset += (0.88 + 0.45 * mt.chordBrightness) * syncK * chordSteps;
+            }
+            if (radioState.syncDiurnal) {
+              musicDiurnalPendingHours += (mt.isMinor ? 0.65 : 1.08) * syncK * chordSteps;
+            }
+          }
+          if (!document.body.classList.contains('ui-off')) syncRadioUI();
+        }
+      } else {
+        lastMusicChordSeq = -1;
+      }
+
+      // 1. Traffic & Transit Tempo <- Music BPM & Beat Pulse
+      const wantTraffMul = (syncK > 0.005 && radioState.syncTraffic)
+        ? (1.0 + (Math.max(0.42, Math.min(1.70, mt.tempoRatio)) * (1.0 + 0.16 * mt.beatPulse) - 1.0) * Math.min(1.25, syncK))
+        : 1.0;
+      musicTrafficMul += (wantTraffMul - musicTrafficMul) * (1 - Math.exp(-dt * 4.5));
+      if (vehicles && vehicles.setTrafficSpeed && (Math.abs(musicTrafficMul - 1.0) > 1e-3 || radioState.syncTraffic)) {
+        vehicles.setTrafficSpeed(trafficSpeed * musicTrafficMul);
+      }
+
+      // 2. Diurnal Sun/Moon Cycle <- Chord Changes (smooth glide, zero step snap!)
+      if (musicDiurnalPendingHours > 1e-4) {
+        const stepH = musicDiurnalPendingHours * (1 - Math.exp(-dt * 1.35));
+        musicDiurnalPendingHours = Math.max(0, musicDiurnalPendingHours - stepH);
+        timeOfDay = (timeOfDay + stepH) % 24;
+        tune.moonph = ((tune.moonph + stepH * 0.065) % 2 + 2) % 2;
+        $('#sl-time').value = String(timeOfDay);
+        $('#sl-moonph').value = String(tune.moonph);
+        refreshLook(false, true);
+      }
+
+      // 3. Volumetric Cloud Shifts <- Chord Changes & Musical Breathing
+      musicCloudOffset += (musicCloudTargetOffset - musicCloudOffset) * (1 - Math.exp(-dt * 1.15));
+      if (syncK > 0.005 && radioState.syncClouds) {
+        U.uCloudSeed.value = (baseUniformSnap.cloudSeed + musicCloudOffset * 1.35) % 1000;
+        U.uCloudEvol.value = baseUniformSnap.cloudEvol + 0.28 * mt.chordFlash * syncK;
+        if (baseUniformSnap.cloud > 0.008) {
+          U.uCloud.value = baseUniformSnap.cloud * (1.0 + (0.10 * mt.chordFlash + 0.06 * (mt.chordBrightness - 0.5)) * syncK);
+        }
+      } else if (Math.abs(U.uCloudEvol.value - baseUniformSnap.cloudEvol) > 1e-4) {
+        U.uCloudSeed.value = baseUniformSnap.cloudSeed;
+        U.uCloudEvol.value = baseUniformSnap.cloudEvol;
+        U.uCloud.value = baseUniformSnap.cloud;
+      }
+
+      // 4. City Neon, Windows, Searchlights & Holograms <- Beat & Spectral Energy
+      const wantLightEnv = (syncK > 0.005 && radioState.syncLights)
+        ? (mt.beatPulse * 0.36 + mt.lowEnergy * 0.22 + mt.highEnergy * 0.20) * syncK
+        : 0;
+      musicLightEnv += (wantLightEnv - musicLightEnv) * (1 - Math.exp(-dt * 10.0));
+      if (musicLightEnv > 1e-3) {
+        U.uWinGlow.value = baseUniformSnap.winGlow * (1.0 + musicLightEnv * 0.52);
+        U.uBillK.value = baseUniformSnap.billK * (1.0 + musicLightEnv * 0.72);
+        U.uHoloScale.value = baseUniformSnap.holoScale * (1.0 + mt.beatPulse * 0.075 * syncK);
+        if (searchlights && searchlights.setAmount) {
+          searchlights.setAmount((tune.searchLight ?? 1) * (1.0 + musicLightEnv * 0.65));
+        }
+      } else if (Math.abs(U.uHoloScale.value - baseUniformSnap.holoScale) > 1e-4) {
+        U.uWinGlow.value = baseUniformSnap.winGlow;
+        U.uBillK.value = baseUniformSnap.billK;
+        U.uHoloScale.value = baseUniformSnap.holoScale;
+        if (searchlights && searchlights.setAmount) searchlights.setAmount(tune.searchLight ?? 1);
+      }
+
+      // 5. Atmospheric Bloom & Harmonic Warmth <- Musical Movements
+      const wantAtmoEnv = (syncK > 0.005 && radioState.syncAtmo)
+        ? (mt.chordFlash * 0.22 + mt.midEnergy * 0.20) * syncK
+        : 0;
+      musicAtmoEnv += (wantAtmoEnv - musicAtmoEnv) * (1 - Math.exp(-dt * 4.0));
+      if (musicAtmoEnv > 1e-3) {
+        const curLook = LOOK_BY_ID[lookId];
+        const tempShift = curLook.monochrome ? 0 : (mt.chordBrightness - 0.5) * 0.26 * syncK;
+        post.configure({
+          bloom: Math.min(2.4, postState.bloom + musicAtmoEnv * 0.42),
+          temp: Math.max(-1, Math.min(1, postState.temp + tempShift)),
+        });
+      }
+
+      // Periodically persist exact starting state (including live flight pose) to localStorage
+      storageSaveTimer += dt;
+      if (storageSaveTimer >= 2.0) {
+        storageSaveTimer = 0;
+        persistStartingState();
+      }
+
       if (radioVizCanvas && !document.body.classList.contains('ui-off')) {
         radioEngine.renderScope(radioVizCanvas, LOOK_BY_ID[lookId].accent || '#6be4ff');
       }
@@ -3971,10 +4288,33 @@ function boot() {
     if (patch.radioWarmth !== undefined) { radioState.warmth = clampFloat(patch.radioWarmth, 0.1, 1.5, 0.8); radioEngine.setWarmth(radioState.warmth); }
     if (patch.radioPulse !== undefined) { radioState.pulse = clampFloat(patch.radioPulse, 0, 1.5, 0.55); radioEngine.setPulse(radioState.pulse); }
     if (patch.radioReact !== undefined) { radioState.react = clampFloat(patch.radioReact, 0, 1.5, 0.65); radioEngine.setCityReactivity(radioState.react); }
+    if (patch.radioPlaying !== undefined) {
+      if (patch.radioPlaying && !radioEngine.playing) radioEngine.start();
+      else if (!patch.radioPlaying && radioEngine.playing) radioEngine.stop();
+      radioState.playing = radioEngine.playing;
+    }
+    if (patch.musicSyncPreset !== undefined) applyMusicSyncPreset(String(patch.musicSyncPreset));
+    if (patch.musicSyncStrength !== undefined) radioState.syncStrength = clampFloat(patch.musicSyncStrength, 0, 1.5, radioState.syncStrength);
+    if (patch.musicSyncTraffic !== undefined) radioState.syncTraffic = !!patch.musicSyncTraffic;
+    if (patch.musicSyncClouds !== undefined) radioState.syncClouds = !!patch.musicSyncClouds;
+    if (patch.musicSyncDiurnal !== undefined) radioState.syncDiurnal = !!patch.musicSyncDiurnal;
+    if (patch.musicSyncLights !== undefined) radioState.syncLights = !!patch.musicSyncLights;
+    if (patch.musicSyncAtmo !== undefined) radioState.syncAtmo = !!patch.musicSyncAtmo;
+    if (
+      patch.musicSyncTraffic !== undefined || patch.musicSyncClouds !== undefined ||
+      patch.musicSyncDiurnal !== undefined || patch.musicSyncLights !== undefined || patch.musicSyncAtmo !== undefined
+    ) {
+      if ((radioState.syncTraffic || radioState.syncClouds || radioState.syncDiurnal || radioState.syncLights || radioState.syncAtmo)
+          && (radioState.syncStrength ?? 0) <= 0.01 && patch.musicSyncStrength === undefined) {
+        radioState.syncStrength = 1.0;
+      }
+      radioState.syncPreset = inferMusicSyncPreset();
+    }
 
     if (needRebuild) rebuild();
     if (needRefreshLook || needRebuild) refreshLook(false);
     syncAllSliders();
+    persistStartingState();
   }
 
   // Start minimized (`ui-off`) by default; allow `?ui=1` query override if explicitly requested
@@ -4017,9 +4357,29 @@ function boot() {
     };
     window.addEventListener('pointerdown', startDemoAudioOnce, { once: true });
     window.addEventListener('keydown', startDemoAudioOnce, { once: true });
-  } else if (glideOn) {
-    setGlideState(true, false);
+  } else {
+    if (glideOn) setGlideState(true, false);
+    if (radioState.playing) {
+      radioEngine.start();
+      syncRadioUI();
+      const resumeAudioOnGesture = () => {
+        if (radioEngine.playing && radioEngine.ctx && radioEngine.ctx.state === 'suspended' && typeof radioEngine.ctx.resume === 'function') {
+          try { radioEngine.ctx.resume(); } catch { /* ignore */ }
+        }
+        window.removeEventListener('pointerdown', resumeAudioOnGesture);
+        window.removeEventListener('keydown', resumeAudioOnGesture);
+      };
+      window.addEventListener('pointerdown', resumeAudioOnGesture, { once: true });
+      window.addEventListener('keydown', resumeAudioOnGesture, { once: true });
+    }
   }
+
+  bootCompleted = true;
+  persistStartingState();
+  window.addEventListener('pagehide', persistStartingState);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') persistStartingState();
+  });
   registerPetacityWebMCP({
     director,
     getState: captureExactState,

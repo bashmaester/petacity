@@ -75,7 +75,7 @@ iframe.contentWindow.postMessage({
 | `petacity_project_hologram` | Spawn a volumetric hologram (`billboard`, `panel`, `disc`, `diamond`, `cuboctahedron`, `icosahedron`, `knot`, `prism`, `ring`) in front of the camera with an armored drone projector pod and **corner-terminating volumetric light frustum**. |
 | `petacity_control_vehicle` | Puppeteer any car, spinner, transit train, or blimp (`nearest`, `lookingAt`, `car`, `spinner`, `train`, or `vehicleId`): teleport, park in front of camera, circle camera, drive `waypoints`, repaint `color`, `follow`, or set `headlights`. |
 | `petacity_set_environment` | Live-switch `look`, `tint`, `customPalette`, `terrainMode`/`terrainScale`, `treeMode`/`vegCover`/`vegScale`, `waterMode`/`waterShader`, `time`/`dayCycle`, 3-deck `clouds`/`cloudLayerElev`/`cloudLayerDens`, `weatherMode`/`weatherAutoMode`, all light & district dials, `holoDensity`/`holoScale`/`holoScan`, and `trailMode`/`trailLength`. |
-| `petacity_control_music` | Start/stop the pure-code generative radio, switch stations, reseed voice-leading, configure Playlist Auto-DJ (`seq` / `shuffle` / `loop` + `playlistInterval`), and tune `volume`, `space`, `warmth`, `pulse`, and `react`. |
+| `petacity_control_music` | Start/stop the 14-station pure-code generative radio (`station` `0..13` or name), reseed voice-leading, configure Playlist Auto-DJ (`seq` / `shuffle` / `loop` + `playlistInterval`), tune `volume`, `space`, `warmth`, `pulse`, `react`, and configure **Music -> Environment World Sync** (`syncPreset`, `syncStrength`, `syncTraffic`, `syncClouds`, `syncDiurnal`, `syncLights`, `syncAtmo`) + live musical `telemetry`. |
 | `petacity_capture_media` | Capture clean PNG stills (`Viewport`/`720p`/`1080p`/`1440p`/`4K`), start/stop HQ video + synth audio (`start_video`/`stop_video`), and record/keyframe/smooth/seek/loop/import/export spline camera paths. |
 | `petacity_reset_movie_set` | Cleanly restore all building lights/facades, hijacked billboards, projected holograms, overridden vehicles, and camera scripts in one call. |
 
@@ -320,5 +320,23 @@ const perf = await window.petacity.callTool('petacity_set_performance_quality', 
 });
 console.log(perf.performance);
 ```
+
+### Recipe 13 — 14-Station Synth Radio & Music-to-Environment World Sync
+```js
+// Tune to any of the 14 pure-code generative stations and couple musical tempo, chords & beats to the city:
+const music = await window.petacity.callTool('petacity_control_music', {
+  playing: true,
+  station: 11,                  // 0..13 (e.g. 11 = '107.6 FM · Cathedral of Rain', 10 = '105.5 FM · Orbital Express')
+  syncPreset: 'full',           // 'off' | 'traffic_pulse' | 'cloud_chords' | 'harmonic_day' | 'neon_stage' | 'full' | 'custom'
+  syncStrength: 1.15,           // 0..2x coupling depth
+  syncTraffic: true,            // traffic speed & pulse follow musical BPM (42..128 BPM) + downbeats
+  syncClouds: true,             // cloud shape & wind azimuth drift on harmonic chord changes
+  syncDiurnal: true,            // solar/lunar diurnal hour advances smoothly on chord changes
+  syncLights: true,             // tower windows, neon & 3D holograms breathe on beats/phrases
+  syncAtmo: true,               // sky sun glow, bloom & color temperature shift with chord brightness
+});
+console.log(music.telemetry);
+```
+
 
 

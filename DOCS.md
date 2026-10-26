@@ -131,18 +131,36 @@ To prevent open-ocean blotchiness and screen-space Moiré shimmer at grazing ang
 
 ---
 
-## 6. Pure-Code Evolving Generative Synth Radio (`src/audio.js`)
+## 6. Pure-Code Evolving Generative Synth Radio & Music-to-Environment Coupling (`src/audio.js`, `src/main.js`)
 
-`ModularRadioEngine` synthesizes 100% of its audio in real time using Web Audio oscillators, biquad filters, waveshaper tape saturation, stereo wow/flutter ping-pong delay, pink/velvet noise, and a procedural 5.2s stereo hall impulse response (`buildSpaceImpulseData`):
-- **6 Original Atmospheric Stations** (zero external samples, zero real-world artist/album/synth brand names):
-  1. `99.4 FM · Rain on Neon Glass`
-  2. `101.7 FM · Velvet Sub-Level`
-  3. `104.2 FM · Midnight Monorail`
-  4. `106.8 FM · Sodium & Mercury`
-  5. `88.9 FM · Foghorn & Starlight`
-  6. `93.1 FM · Hanging Sky-Gardens`
+`ModularRadioEngine` synthesizes 100% of its audio in real time using Web Audio oscillators, FM electric tines, hollow woody mallets, biquad filters, waveshaper tape saturation, stereo wow/flutter ping-pong delay, pink/velvet noise, and a procedural 5.2s stereo hall impulse response (`buildSpaceImpulseData`):
+- **14 Original Pure-Code Atmospheric Stations (`42–128 BPM`)** (zero external samples, zero real-world artist/album/synth brand names):
+  1. `99.4 FM · Rain on Neon Glass` (`62 BPM`)
+  2. `101.7 FM · Velvet Sub-Level` (`104 BPM`)
+  3. `104.2 FM · Midnight Monorail` (`86 BPM`)
+  4. `106.8 FM · Sodium & Mercury` (`74 BPM`)
+  5. `88.9 FM · Foghorn & Starlight` (`54 BPM`)
+  6. `93.1 FM · Hanging Sky-Gardens` (`96 BPM`)
+  7. `90.3 FM · Glass Atrium Dawn` (`68 BPM`)
+  8. `95.7 FM · Harbour Dub & Mist` (`78 BPM`)
+  9. `97.9 FM · Brutalist Concrete Echo` (`48 BPM`)
+  10. `102.9 FM · Solar Sail Meridian` (`112 BPM`)
+  11. `105.5 FM · Orbital Express` (`124 BPM`)
+  12. `107.6 FM · Cathedral of Rain` (`42 BPM`)
+  13. `91.8 FM · Lantern District` (`88 BPM`)
+  14. `100.5 FM · Maglev Horizon` (`128 BPM`)
 - **4-Movement Macro-Evolution Engine (`RADIO_MOVEMENTS`) & Playlist Auto-DJ**:
   Across a 64-bar symphonic cycle, the composition evolves automatically through **I · Mist Prelude**, **II · Rising Skyline**, **III · Luminous Zenith** (pivoting into contrasting `bridgeProgressions` with counter-melodies and upper-octave voicings), and **IV · Nocturnal Dissolve**, followed by multi-cycle modal key transpositions (`MODAL_CYCLE_SHIFTS`) and motif mutations. In addition, the **Playlist Auto-DJ** (`seq` sequential, non-repeating `shuffle`, or `loop` hold) performs smooth 4.4-second ambient reverb/filter crossfades between stations at configurable intervals (`20..240s`), while `getAudioStream()` feeds stereo synth output directly into WebM/MP4 video recordings.
+- **Music-to-Environment World Sync (`getMusicalTelemetry()`, `#sel-music-sync`, `#b-msync-*`, `#sl-music-env`)**:
+  Exposes live normalized BPM tempo (`tempoRatio` relative to `84 BPM`), smoothed beat/chord envelopes, monotonic `chordSeq`, and harmonic `chordBrightness` (`0..1`) that optionally drive 5 non-destructive environmental channels (`baseUniformSnap`):
+  1. **Traffic Tempo (`syncTraffic`)** — scales hero & GPU-swarm traffic speed with station BPM plus subtle downbeat acceleration surges.
+  2. **Cloud Chords (`syncClouds`)** — steps volumetric `uCloudSeed` evolution and wind azimuth on harmonic chord transitions.
+  3. **Harmonic Day (`syncDiurnal`)** — advances the 24-hour solar/lunar diurnal cycle smoothly across chord progressions.
+  4. **City Lights & Holos (`syncLights`)** — pulses skyscraper windows, neon glow, and desynchronized 3D hologram projections with musical beats and 4-movement intensity.
+  5. **Sky & Grade (`syncAtmo`)** — breathes solar corona/haze, post bloom, and color temperature (`Metropolis` stays strictly monochrome) with chord brightness.
+- **Keyboard Shortcuts & `localStorage` Starting State (`petacity.lastState.v1`)**:
+  - `P` toggles Autopilot (`G` retained as alias; `Shift+P` plays recorded camera path), and `M` toggles Music.
+  - Whenever Petacity boots without explicit URL/demo scene parameters, it automatically restores the user's saved starting state from `localStorage` (`petacity.lastState.v1`) and persists subsequent changes cleanly without polluting `location.search`.
 
 ---
 
@@ -152,6 +170,6 @@ To prevent open-ocean blotchiness and screen-space Moiré shimmer at grazing ang
 # Start local static server on port 8000
 npm run serve   # or: python3 -m http.server 8000 --bind 0.0.0.0
 
-# Run full 90-test Node verification suite (city, scene, shaders, holos, trails, optics, Drone-DP gaze, transitions, culling, WebMCP, UI contract & JSDOM boot)
+# Run full 92-test Node verification suite (city, scene, shaders, holos, trails, optics, anti-wobble Drone-DP gaze, transitions, culling, 14-station music sync, WebMCP, UI contract & JSDOM boot)
 npm test
 ```

@@ -1152,7 +1152,7 @@ export class MovieSetDirector {
     width = 18,
     height = 9,
     followCamera = false,
-    spinSpeed = 0.35,
+    spinSpeed = 0.11,
   } = {}) {
     const cam = this.camera;
     if (!cam) return { ok: false, reason: 'no-camera' };
@@ -1286,7 +1286,9 @@ export class MovieSetDirector {
       distance: Number(distance) || 36,
       offsetRight: Number(offsetRight) || 0,
       offsetUp: Number(offsetUp) || 0,
-      spinSpeed: shape === 'billboard' ? 0 : (Number(spinSpeed) || 0.35),
+      spinSpeed: shape === 'billboard' ? 0 : (Number.isFinite(Number(spinSpeed)) ? Number(spinSpeed) : 0.11),
+      phase: ((this._nextId * 0.6180339887) % 1) * Math.PI * 2,
+      tiltFreq: 0.09 + ((this._nextId * 0.37) % 0.09),
       radius: Math.max(width, height) * 0.55,
     });
 
@@ -1521,9 +1523,10 @@ export class MovieSetDirector {
         }
         if (p.spinSpeed !== 0) {
           p.holoMesh.rotation.y += p.spinSpeed * clampedDt;
+          p.holoMesh.rotation.x = 0.08 * Math.sin(this._time * (p.tiltFreq || 0.12) + (p.phase || 0));
         }
-        // Subtle holographic projector shimmer
-        p.frustumMat.opacity = 0.19 + 0.05 * Math.sin(this._time * 7.3);
+        // Subtle asynchronous holographic projector shimmer
+        p.frustumMat.opacity = 0.18 + 0.04 * Math.sin(this._time * (1.1 + (p.tiltFreq || 0.12) * 4.0) + (p.phase || 0));
       }
     }
 

@@ -4182,21 +4182,64 @@ void main() {
   vec3 pLoc = position * scMul;
   vec3 nLoc = normal;
 
-  // 3D Archimedean Solids (kind=2) & Abstract Sculptures (kind=3) precess smoothly in space
+  // 3D Archimedean Solids (kind=2) & Abstract Sculptures (kind=3):
+  // Slow, varied, asynchronous per-instance precession, poise & levitation (zero lockstep wobble!)
   if (aHoloKind > 1.5 && aHoloKind < 3.5) {
     float animRate = max(uSignAnim, 0.0);
-    float spinDir = aSeed > 0.5 ? 1.0 : -1.0;
-    float angY = loopPhase(uTime * animRate, 2.0) * 6.2831853 * spinDir + aSeed * 6.2831853;
-    float angX = 0.28 * loopSin(uTime * animRate, 1.0, aSeed * 19.0);
-    float cy = cos(angY);
-    float sy = sin(angY);
+    float animGate = clamp(animRate, 0.0, 1.0);
+    float animT = uTime * animRate;
+
+    // Independent per-instance random variates from aSeed
+    float s1 = fract(aSeed * 17.31 + 0.13);
+    float s2 = fract(aSeed * 43.97 + 0.37);
+    float s3 = fract(aSeed * 71.19 + 0.61);
+    float s4 = fract(aSeed * 97.43 + 0.29);
+    float s5 = fract(aSeed * 131.71 + 0.83);
+
+    float spinDir = s2 > 0.5 ? 1.0 : -1.0;
+    float baseYaw = s1 * 6.2831853;
+    float angY = baseYaw;
+    if (s1 < 0.24) {
+      // ~24% of 3D projections hover majestically with only a slow gentle azimuthal breathe (60-120s period)
+      float kSway = 1.0 + step(0.55, s4);
+      angY += (0.10 + 0.14 * s3) * sin(loopPhase(animT, kSway) * 6.2831853 + s5 * 6.2831853) * animGate;
+    } else {
+      // Slow architectural rotation: 1 or 2 revolutions per 120s (3 deg/s or 6 deg/s) + gentle phase drift
+      float kSpin = s1 < 0.78 ? 1.0 : 2.0;
+      float kMod = s3 < 0.5 ? 1.0 : 2.0;
+      float driftMod = 0.11 * sin(loopPhase(animT, kMod) * 6.2831853 + s4 * 6.2831853) * animGate;
+      angY += loopPhase(animT, kSpin) * 6.2831853 * spinDir * animGate + driftMod;
+    }
+
+    // Distinct integer harmonics (1..3 cycles per 120s -> 40s..120s periods, 50x-120x slower than 1Hz!)
+    float kTiltX = 1.0 + floor(s3 * 2.99);
+    float kTiltZ = 1.0 + mod(kTiltX + floor(s4 * 1.99), 3.0);
+    float staticPoiseX = (s2 - 0.5) * 0.22;
+    float staticPoiseZ = (s4 - 0.5) * 0.18;
+    float ampX = (0.025 + 0.115 * s5) * animGate;
+    float ampZ = (0.020 + 0.095 * (1.0 - s5)) * animGate;
+    float angX = staticPoiseX + ampX * sin(loopPhase(animT, kTiltX) * 6.2831853 + s2 * 6.2831853);
+    float angZ = staticPoiseZ + ampZ * cos(loopPhase(animT, kTiltZ) * 6.2831853 + s4 * 6.2831853);
+
     float cx = cos(angX);
     float sx = sin(angX);
-    // Rotate X then Y
+    float cz = cos(angZ);
+    float sz = sin(angZ);
+    float cy = cos(angY);
+    float sy = sin(angY);
+
+    // Rotate X -> Z -> Y for full 3-axis asynchronous gimbal precession
     vec3 p1 = vec3(pLoc.x, pLoc.y * cx - pLoc.z * sx, pLoc.y * sx + pLoc.z * cx);
-    pLoc = vec3(p1.x * cy + p1.z * sy, p1.y, -p1.x * sy + p1.z * cy);
+    vec3 p2 = vec3(p1.x * cz - p1.y * sz, p1.x * sz + p1.y * cz, p1.z);
+    pLoc = vec3(p2.x * cy + p2.z * sy, p2.y, -p2.x * sy + p2.z * cy);
+
     vec3 n1 = vec3(nLoc.x, nLoc.y * cx - nLoc.z * sx, nLoc.y * sx + nLoc.z * cx);
-    nLoc = vec3(n1.x * cy + n1.z * sy, n1.y, -n1.x * sy + n1.z * cy);
+    vec3 n2 = vec3(n1.x * cz - n1.y * sz, n1.x * sz + n1.y * cz, n1.z);
+    nLoc = vec3(n2.x * cy + n2.z * sy, n2.y, -n2.x * sy + n2.z * cy);
+
+    // Delicate asynchronous magnetic-levitation float (40s..120s period)
+    float kBob = 1.0 + floor(s1 * 2.99);
+    pLoc.y += scMul * (0.014 + 0.028 * s3) * sin(loopPhase(animT, kBob) * 6.2831853 + s5 * 6.2831853) * animGate;
   }
   vLocalY = pLoc.y / max(scMul, 1e-3);
 
@@ -4246,13 +4289,22 @@ void main() {
   float colorMix = 0.5;
   float edgeMask = 1.0;
 
+  // Per-instance desynchronized scanline, refresh & harmonic shimmer rates
+  float hs1 = fract(vSeed * 29.31 + 0.17);
+  float hs2 = fract(vSeed * 53.79 + 0.41);
+  float hs3 = fract(vSeed * 83.13 + 0.67);
+  float hsDir = hs2 > 0.5 ? 1.0 : -1.0;
+  float kFine = 6.0 + floor(hs1 * 7.0);
+  float kSub = 2.0 + floor(hs2 * 4.0);
+  float kRefresh = 1.0 + floor(hs3 * 2.99);
+
   // Scanline & rolling CRT/laser refresh beam coordinate (planar UV or 3D local elevation slice)
   float scanCoord = (vHoloKind > 1.5 && vHoloKind < 3.5) ? (vLocalY * 0.85 + 0.5) : vUv.y;
   float scanAmt = clamp(uHoloScan, 0.0, 2.0);
-  float fineLines = 0.5 + 0.5 * sin(scanCoord * 215.0 + loopPhase(animT, 16.0) * 6.2831853 + vSeed * 12.0);
-  float subLines = 0.5 + 0.5 * sin(scanCoord * 48.0 - loopPhase(animT, 6.0) * 6.2831853);
-  float refreshSweep = pow(max(0.0, 1.0 - abs(fract(scanCoord * 1.25 - loopPhase(animT, 4.0) + vSeed) - 0.5) * 8.0), 2.0);
-  float scanMod = mix(1.0, (0.38 + 0.62 * fineLines) * (0.76 + 0.24 * subLines) + refreshSweep * 0.68, clamp(scanAmt * 0.72, 0.0, 1.0));
+  float fineLines = 0.5 + 0.5 * sin(scanCoord * 215.0 + loopPhase(animT, kFine) * 6.2831853 * hsDir + vSeed * 19.0);
+  float subLines = 0.5 + 0.5 * sin(scanCoord * 48.0 - loopPhase(animT, kSub) * 6.2831853 * hsDir + hs1 * 6.2831853);
+  float refreshSweep = pow(max(0.0, 1.0 - abs(fract(scanCoord * 1.25 - loopPhase(animT, kRefresh) * hsDir + hs2) - 0.5) * 8.0), 2.0);
+  float scanMod = mix(1.0, (0.38 + 0.62 * fineLines) * (0.76 + 0.24 * subLines) + refreshSweep * 0.62, clamp(scanAmt * 0.72, 0.0, 1.0));
 
   if (vHoloKind < 0.5) {
     // Kind 0: Single-Plane Pyramid Projection Screen (FrontSide only — zero double-sided cross!)
@@ -4263,11 +4315,13 @@ void main() {
       colorMix = clamp(simAd.y + simAd.z * 0.35, 0.0, 1.0);
     } else {
       float r = length(cUv * vec2(1.35, 1.0));
-      float rFlow = loopPhase(animT, 24.0);
+      float kRing = 6.0 + floor(hs1 * 10.0);
+      float rFlow = loopPhase(animT, kRing);
       float rings = smoothstep(0.022, 0.0, abs(fract(r * 4.2 - rFlow + vSeed * 4.0) - 0.5)) * smoothstep(0.50, 0.10, r);
       float centerSigil = evalSynthGlyph(clamp((vUv - vec2(0.32, 0.26)) / vec2(0.36, 0.46), 0.0, 1.0), vSeed * 9.3, uGlyphStyle, animT, 0.055)
         * step(0.32, vUv.x) * step(vUv.x, 0.68) * step(0.26, vUv.y) * step(vUv.y, 0.72);
-      float scrollArc = evalGlyphLine(vec2(vUv.x, clamp((vUv.y - 0.10) / 0.15, 0.0, 1.0)), 10.0, loopPhase(animT, 7.0) * 10.0, vSeed * 17.0, uGlyphStyle, animT)
+      float kScroll = 3.0 + floor(hs2 * 5.0);
+      float scrollArc = evalGlyphLine(vec2(vUv.x, clamp((vUv.y - 0.10) / 0.15, 0.0, 1.0)), 10.0, loopPhase(animT, kScroll) * 10.0, vSeed * 17.0, uGlyphStyle, animT)
         * step(0.10, vUv.y) * step(vUv.y, 0.25);
       motif = clamp(rings * 0.85 + centerSigil * 0.95 + scrollArc * 0.88, 0.0, 1.0);
       colorMix = clamp(rings * 0.55 + centerSigil * 0.65 + fract(vSeed * 5.3) * 0.35, 0.0, 1.0);
@@ -4284,12 +4338,14 @@ void main() {
     float rad = length(cUv);
     if (rad > 0.492) discard;
     float ang = atan(cUv.y, cUv.x);
-    float rotA = ang + loopPhase(animT, 3.0) * 6.2831853 * (vSeed > 0.5 ? 1.0 : -1.0);
+    float kDisc = 1.0 + floor(hs1 * 2.99);
+    float kWedge = 2.0 + floor(hs3 * 2.99);
+    float rotA = ang + loopPhase(animT, kDisc) * 6.2831853 * hsDir + hs2 * 6.2831853;
     float rings = smoothstep(0.016, 0.002, abs(rad - 0.455))
                 + smoothstep(0.013, 0.002, abs(rad - 0.33)) * 0.85
                 + smoothstep(0.012, 0.002, abs(rad - 0.19)) * 0.75;
     float ticks = step(0.65, cos(rotA * 24.0)) * smoothstep(0.04, 0.0, abs(rad - 0.395));
-    float sweepWedge = pow(fract((ang / 6.2831853) - loopPhase(animT, 5.0) + vSeed), 4.0) * smoothstep(0.47, 0.08, rad);
+    float sweepWedge = pow(fract((ang / 6.2831853) - loopPhase(animT, kWedge) * hsDir + hs1), 4.0) * smoothstep(0.47, 0.08, rad);
     float sigil = evalSynthGlyph(clamp((vUv - vec2(0.34, 0.34)) / 0.32, 0.0, 1.0), vSeed * 13.7, uGlyphStyle, animT, 0.06)
       * smoothstep(0.20, 0.15, rad);
     motif = clamp(rings * 0.92 + ticks * 0.72 + sweepWedge * 0.48 + sigil * 0.98, 0.0, 1.0);
@@ -4303,24 +4359,28 @@ void main() {
     float fresnel = pow(1.0 - vViewDot, 1.75);
     float faceSigil = evalSynthGlyph(clamp(vUv, 0.0, 1.0), vSeed * 19.3 + floor(vUv.x * 2.0), uGlyphStyle, animT, 0.07)
       * smoothstep(0.16, 0.34, vEdgeDist) * 0.68;
-    float sliceBands = smoothstep(0.72, 0.98, sin(scanCoord * 68.0 - loopPhase(animT, 8.0) * 6.2831853)) * 0.45;
+    float kSlice = 2.0 + floor(hs1 * 3.99);
+    float sliceBands = smoothstep(0.74, 0.98, sin(scanCoord * (52.0 + hs2 * 28.0) - loopPhase(animT, kSlice) * 6.2831853 * hsDir + hs3 * 6.2831853)) * 0.42;
     motif = clamp(polyEdge * 1.05 + innerRing + faceSigil + fresnel * 0.52 + sliceBands + 0.12, 0.0, 1.15);
     colorMix = clamp(polyEdge * 0.62 + fresnel * 0.38 + fract(vSeed * 8.9) * 0.35, 0.0, 1.0);
     edgeMask = 0.92;
   } else if (vHoloKind < 3.5) {
     // Kind 3: 3D Abstract Holographic Sculpture (Parametric Trefoil Knot & Gyroscopic Astrolabe)
     float rim = smoothstep(0.26, 0.03, vEdgeDist);
-    float pulse = pow(0.5 + 0.5 * sin((vUv.x * 3.0 - loopPhase(animT, 5.0) * 3.0 + vSeed) * 6.2831853), 3.0);
+    float kPulse = 1.0 + floor(hs2 * 2.99);
+    float nLobes = 2.0 + floor(hs1 * 1.99);
+    float pulse = pow(0.5 + 0.5 * sin((vUv.x * nLobes - loopPhase(animT, kPulse) * hsDir + hs3) * 6.2831853), 3.0);
     float ticks = smoothstep(0.55, 0.92, cos(vUv.x * 110.0)) * 0.42;
     float fresnel = pow(1.0 - vViewDot, 1.55);
-    motif = clamp(rim * 0.92 + pulse * 0.78 + ticks + fresnel * 0.58 + 0.16, 0.0, 1.15);
+    motif = clamp(rim * 0.92 + pulse * 0.74 + ticks + fresnel * 0.58 + 0.16, 0.0, 1.15);
     colorMix = clamp(pulse * 0.68 + rim * 0.32 + fract(vSeed * 6.7) * 0.30, 0.0, 1.0);
     edgeMask = 0.94;
   } else {
     // Kind 4: Open Outer Cylindrical Crown (FrontSide outer ring over circular arenas/stadiums)
     float bandY = abs(vUv.y - 0.5) * 2.0;
     float rails = smoothstep(0.88, 0.96, bandY) * 0.85;
-    float ticker = evalGlyphLine(vec2(fract(vUv.x * 3.0), clamp((vUv.y - 0.22) / 0.56, 0.0, 1.0)), 12.0, loopPhase(animT, 6.0) * 12.0, vSeed * 15.0, uGlyphStyle, animT)
+    float kCrown = 2.0 + floor(hs3 * 4.99);
+    float ticker = evalGlyphLine(vec2(fract(vUv.x * 3.0), clamp((vUv.y - 0.22) / 0.56, 0.0, 1.0)), 12.0, loopPhase(animT, kCrown) * 12.0 * hsDir, vSeed * 15.0, uGlyphStyle, animT)
       * step(0.22, vUv.y) * step(vUv.y, 0.78);
     motif = clamp(ticker * 0.95 + rails + 0.12 * fineLines, 0.0, 1.0);
     colorMix = clamp(ticker * 0.65 + rails * 0.35 + fract(vSeed * 4.3) * 0.35, 0.0, 1.0);
