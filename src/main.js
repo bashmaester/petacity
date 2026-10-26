@@ -24,7 +24,7 @@ import {
   makePostProcessor, ART_STYLE_NAMES, LENS_MODE_NAMES, CAMERA_ANGLE_PRESETS,
   SCENE_TRANSITION_MODES, SCENE_TRANSITION_NAMES, resolveTransitionMode,
 } from './post.js';
-import { FlyControls, CAMERA_STYLE_NAMES, CINEMATIC_GAZE_MODES } from './controls.js';
+import { FlyControls, CAMERA_STYLE_NAMES, CINEMATIC_GAZE_MODES, stepCameraSpeed } from './controls.js';
 import { CameraPathRecorder, makeSceneExporter } from './recorder.js';
 import { makeMinimap } from './minimap.js';
 import { ModularRadioEngine, RADIO_STATIONS, MUSIC_SYNC_PRESETS } from './audio.js';
@@ -1127,13 +1127,14 @@ function boot() {
 
   function syncRadioUI() {
     const on = radioEngine.playing;
-    const st = radioEngine.station;
+    const dispIdx = radioEngine.effectiveStationIndex;
+    const st = RADIO_STATIONS[dispIdx] || radioEngine.station;
     $('#b-radio').classList.toggle('on', on);
     $('#b-radio').setAttribute('aria-pressed', String(on));
     $('#b-radio-play').classList.toggle('on', on);
     $('#b-radio-play').setAttribute('aria-pressed', String(on));
     $('#b-radio-play').textContent = on ? '\u23F8' : '\u25B6';
-    $('#sel-radio-station').value = String(radioEngine.stationIndex);
+    $('#sel-radio-station').value = String(dispIdx);
     $('#sel-radio-playlist').value = String(radioState.playlistMode || 'seq');
     $('#sl-radio-interval').value = String(radioState.playlistInterval || 75);
     const intSec = Math.round(radioState.playlistInterval || 75);
@@ -2113,18 +2114,23 @@ function boot() {
   };
   $('#b-radio').onclick = toggleRadio;
   $('#b-radio-play').onclick = toggleRadio;
-  $('#b-radio-next').onclick = () => {
+  const stepRadioTrack = (delta) => {
     const wasPlaying = radioEngine.playing;
-    const st = radioEngine.nextStation({ smooth: wasPlaying });
+    const st = delta < 0
+      ? radioEngine.prevStation({ smooth: wasPlaying })
+      : radioEngine.nextStation({ smooth: wasPlaying });
+    radioState.station = radioEngine.effectiveStationIndex;
     if (!wasPlaying) {
-      radioState.station = radioEngine.stationIndex;
       radioEngine.start();
       radioState.playing = true;
     }
     syncRadioUI();
     persistStartingState();
-    flash(wasPlaying ? `\u266B Crossfading \u2192 ${st.name}` : `\u266B ${st.name}`);
+    const arrow = delta < 0 ? '\u2190' : '\u2192';
+    flash(wasPlaying ? `\u266B Crossfading ${arrow} ${st.name}` : `\u266B ${st.name}`);
   };
+  $('#b-radio-prev').onclick = () => stepRadioTrack(-1);
+  $('#b-radio-next').onclick = () => stepRadioTrack(1);
   $('#b-radio-seed').onclick = () => {
     radioEngine.reseed();
     syncRadioUI();
@@ -2205,9 +2211,40 @@ function boot() {
     persistStartingState();
   });
 
+  const nudgeCameraSpeed = (dir) => {
+    camSpeed = stepCameraSpeed(camSpeed, dir, { min: 0, max: 3.5 });
+    controls.rampSpeedMultiplier(camSpeed);
+    $('#sl-camspeed').value = String(camSpeed);
+    syncFeatureLabels();
+    persistStartingState();
+    flash(camSpeed <= 0.001
+      ? '\u00BB Speed \u00B7 0.00\u00D7 (Hover)'
+      : `\u00BB Speed \u00B7 ${camSpeed.toFixed(2)}\u00D7`);
+  };
+
   window.addEventListener('keydown', (e) => {
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.shiftKey && e.key === 'ArrowUp') {
+      e.preventDefault();
+      nudgeCameraSpeed(1);
+      return;
+    }
+    if (e.shiftKey && e.key === 'ArrowDown') {
+      e.preventDefault();
+      nudgeCameraSpeed(-1);
+      return;
+    }
+    if (e.shiftKey && e.key === 'ArrowRight') {
+      e.preventDefault();
+      stepRadioTrack(1);
+      return;
+    }
+    if (e.shiftKey && e.key === 'ArrowLeft') {
+      e.preventDefault();
+      stepRadioTrack(-1);
+      return;
+    }
     if (e.key === 'h' || e.key === 'H') toggleUI();
     else if ((e.key === 'p' || e.key === 'P') && e.shiftKey) togglePathPlay();
     else if (e.key === 'p' || e.key === 'P') toggleGlide();
@@ -2251,9 +2288,10 @@ function boot() {
     flash(`Camera · ${CAMERA_STYLE_NAMES[camStyle] || 'Cinema Drone'}`);
   };
   bindSlider($('#sl-camspeed'), (v) => {
-    camSpeed = clampFloat(v, 0.02, 5.0, 1);
+    camSpeed = clampFloat(v, 0, 5.0, 1);
     controls.speedMul = camSpeed;
     syncFeatureLabels();
+    persistStartingState();
   });
   bindSlider($('#sl-camrad'), (v) => {
     camRadius = clampFloat(v, 0.5, 12, 2.2);
@@ -4234,7 +4272,7 @@ function boot() {
       controls.glideSpeed = clampFloat(patch.glideSpeed, 1, 260, 32);
     }
     if (patch.camSpeed !== undefined) {
-      camSpeed = clampFloat(patch.camSpeed, 0.02, 5.0, 1);
+      camSpeed = clampFloat(patch.camSpeed, 0, 5.0, 1);
       controls.speedMul = camSpeed;
     }
     const radVal = patch.colliderRadius ?? patch.camRadius;

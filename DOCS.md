@@ -160,6 +160,7 @@ To prevent open-ocean blotchiness and screen-space Moiré shimmer at grazing ang
   5. **Sky & Grade (`syncAtmo`)** — breathes solar corona/haze, post bloom, and color temperature (`Metropolis` stays strictly monochrome) with chord brightness.
 - **Keyboard Shortcuts & `localStorage` Starting State (`petacity.lastState.v1`)**:
   - `P` toggles Autopilot (`G` retained as alias; `Shift+P` plays recorded camera path), and `M` toggles Music.
+  - `Shift+↑` / `Shift+↓` smoothly speeds up / slows down camera speed (`0.1×` steps above `0.1×`, and fine `0.01×` steps across `0.00×..0.10×`), and `Shift+←` / `Shift+→` crossfades to the previous / next music track.
   - Whenever Petacity boots without explicit URL/demo scene parameters, it automatically restores the user's saved starting state from `localStorage` (`petacity.lastState.v1`) and persists subsequent changes cleanly without polluting `location.search`.
 
 ---
@@ -170,6 +171,6 @@ To prevent open-ocean blotchiness and screen-space Moiré shimmer at grazing ang
 # Start local static server on port 8000
 npm run serve   # or: python3 -m http.server 8000 --bind 0.0.0.0
 
-# Run full 92-test Node verification suite (city, scene, shaders, holos, trails, optics, anti-wobble Drone-DP gaze, transitions, culling, 14-station music sync, WebMCP, UI contract & JSDOM boot)
+# Run full 94-test Node verification suite (city, scene, shaders, holos, trails, optics, anti-wobble Drone-DP gaze, transitions, culling, 14-station music sync, WebMCP, UI contract & JSDOM boot)
 npm test
 ```

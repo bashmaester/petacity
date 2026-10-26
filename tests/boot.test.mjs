@@ -168,6 +168,23 @@ test('main.js boots end-to-end (jsdom + fake WebGL)', { skip: JSDOM ? false : 'j
   assert.equal(musicRes.stationIndex, 10, 'switched to station #10 via WebMCP');
   assert.equal(musicRes.worldSync.syncPreset, 'all', 'Music->Environment syncPreset enabled via WebMCP');
   assert.equal(musicRes.worldSync.syncTraffic, true);
+
+  // Verify Phase-23: Shift+Left/Right switches previous/next track, Shift+Up/Down steps speed by 0.1 and by 0.01 in 0..0.1
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowRight', shiftKey: true, bubbles: true }));
+  assert.equal(window.document.querySelector('#sel-radio-station').value, '11', 'Shift+Right advances to next track (#11)');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowLeft', shiftKey: true, bubbles: true }));
+  assert.equal(window.document.querySelector('#sel-radio-station').value, '10', 'Shift+Left returns to previous track (#10)');
+
+  await window.petacity.callTool('petacity_set_camera_pose', { camSpeed: 0.2 });
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowDown', shiftKey: true, bubbles: true }));
+  assert.equal(window.document.querySelector('#camspeed-label').textContent, '0.10\u00D7', 'Shift+Down steps 0.20x -> 0.10x (0.1 step)');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowDown', shiftKey: true, bubbles: true }));
+  assert.equal(window.document.querySelector('#camspeed-label').textContent, '0.09\u00D7', 'Shift+Down inside 0..0.1 steps 0.10x -> 0.09x (0.01 step)');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowUp', shiftKey: true, bubbles: true }));
+  assert.equal(window.document.querySelector('#camspeed-label').textContent, '0.10\u00D7', 'Shift+Up inside 0..0.1 steps 0.09x -> 0.10x (0.01 step)');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowUp', shiftKey: true, bubbles: true }));
+  assert.equal(window.document.querySelector('#camspeed-label').textContent, '0.20\u00D7', 'Shift+Up above 0.1 steps 0.10x -> 0.20x (0.1 step)');
+
   const savedTok = window.localStorage.getItem('petacity.lastState.v1');
   assert.ok(savedTok && savedTok.length > 8, 'starting state persisted into localStorage (petacity.lastState.v1)');
 

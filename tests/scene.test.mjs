@@ -29,7 +29,7 @@ import {
 import {
   WORLD_PRESETS, DEFAULT_BOOKMARKS, normalizeExactState, encodeExactState, decodeExactState,
 } from '../src/presets.js';
-import { FlyControls, CAMERA_STYLE_NAMES, CINEMATIC_GAZE_MODES } from '../src/controls.js';
+import { FlyControls, CAMERA_STYLE_NAMES, CINEMATIC_GAZE_MODES, stepCameraSpeed } from '../src/controls.js';
 import { CameraPathRecorder, makeSceneExporter, VIDEO_QUALITY_PRESETS } from '../src/recorder.js';
 import { makeMinimap } from '../src/minimap.js';
 import {
@@ -3294,6 +3294,85 @@ test('Phase-22: slow desynchronized 3D holos, zero-wobble camera flight & critic
   assert.equal(p22Dec.radio.syncLights, true);
   assert.equal(p22Dec.radio.syncAtmo, true);
 });
+
+test('Phase-23: stepCameraSpeed (0.1 above 0.1, 0.01 in 0..0.1), smooth rampSpeedMultiplier & prevStation/nextStation', () => {
+  // 1) stepCameraSpeed steps by 0.1 above 0.1 and by 0.01 across the 0..0.1 range (exact bijective ladder)
+  let s = 1.0;
+  const downAbove = [];
+  for (let i = 0; i < 9; i++) {
+    s = stepCameraSpeed(s, -1);
+    downAbove.push(s);
+  }
+  assert.deepEqual(downAbove, [0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1], 'steps down by 0.1 from 1.0 to 0.1');
+
+  const downFine = [];
+  for (let i = 0; i < 10; i++) {
+    s = stepCameraSpeed(s, -1);
+    downFine.push(s);
+  }
+  assert.deepEqual(downFine, [0.09, 0.08, 0.07, 0.06, 0.05, 0.04, 0.03, 0.02, 0.01, 0], 'steps down by 0.01 from 0.10 to 0.00');
+  assert.equal(stepCameraSpeed(0, -1), 0, 'clamps cleanly at 0.00');
+
+  const upFine = [];
+  for (let i = 0; i < 10; i++) {
+    s = stepCameraSpeed(s, 1);
+    upFine.push(s);
+  }
+  assert.deepEqual(upFine, [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1], 'steps up by 0.01 from 0.00 to 0.10');
+
+  const upAbove = [];
+  for (let i = 0; i < 3; i++) {
+    s = stepCameraSpeed(s, 1);
+    upAbove.push(s);
+  }
+  assert.deepEqual(upAbove, [0.2, 0.3, 0.4], 'steps up by 0.1 above 0.10');
+
+  // 2) FlyControls.rampSpeedMultiplier glides smoothly without step discontinuity & supports 0.00 hover
+  const cam = new THREE.PerspectiveCamera(60, 1.6, 1, 8000);
+  const domStub = { addEventListener() {}, removeEventListener() {} };
+  const ctl = new FlyControls(cam, domStub);
+  ctl.avoidance = false;
+  ctl.collision = false;
+  ctl.setPose({ x: 0, y: 120, z: 0, yaw: 0, pitch: 0 });
+  ctl.speedMul = 1.0;
+  ctl.setGlide(true);
+  ctl.update(1 / 60);
+
+  ctl.rampSpeedMultiplier(0.9);
+  assert.equal(ctl.speedMul, 0.9, 'speedMul immediately reflects new target');
+  assert.ok(ctl._liveSpeedMul > 0.99, '_liveSpeedMul starts from previous speed before frames advance');
+  ctl.update(1 / 60);
+  assert.ok(ctl._liveSpeedMul < 1.0 && ctl._liveSpeedMul > 0.905, `smoothly interpolates _liveSpeedMul (${ctl._liveSpeedMul.toFixed(4)})`);
+  for (let i = 0; i < 60; i++) ctl.update(1 / 60);
+  assert.ok(Math.abs(ctl._liveSpeedMul - 0.9) < 0.005, 'converges smoothly to 0.9');
+
+  // 0.00x stationary hover support
+  ctl.speedMul = 0;
+  ctl.setGlide(true);
+  const startZ = cam.position.z;
+  for (let i = 0; i < 30; i++) ctl.update(1 / 60);
+  assert.ok(Math.abs(cam.position.z - startZ) < 1e-4, '0.00x speed holds clean stationary hover');
+
+  // 3) ModularRadioEngine prevStation & nextStation wrap cleanly and chain through smooth crossfades
+  const radio = new ModularRadioEngine({ seed: 4417, station: 0 });
+  const prevWrap = radio.prevStation({ smooth: false });
+  assert.equal(radio.stationIndex, RADIO_STATIONS.length - 1, 'prevStation wraps 0 -> 13');
+  assert.equal(prevWrap.name, RADIO_STATIONS[13].name);
+  radio.nextStation({ smooth: false });
+  assert.equal(radio.stationIndex, 0, 'nextStation wraps 13 -> 0');
+
+  radio.playing = true;
+  radio.nextStation({ smooth: true });
+  assert.equal(radio.effectiveStationIndex, 1, 'smooth nextStation sets effectiveStationIndex = 1');
+  radio.nextStation({ smooth: true });
+  assert.equal(radio.effectiveStationIndex, 2, 'chaining smooth nextStation advances to 2');
+  radio.prevStation({ smooth: true });
+  assert.equal(radio.effectiveStationIndex, 1, 'chaining smooth prevStation steps back to 1');
+  radio.prevStation({ smooth: true });
+  assert.equal(radio.effectiveStationIndex, 0, 'stepping back to active station cancels pending crossfade cleanly');
+  assert.equal(radio._xfadeActive, false);
+});
+
 
 
 

@@ -2018,14 +2018,37 @@ export class ModularRadioEngine {
     return st;
   }
 
-  nextStation({ smooth = false } = {}) {
-    const nextIdx = (this.stationIndex + 1) % RADIO_STATIONS.length;
+  get effectiveStationIndex() {
+    return (this._xfadeActive && !this._xfadeSwitched && this._xfadeTargetIdx >= 0)
+      ? this._xfadeTargetIdx
+      : this.stationIndex;
+  }
+
+  stepStation(delta = 1, { smooth = false } = {}) {
+    const n = RADIO_STATIONS.length;
+    const base = this.effectiveStationIndex;
+    const nextIdx = (((base + Math.round(delta)) % n) + n) % n;
     if (smooth && this.playing) {
+      if (nextIdx === this.stationIndex) {
+        this._xfadeActive = false;
+        this._xfadeSwitched = false;
+        this._xfadeTargetIdx = -1;
+        this._playlistElapsed = 0;
+        return this.station;
+      }
       this.transitionToStation(nextIdx);
       return RADIO_STATIONS[nextIdx];
     }
     this._playlistElapsed = 0;
     return this.setStation(nextIdx, { applyDefaults: false });
+  }
+
+  nextStation(opts = {}) {
+    return this.stepStation(1, opts);
+  }
+
+  prevStation(opts = {}) {
+    return this.stepStation(-1, opts);
   }
 
   _pickNextPlaylistIndex() {

@@ -78,6 +78,28 @@ function wrapAngleDelta(a) {
   return d - Math.PI;
 }
 
+/**
+ * Step camera speed multiplier up (`dir > 0`) or down (`dir < 0`):
+ * - `0.01` increments inside the `0 .. 0.1` fine micro-drift range
+ * - `0.10` increments above `0.1`
+ */
+export function stepCameraSpeed(currentSpeed, dir, { min = 0, max = 3.5 } = {}) {
+  const curNum = Number(currentSpeed);
+  const c = Math.max(min, Math.min(max, Math.round((Number.isFinite(curNum) ? curNum : 0) * 100) / 100));
+  let next = c;
+  if (dir > 0) {
+    const delta = c < 0.1 - 1e-6 ? 0.01 : 0.1;
+    next = c + delta;
+  } else if (dir < 0) {
+    if (c <= 0.1 + 1e-6) {
+      next = c - 0.01;
+    } else {
+      next = c < 0.2 - 1e-6 ? 0.1 : (c - 0.1);
+    }
+  }
+  return Math.max(min, Math.min(max, Math.round(next * 100) / 100));
+}
+
 export class FlyControls {
   constructor(camera, dom) {
     this.camera = camera;
@@ -85,7 +107,10 @@ export class FlyControls {
     this.enabled = true;
 
     this.speed = 260;
-    this.speedMul = 1.0;        // user speed multiplier (0.2x .. 4.0x)
+    this.speedMul = 1.0;        // user speed multiplier (0.0x .. 5.0x)
+    this._liveSpeedMul = null;  // smoothed live multiplier when ramped via Shift+Up/Down
+    this._lastSyncedSpeedMul = 1.0;
+    this._shiftChordUsed = false;
     this.motionStyle = 0;       // index into CAMERA_STYLE_NAMES
     this.smoothness = 1.0;      // 0.15 (snappy) .. 3.0 (heavy cinema translational damping)
     this.turnSmooth = 1.0;      // 0.20 (crisp) .. 3.0 (ultra-gentle rate-limited turns, zero whip-pans!)
@@ -244,6 +269,17 @@ export class FlyControls {
       const t = ev.target;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.tagName === 'BUTTON' || t.isContentEditable)) return;
       const key = (ev.key || '').toLowerCase();
+      // Shift + ArrowUp/Down (speed) / ArrowLeft/Right (track) / P (play path) are app shortcuts:
+      // do not inject thrust/yaw or trigger Shift sprint boost!
+      if (ev.shiftKey && ['arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'p'].includes(key)) {
+        this._shiftChordUsed = true;
+        this.keys.delete('arrowup');
+        this.keys.delete('arrowdown');
+        this.keys.delete('arrowleft');
+        this.keys.delete('arrowright');
+        ev.preventDefault();
+        return;
+      }
       if (key) this.keys.add(key);
       if ([' ', 'w', 'a', 's', 'd', 'q', 'e', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key)) {
         this._idle = 0;
@@ -253,9 +289,13 @@ export class FlyControls {
     this._onKeyUp = (ev) => {
       const key = (ev.key || '').toLowerCase();
       if (key) this.keys.delete(key);
+      if (key === 'shift' || !ev.shiftKey) {
+        this._shiftChordUsed = false;
+      }
     };
     this._onBlur = () => {
       this.keys.clear();
+      this._shiftChordUsed = false;
       this._drag = null;
     };
 
@@ -296,6 +336,20 @@ export class FlyControls {
   }
 
   /**
+   * Smoothly ramp `speedMul` toward `nextSpeed` (`0.00 .. 5.00`) without a step-velocity jump.
+   * `this.speedMul` immediately reflects the target value while `_liveSpeedMul` glides exponentially.
+   */
+  rampSpeedMultiplier(nextSpeed) {
+    const clamped = Math.max(0, Math.min(5.0, Number.isFinite(Number(nextSpeed)) ? Number(nextSpeed) : 1.0));
+    if (!Number.isFinite(this._liveSpeedMul)) {
+      this._liveSpeedMul = Math.max(0, Math.min(5.0, this.speedMul ?? 1.0));
+    }
+    this.speedMul = clamped;
+    this._lastSyncedSpeedMul = clamped;
+    return clamped;
+  }
+
+  /**
    * Relative drone stick / step-piloting helper for automated WebMCP agents:
    * translates along current horizontal/3D heading and/or nudges gimbal angles smoothly.
    */
@@ -314,7 +368,7 @@ export class FlyControls {
     dt = undefined,
     immediate = false,
   } = {}) {
-    const effSpeed = Number.isFinite(speedMul) ? Math.max(0.02, Math.min(5.0, speedMul)) : (this.speedMul || 1);
+    const effSpeed = Number.isFinite(speedMul) ? Math.max(0, Math.min(5.0, speedMul)) : Math.max(0, this.speedMul ?? 1);
     const stepScale = Number.isFinite(dt) ? (90 * effSpeed * Math.max(0.001, dt)) : 1.0;
     const dYaw = Number.isFinite(yawDeltaDeg) ? (yawDeltaDeg * Math.PI) / 180 : yawDelta;
     const dPitch = Number.isFinite(pitchDeltaDeg) ? (pitchDeltaDeg * Math.PI) / 180 : pitchDelta;
@@ -769,7 +823,10 @@ export class FlyControls {
         this._targetMoveYaw = this.yaw;
         this._targetMovePitch = this.pitch;
       }
-      this._vel.copy(this._travelForward()).multiplyScalar(this.glideSpeed * Math.max(0.02, this.speedMul || 1.0));
+      const curMul = Math.max(0, Math.min(5.0, this.speedMul ?? 1.0));
+      this._liveSpeedMul = curMul;
+      this._lastSyncedSpeedMul = curMul;
+      this._vel.copy(this._travelForward()).multiplyScalar(this.glideSpeed * curMul);
     }
   }
 
@@ -1375,8 +1432,18 @@ export class FlyControls {
     const preset = STYLE_PRESETS[Math.max(0, Math.min(STYLE_PRESETS.length - 1, this.motionStyle | 0))];
     const smoothK = Math.max(0.15, Math.min(6.0, this.smoothness || 1.0));
     const turnK = Math.max(0.20, Math.min(6.0, this.turnSmooth || 1.0));
-    // Support speed down to 0.02x (1/10th of previous 0.2x min) for ultra-slow architectural drift!
-    const spdMul = Math.max(0.02, Math.min(5.0, this.speedMul ?? 1.0));
+    // Support speed down to 0.00x (including 0.01x steps in 0..0.1) with smooth exponential ramping!
+    const targetSpdMul = Math.max(0, Math.min(5.0, this.speedMul ?? 1.0));
+    if (this._liveSpeedMul === null || Math.abs(targetSpdMul - this._lastSyncedSpeedMul) > 1e-6) {
+      this._liveSpeedMul = targetSpdMul;
+      this._lastSyncedSpeedMul = targetSpdMul;
+    } else if (Math.abs(targetSpdMul - this._liveSpeedMul) > 1e-4) {
+      this._liveSpeedMul += (targetSpdMul - this._liveSpeedMul) * (1 - Math.exp(-clampedDt * 8.5));
+      if (Math.abs(targetSpdMul - this._liveSpeedMul) <= 1e-4) this._liveSpeedMul = targetSpdMul;
+    } else {
+      this._liveSpeedMul = targetSpdMul;
+    }
+    const spdMul = this._liveSpeedMul;
     const decoupled = this.freelook || (this.glide && this.autoLook);
 
     const prevMoveYaw = decoupled ? this.moveYaw : this.yaw;
@@ -1602,10 +1669,11 @@ export class FlyControls {
     }
 
     if (this.glide) {
-      const boost = shiftDown ? 2.4 : 1;
+      const manualMoveHeld = wDown || sDown || aDown || dDown || upDown || dnDown;
+      const boost = (shiftDown && manualMoveHeld && !this._shiftChordUsed) ? 2.4 : 1;
       desiredVel.copy(this._travelForward()).multiplyScalar(this.glideSpeed * spdMul * boost * routeArrivalSlowdown);
     } else {
-      const boost = shiftDown ? 3.6 : 1;
+      const boost = (shiftDown && !this._shiftChordUsed) ? 3.6 : 1;
       const maxSpd = this.speed * spdMul * boost;
       const fwd = this._travelForward();
       const right = this._rightTmp.set(-fwd.z, 0, fwd.x);

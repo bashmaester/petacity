@@ -648,9 +648,9 @@ button.icon-btn.rec-on, button.action.rec-on {
               <option value="4">Motion · Silk Airship (Slow Turns)</option>
             </select>
           </div>
-          <div class="slider-row wide" title="Camera flight &amp; cruise speed multiplier (down to ultra-slow 0.02× micro-drift)">
+          <div class="slider-row wide" title="Camera flight &amp; cruise speed multiplier (Shift+↑/↓: 0.01× steps in 0–0.1×, 0.1× steps above)">
             <span>&#x00BB;</span>
-            <input id="sl-camspeed" type="range" min="0.02" max="3.5" step="0.01" value="1" aria-label="Camera speed">
+            <input id="sl-camspeed" type="range" min="0" max="3.5" step="0.01" value="1" aria-label="Camera speed">
             <em id="camspeed-label">1.00×</em>
           </div>
           <div class="slider-row wide" title="Camera collider radius (default 2.2m threads cleanly through narrow building gaps)">
@@ -1098,8 +1098,9 @@ button.icon-btn.rec-on, button.action.rec-on {
             <option value="12">105.4 FM · Monsoon Market</option>
             <option value="13">91.9 FM · Solar Sail Serenata</option>
           </select>
+          <button id="b-radio-prev" type="button" class="icon-btn" aria-label="Previous radio station" title="Crossfade to previous generative synth station (Shift+&#x2190;)">&#x23EE;</button>
           <button id="b-radio-play" type="button" class="icon-btn" aria-pressed="false" aria-label="Play or pause modular synth radio" title="Play / stop pure-code modular synth music (M)">&#x25B6;</button>
-          <button id="b-radio-next" type="button" class="icon-btn" aria-label="Next radio station" title="Crossfade to next generative synth station">&#x23ED;</button>
+          <button id="b-radio-next" type="button" class="icon-btn" aria-label="Next radio station" title="Crossfade to next generative synth station (Shift+&#x2192;)">&#x23ED;</button>
           <button id="b-radio-seed" type="button" class="icon-btn" aria-label="New generative music variation" title="Reseed generative melody &amp; harmonic variation">&#x21BB;</button>
         </div>
         <div class="drop-row" style="margin-bottom: 6px;" title="Playlist Auto-Play / Auto-DJ mode (smooth reverb &amp; filter crossfades at set intervals)">
@@ -1411,10 +1412,12 @@ button.icon-btn.rec-on, button.action.rec-on {
   <span title="Fly"><kbd>WASD</kbd>&#x2725;</span>
   <span title="Up / down"><kbd>E</kbd><kbd>Q</kbd>&#x2195;</span>
   <span title="Boost"><kbd>&#x21E7;</kbd>&#x00BB;</span>
+  <span title="Speed up / slow down (0.01 step in 0–0.1)"><kbd>&#x21E7;&#x2191;&#x2193;</kbd>&#x00BB;</span>
   <span title="Dolly / speed"><kbd>&#x27F3;</kbd>&#x00B1;</span>
   <span title="Autopilot"><kbd>P</kbd>&#x2708;&#xFE0E;</span>
   <span title="Free look-around"><kbd>L</kbd>&#x25CE;</span>
   <span title="Music"><kbd>M</kbd>&#x266B;</span>
+  <span title="Previous / next track"><kbd>&#x21E7;&#x2190;&#x2192;</kbd>&#x266B;</span>
   <span title="Anticipatory steer"><kbd>V</kbd>&#x2934;</span>
   <span title="Collision"><kbd>C</kbd>&#x2B21;</span>
   <span title="Record path"><kbd>R</kbd>&#x25CF;</span>

@@ -297,8 +297,8 @@ test('Phase-18 UI contract: glyph-only buttons, minimized hover-only startup, 0.
   assert.match(bUiOffRule[1], /opacity:\s*0\b/, '#b-ui starts invisible when minimized');
   assert.match(html, /body\.ui-off\s+\.panel:hover\s+#b-ui/, 'hovering top-left corner reveals #b-ui');
 
-  // 3) Camera speed down to 0.02x (1/10th of old 0.2x minimum) + editable minimap loop buttons
-  assert.match(html, /id="sl-camspeed"[^>]*min="0\.02"/, 'camera speed slider reaches 0.02x (1/10th of previous 0.2x)');
+  // 3) Camera speed down to 0.00x..0.02x (fine 0.01x steps in 0..0.1) + editable minimap loop buttons
+  assert.match(html, /id="sl-camspeed"[^>]*min="0(?:\.02)?"/, 'camera speed slider reaches <= 0.02x down to 0');
   for (const id of [
     'b-loop-add', 'b-loop-reset',
     'sel-radio-playlist', 'sl-radio-interval', 'radio-interval-label',
@@ -435,6 +435,18 @@ test('Phase-22 UI contract: 14 radio stations, Music->Environment sync controls,
     assert.ok(webmcp.includes(key), `src/webmcp.js exposes Music->Environment "${key}"`);
   }
 });
+
+test('Phase-23 UI contract: Shift+Up/Down smooth speed steps (0.1 above 0.1, 0.01 in 0..0.1) & Shift+Left/Right next/previous track', () => {
+  assert.ok(html.includes('id="b-radio-prev"'), '#b-radio-prev exists in index.html');
+  assert.match(html, /id="sl-camspeed"[^>]*min="0"/, '#sl-camspeed reaches 0 for full 0..0.1x 0.01-step range');
+  assert.match(main, /e\.shiftKey\s*&&\s*e\.key\s*===\s*'ArrowUp'/, 'Shift+ArrowUp speeds up');
+  assert.match(main, /e\.shiftKey\s*&&\s*e\.key\s*===\s*'ArrowDown'/, 'Shift+ArrowDown slows down');
+  assert.match(main, /e\.shiftKey\s*&&\s*e\.key\s*===\s*'ArrowRight'/, 'Shift+ArrowRight advances to next track');
+  assert.match(main, /e\.shiftKey\s*&&\s*e\.key\s*===\s*'ArrowLeft'/, 'Shift+ArrowLeft goes to previous track');
+  assert.match(html, /Speed up \/ slow down/, '#keys legend documents Shift+Up/Down speed control');
+  assert.match(html, /Previous \/ next track/, '#keys legend documents Shift+Left/Right track control');
+});
+
 
 
 

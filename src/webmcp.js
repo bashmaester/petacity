@@ -97,7 +97,7 @@ export function registerPetacityWebMCP({
       fov: +(camera.fov || 58).toFixed(1),
       glide: !!(controls && controls.glide),
       glideSpeed: +(controls ? (controls.glideSpeed || 32) : 32).toFixed(2),
-      camSpeed: +(controls ? (controls.speedMul || 1) : 1).toFixed(3),
+      camSpeed: +(controls ? (controls.speedMul ?? 1) : 1).toFixed(3),
       motionStyle: controls ? (CAMERA_STYLE_NAMES[controls.motionStyle] || 'Silk') : 'Silk',
       motionStyleId: controls ? (controls.motionStyle ?? 0) : 0,
       gazeModeId: controls ? (controls.gazeMode ?? 0) : 0,
@@ -370,7 +370,7 @@ export function registerPetacityWebMCP({
           anglePreset: { type: 'integer', minimum: 0, maximum: 13, description: 'Strange-angle preset index (0..13).' },
           glide: { type: 'boolean', description: 'Enable/disable autopilot glide.' },
           glideSpeed: { type: 'number', minimum: 1, maximum: 260, description: 'Base autopilot cruise speed in m/s (default 32).' },
-          camSpeed: { type: 'number', minimum: 0.02, maximum: 5, description: 'Camera speed multiplier (0.02x micro-creep .. 5x).' },
+          camSpeed: { type: 'number', minimum: 0, maximum: 5, description: 'Camera speed multiplier (0.00x stationary hover, 0.01x..0.10x fine drift .. 5x).' },
           gazeMode: {
             type: ['integer', 'string'],
             description: 'Drone-DP gaze mode: 0/`off`, 1/`drone_cinema` (Balanced Drone DP), 2/`architectural` (Landmarks & Towers), 3/`skyline` (Vertical Canyons & Spires), 4/`projections` (Holograms & Neon), 5/`kinetic` (Sweep & Bank).',
@@ -453,7 +453,7 @@ export function registerPetacityWebMCP({
           pitchDeltaDeg: { type: 'number', minimum: -90, maximum: 90, description: 'Relative tilt angle delta in degrees (positive = tilt up, negative = tilt down).' },
           rollDeg: { type: 'number', minimum: -85, maximum: 85, description: 'Optional target Dutch roll angle in degrees.' },
           fov: { type: 'number', minimum: 15, maximum: 150, description: 'Optional target vertical field of view in degrees.' },
-          speedMul: { type: 'number', minimum: 0.02, maximum: 5, description: 'Optional speed multiplier override for this step.' },
+          speedMul: { type: 'number', minimum: 0, maximum: 5, description: 'Optional speed multiplier override for this step.' },
           dt: { type: 'number', minimum: 0.005, maximum: 2, description: 'Simulated time step per sub-step in seconds (default 0.25).' },
           steps: { type: 'integer', minimum: 1, maximum: 60, description: 'Number of physics/collision sub-steps to integrate (default 1).' },
         },
@@ -515,7 +515,7 @@ export function registerPetacityWebMCP({
           },
           gimbalSmooth: { type: 'number', minimum: 0.15, maximum: 2.5 },
           leadFraming: { type: 'number', minimum: 0, maximum: 1.5 },
-          speedMul: { type: 'number', minimum: 0.02, maximum: 5, description: 'Optional autopilot camera speed multiplier.' },
+          speedMul: { type: 'number', minimum: 0, maximum: 5, description: 'Optional autopilot camera speed multiplier.' },
           setLoop: {
             type: 'array',
             description: 'Replace the closed autopilot spline loop (minimum 3 `{ x, y, z }` control nodes).',
@@ -1154,6 +1154,7 @@ export function registerPetacityWebMCP({
           },
           stationName: { type: 'string', description: 'Optional case-insensitive station name or id substring to select.' },
           next: { type: 'boolean', description: 'Crossfade to the next station in the playlist.' },
+          prev: { type: 'boolean', description: 'Crossfade to the previous station in the playlist.' },
           reseed: { type: 'boolean', description: 'Generate a fresh melodic/harmonic seed.' },
           playlistMode: { type: 'string', enum: ['loop', 'seq', 'shuffle'], description: 'Auto-DJ station progression mode.' },
           playlistInterval: { type: 'integer', minimum: 20, maximum: 240, description: 'Seconds per station before Auto-DJ crossfade.' },
@@ -1185,6 +1186,7 @@ export function registerPetacityWebMCP({
           radio.setStation(input.station);
         }
         if (input.next) radio.nextStation({ smooth: radio.playing });
+        if (input.prev) radio.prevStation({ smooth: radio.playing });
         if (input.reseed) radio.reseed();
         if (input.playlistMode !== undefined || input.playlistInterval !== undefined) {
           radio.setPlaylist({ mode: input.playlistMode, interval: input.playlistInterval });
@@ -1198,8 +1200,10 @@ export function registerPetacityWebMCP({
         });
         if (input.playing === true && !radio.playing) radio.start();
         else if (input.playing === false && radio.playing) radio.stop();
+        const effStIdx = radio.effectiveStationIndex ?? radio.stationIndex;
+        const effSt = RADIO_STATIONS[effStIdx] || radio.station;
         applyPartialState({
-          radioStation: radio.stationIndex,
+          radioStation: effStIdx,
           radioPlaying: input.playing,
           playlistMode: radio.playlistMode,
           playlistInterval: radio.playlistInterval,
@@ -1220,9 +1224,9 @@ export function registerPetacityWebMCP({
         return asMcpResult({
           ok: true,
           playing: radio.playing,
-          stationIndex: radio.stationIndex,
-          station: radio.station ? radio.station.name : null,
-          bpm: radio.station ? radio.station.bpm : null,
+          stationIndex: effStIdx,
+          station: effSt ? effSt.name : null,
+          bpm: effSt ? effSt.bpm : null,
           playlistMode: radio.playlistMode,
           playlistInterval: radio.playlistInterval,
           worldSync: full && full.radio ? {
