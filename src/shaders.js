@@ -116,6 +116,12 @@ float loopPhase(float t, float harmonics) {
   return fract(loopPhase(t) * k);
 }
 
+float loopAnimTime(float t, float rate) {
+  float r = max(rate, 0.0);
+  if (r <= 0.008) return 0.0;
+  return t * max(1.0, floor(r + 0.5));
+}
+
 float loopSin(float t, float approxHz, float ph) {
   float k = max(1.0, floor(approxHz * PC_LOOP + 0.5));
   return sin(loopPhase(t) * PC_TAU * k + ph);
@@ -970,7 +976,7 @@ void main() {
     vec2 f = fract(g) - 0.5;
     float sh = hash12(id + 0.5);
     float star = step(0.981, sh) * (1.0 - smoothstep(0.0, 0.105, length(f)));
-    star *= 0.65 + 0.35 * sin(uTime * 2.4 + sh * 60.0);
+    star *= 0.65 + 0.35 * sin(uTime * 2.40855437 + sh * 60.0);
     // Faint galactic star-band sweeping diagonally across the celestial sphere
     float mwBand = exp(-pow((dStar.y * 0.58 - dStar.x * 0.62 + dStar.z * 0.25) * 3.4, 2.0));
     float mw = mwBand * fbm(sph * 3.8 + 2.1) * 0.14;
@@ -2320,7 +2326,7 @@ void main() {
   if ((face < 0.5 || face > 1.5) && vKind < 1.5) {
     if (showMediaFacade > 0.5 && wy > 14.0) {
       // Architectural media & mega-facade wrap: framed LED canvases + giant Linear-Synth animated calligraphics!
-      float animT = uTime * max(uSignAnim, 0.0);
+      float animT = loopAnimTime(uTime, uSignAnim);
       float faceHash = hash12(vec2(face * 13.7, floor(vSeed * 89.0)));
       float wrapScaleY = mix(38.0, 68.0, clamp(uMegaWrap * 0.5, 0.0, 1.0));
       vec2 scrUv = vec2(uvm.x / max(vDims.x, 22.0) + 0.5, (wy - 14.0) / wrapScaleY);
@@ -2517,7 +2523,7 @@ void main() {
           if (uOverrideBldg.w < 1.5) {
             litWin = 0.0;
           } else if (uOverrideBldg.w < 2.5) {
-            litWin = win * (0.78 + 0.22 * sin(uTime * 3.2 + gid.y * 0.35));
+            litWin = win * (0.78 + 0.22 * sin(uTime * 3.1939525 + gid.y * 0.35));
             wc = uOverrideColor;
           } else if (uOverrideBldg.w < 3.5) {
             litWin = win * step(0.35, fract(uTime * 4.5 + gid.y * 0.08));
@@ -3602,7 +3608,7 @@ void main() {
     // 1: Coherent Sky-Piercer Laser (razor-thin collimated beam reaching high clouds + dust sparkle)
     float laserCore = pow(baseCore, 6.2) * 1.45 + pow(baseCore, 2.1) * 0.28;
     float along = pow(max(1.0 - vT, 0.0), max(0.55, bFalloff * 0.55));
-    float scint = 0.78 + 0.34 * sin(vT * 38.0 - uTime * 9.0 + bPhase * 25.0);
+    float scint = 0.78 + 0.34 * sin(vT * 38.0 - uTime * 9.0058989 + bPhase * 25.0);
     a = laserCore * along * dust * scint;
     emitCol = mix(tintCol, vec3(1.0), 0.28) * (0.85 + 0.85 * along);
   } else if (bKind < 2.5) {
@@ -3613,9 +3619,9 @@ void main() {
     emitCol = tintCol * (0.55 + 0.70 * along);
   } else if (bKind < 3.5) {
     // 3: Pulsed Aerial Fan Curtain (elliptical fan hull with periodic seamless azimuthal interference)
-    float fanRibs = 0.74 + 0.26 * sin(azim * 5.0 + uTime * 2.5 + bPhase * 12.0);
+    float fanRibs = 0.74 + 0.26 * sin(azim * 5.0 + uTime * 2.5132741 + bPhase * 12.0);
     float along = pow(max(1.0 - vT, 0.0), bFalloff * 0.95);
-    float pulse = 0.76 + 0.24 * sin(uTime * 3.4 + bPhase * 19.0);
+    float pulse = 0.76 + 0.24 * sin(uTime * 3.4033920 + bPhase * 19.0);
     a = pow(baseCore, 1.45) * 0.92 * fanRibs * along * pulse * dust;
     emitCol = tintCol * (0.62 + 0.82 * along);
   } else {
@@ -3624,10 +3630,10 @@ void main() {
     float lensGlow = exp(-vT * 9.5) * pow(baseCore, 1.8) * 0.96;
     float screenFocus = smoothstep(0.58, 0.995, vT) * (1.0 - smoothstep(0.995, 1.005, vT)) * rimSoft * 0.78;
     float coneBody = (0.26 + 0.58 * vT) * rimSoft;
-    float scan = 0.78 + 0.22 * sin(vT * 64.0 - uTime * 14.0 + bPhase * 17.0);
+    float scan = 0.78 + 0.22 * sin(vT * 64.0 - uTime * 13.9800873 + bPhase * 17.0);
     float rays = 0.78 + 0.22 * sin(azim * 6.0 + bPhase * 23.0);
     a = (coneBody * scan * rays + lensGlow + screenFocus) * dust;
-    vec3 chroma = tintCol + vec3(0.12, 0.02, -0.09) * sin(azim * 3.0 + uTime * 4.0);
+    vec3 chroma = tintCol + vec3(0.12, 0.02, -0.09) * sin(azim * 3.0 + uTime * 3.9793507);
     emitCol = mix(chroma, vec3(1.0), lensGlow * 0.45 + screenFocus * 0.22);
   }
 
@@ -4130,7 +4136,7 @@ ${GLSL_GLYPHS}
 
 void main() {
   if (uSignAmt <= 0.008) discard;
-  float animT = uTime * max(uSignAnim, 0.0);
+  float animT = loopAnimTime(uTime, uSignAnim);
 
   // Dark architectural bezel around every billboard & sign so panels frame crisply
   float bezel = smoothstep(0.0, 0.04, vUv.x) * smoothstep(1.0, 0.96, vUv.x)
@@ -4222,11 +4228,14 @@ void main() {
   float hNorm = clamp((fallY + uFallH * 0.5) / max(uFallH, 1.0), 0.0, 1.0);
   vColumnFade = smoothstep(0.0, 0.09, hNorm) * (1.0 - smoothstep(0.91, 1.0, hNorm));
   center.y = fallY;
+  float swW = max(1.0, floor(aSway * 19.098593 + 0.5)) * 0.0523598776;
+  float swZ = max(1.0, floor(aSway * 0.8 * 19.098593 + 0.5)) * 0.0523598776;
+  float flW = max(1.0, floor((aSway * 1.9 + 0.7) * 19.098593 + 0.5)) * 0.0523598776;
   float flutter2 = (uWeatherKind > 0.5)
-    ? sin(uTime * (aSway * 1.9 + 0.7) + aFlakeSeed * 19.0) * (uSwayAmp * 0.28)
+    ? sin(uTime * flW + aFlakeSeed * 19.0) * (uSwayAmp * 0.28)
     : 0.0;
-  center.x += (fallY / max(uFallH, 1.0)) * uWindX + sin(uTime * aSway + aOff * 0.7) * uSwayAmp + flutter2;
-  center.z += cos(uTime * aSway * 0.8 + aOff * 1.3) * uSwayAmp + flutter2 * 0.75;
+  center.x += (fallY / max(uFallH, 1.0)) * uWindX + sin(uTime * swW + aOff * 0.7) * uSwayAmp + flutter2;
+  center.z += cos(uTime * swZ + aOff * 1.3) * uSwayAmp + flutter2 * 0.75;
 
   vec3 worldCenter = (modelMatrix * vec4(center, 1.0)).xyz;
   vec3 toCam = cameraPosition - worldCenter;
@@ -4246,7 +4255,8 @@ void main() {
     vec3 camRight = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
     vec3 camUp = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
     float spinDir = aFlakeSeed > 0.5 ? 1.0 : -1.0;
-    float spinAng = uTime * (0.42 + aSway * 0.32) * spinDir + aFlakeSeed * 6.2831853;
+    float spinW = max(1.0, floor((0.42 + aSway * 0.32) * 19.098593 + 0.5)) * 0.0523598776;
+    float spinAng = uTime * spinW * spinDir + aFlakeSeed * 6.2831853;
     float cs = cos(spinAng);
     float sn = sin(spinAng);
     vec2 rotXY = vec2(position.x * cs - position.y * sn, position.x * sn + position.y * cs);
@@ -4301,7 +4311,7 @@ void main() {
     float softFlake = exp(-r * r * 3.6) * (1.0 - smoothstep(0.62, 1.0, r));
     float detailBlend = (1.0 - smoothstep(12.0, 56.0, vViewDist)) * step(0.18, fract(vSeed * 11.3));
     float a = mix(softFlake * 0.88, max(crystal, softFlake * 0.48), detailBlend);
-    float glint = 0.86 + 0.18 * sin(uTime * 3.1 + vSeed * 43.0);
+    float glint = 0.86 + 0.18 * sin(uTime * 3.0892328 + vSeed * 43.0);
     vec3 snowCol = mix(uWeatherCol, vec3(1.0), 0.35 * crystal * glint);
     float finalA = a * glint * fadeK;
     if (finalA <= 0.004) discard;
@@ -4313,7 +4323,7 @@ void main() {
   float lobe = 0.68 + 0.20 * sin(ang * 3.0 + vSeed * 19.0) + 0.11 * cos(ang * 5.0 - vSeed * 13.0);
   if (r > lobe) discard;
   float edge = 1.0 - smoothstep(lobe * 0.48, lobe, r);
-  float ember = step(0.82, vSeed) * (0.55 + 0.45 * sin(uTime * 4.8 + vSeed * 37.0));
+  float ember = step(0.82, vSeed) * (0.55 + 0.45 * sin(uTime * 4.8171087 + vSeed * 37.0));
   vec3 ashCol = mix(uWeatherCol, vec3(1.0, 0.46, 0.14), ember * (1.0 - r * 0.6));
   gl_FragColor = vec4(ashCol, clamp(edge * fadeK, 0.0, 0.92));
 }
@@ -4390,7 +4400,7 @@ void main() {
   if (aHoloKind > 1.5 && aHoloKind < 3.5) {
     float animRate = max(uSignAnim, 0.0);
     float animGate = clamp(animRate, 0.0, 1.0);
-    float animT = uTime * animRate;
+    float animT = loopAnimTime(uTime, animRate);
 
     // Independent per-instance random variates from aSeed
     float s1 = fract(aSeed * 17.31 + 0.13);
@@ -4486,7 +4496,7 @@ ${GLSL_GLYPHS}
 
 void main() {
   if (uSignAmt <= 0.008) discard;
-  float animT = uTime * max(uSignAnim, 0.0);
+  float animT = loopAnimTime(uTime, uSignAnim);
   vec2 cUv = vUv - 0.5;
   float motif = 0.0;
   float colorMix = 0.5;

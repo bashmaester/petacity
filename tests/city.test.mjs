@@ -895,6 +895,38 @@ test('Phase-25 city: magneticFieldAt repulsion & canyon equilibrium, grounded/br
   }
 });
 
+test('Phase-26 city: compound-skyscraper corner grazing resolves horizontally without single-frame rooftop teleport', () => {
+  const city = generateCity(4417, 5, 1.0);
+  const col = makeCityCollider(city);
+
+  let testedJunctions = 0;
+  for (let i = 0; i < city.count && testedJunctions < 60; i++) {
+    const topH = city.y[i] + city.h[i] * 0.5;
+    if (topH < 110) continue;
+    const hw = city.w[i] * 0.5;
+    const hd = city.d[i] * 0.5;
+    const probeY = Math.max(col.groundHeightAt(city.x[i], city.z[i]) + 18, 36);
+    if (probeY >= topH - 25) continue;
+
+    // Graze all 4 corners slightly inside the facade envelope (camera radius 2.2m)
+    for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+      const p = {
+        x: city.x[i] + sx * (hw - 0.6),
+        y: probeY,
+        z: city.z[i] + sz * (hd - 0.6),
+      };
+      col.resolveSphere(p, 2.2, 1.0);
+      assert.ok(
+        p.y < probeY + 8,
+        `corner graze at tower #${i} (top=${topH.toFixed(1)}m) must never teleport vertically onto roof (got y=${p.y.toFixed(1)}m from ${probeY.toFixed(1)}m)`
+      );
+    }
+    testedJunctions++;
+  }
+  assert.ok(testedJunctions >= 20, `tested ${testedJunctions} tall-tower corner junctions`);
+});
+
+
 
 
 

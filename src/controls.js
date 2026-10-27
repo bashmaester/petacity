@@ -436,6 +436,9 @@ export class FlyControls {
       this.movePitch = this.freelook ? this.movePitch : this.pitch;
       this._targetMoveYaw = this.moveYaw;
       this._targetMovePitch = this.movePitch;
+      const fLead = wrapAngleDelta(this._fluidYawTarget - this.yaw);
+      this._fluidYawTarget = this.yaw + Math.max(-0.35, Math.min(0.35, fLead));
+      this._fluidPitchTarget = this.pitch + Math.max(-0.25, Math.min(0.25, this._fluidPitchTarget - this.pitch));
       this._autoLookPoi = null;
       this._autoLookTimer = 0;
       this._freeYawOff = 0;
@@ -445,6 +448,8 @@ export class FlyControls {
       // Smoothly converge view back to travel direction with zero snap
       this._targetYaw = this.moveYaw;
       this._targetPitch = this.movePitch;
+      this._fluidYawTarget = this.yaw;
+      this._fluidPitchTarget = this.pitch;
       this._freeYawOff = 0;
       this._freePitchOff = 0;
     }
@@ -460,6 +465,7 @@ export class FlyControls {
       if (!this.autoLook) {
         this.setAutoLook(true);
       } else {
+        // 3rd-order fluid-head (`_fluidYawTarget` + `_yawAccel`) guarantees C2 continuity across target re-picks
         this._autoLookPoi = null;
         this._autoLookTimer = 0;
       }
@@ -606,9 +612,9 @@ export class FlyControls {
         if (d2 < bestD2) { bestD2 = d2; bestU = u; }
       }
     } else {
-      // Monotonic forward-only local window (`s = 0..22`) so `_loopU` never steps backward or oscillates on curves!
-      for (let s = 0; s <= 22; s++) {
-        const u = (((this._loopU + s * 0.035) % n) + n) % n;
+      // Monotonic forward-only narrow local window (`s = 0..10`) so `_loopU` never leaps across bends or steps backward!
+      for (let s = 0; s <= 10; s++) {
+        const u = (((this._loopU + s * 0.014) % n) + n) % n;
         const q = this.evaluateAutopilotLoop(u);
         const dx = q.x - p.x;
         const dz = q.z - p.z;
@@ -885,39 +891,81 @@ export class FlyControls {
     if (opts.engageGlide !== false && !this.glide) {
       this.setGlide(true);
     }
-    const baseYaw = (this.freelook || (this.glide && this.autoLook)) ? this.moveYaw : this.yaw;
+    const decoupled = this.freelook || (this.glide && this.autoLook);
+    const baseYaw = decoupled ? this.moveYaw : this.yaw;
     const nextYaw = baseYaw + wrapAngleDelta(yaw - baseYaw);
     this._targetMoveYaw = nextYaw;
-    this._targetYaw = nextYaw;
+    if (!this.freelook) {
+      this._targetYaw = nextYaw;
+    }
     if (Number.isFinite(pitch)) {
       const clampedP = Math.max(-0.55, Math.min(0.55, pitch));
       this._targetMovePitch = clampedP;
-      this._targetPitch = clampedP;
+      if (!this.freelook) this._targetPitch = clampedP;
+    }
+    if (this.autoLook && !this.freelook) {
+      // Ease out any off-axis POI glance so the lens aligns smoothly with the newly chosen sky heading!
+      if (this._autoLookPoi && this._autoLookTimer > 1.2) {
+        this._autoLookTimer = 1.2;
+      } else {
+        this._gazeKind = 'forward';
+        this._autoLookPoi = null;
+        this._autoLookTimer = Math.max(2.5, Math.min(5.0, opts.holdSeconds ?? opts.holdSec ?? 4.5));
+      }
     }
     this._freeYawOff = 0;
     this._freePitchOff = 0;
     this._manualCourseSteered = true;
-    this._headingHoldTimer = opts.holdSeconds ?? 22.0;
+    this._headingHoldTimer = opts.holdSeconds ?? opts.holdSec ?? 22.0;
     this._idle = 0;
   }
 
   /**
    * Computes a collision-safe air vantage point just short of a 3D raycast intersection
    * so double-clicking a building/bridge/street approaches cleanly without colliding.
+   * Accepts either `{ point, normal }` or a direct `{ x, y, z }` hit point.
    */
-  computeSafeDestinationFromHit(hitPoint, camPos = this.camera.position, standOff = 42) {
-    if (!hitPoint) return null;
-    const hx = hitPoint.x || 0;
-    const hy = hitPoint.y || 0;
-    const hz = hitPoint.z || 0;
+  computeSafeDestinationFromHit(hitOrPoint, camPos = this.camera.position, standOff = 42) {
+    if (!hitOrPoint) return null;
+    const hitPoint = (hitOrPoint.point && Number.isFinite(hitOrPoint.point.x))
+      ? hitOrPoint.point
+      : hitOrPoint;
+    if (!Number.isFinite(hitPoint.x) || !Number.isFinite(hitPoint.z)) return null;
+    const nrm = (hitOrPoint.normal && Number.isFinite(hitOrPoint.normal.x))
+      ? hitOrPoint.normal
+      : null;
+    const hx = hitPoint.x;
+    const hy = Number.isFinite(hitPoint.y) ? hitPoint.y : 0;
+    const hz = hitPoint.z;
     const dx = camPos.x - hx;
     const dy = camPos.y - hy;
     const dz = camPos.z - hz;
     const dist = Math.hypot(dx, dy, dz) || 1;
     const back = Math.min(dist * 0.65, Math.max(28, standOff));
-    let wx = hx + (dx / dist) * back;
-    let wy = hy + (dy / dist) * back + 6;
-    let wz = hz + (dz / dist) * back;
+    let dirX = dx / dist;
+    let dirY = dy / dist;
+    let dirZ = dz / dist;
+    if (nrm) {
+      const nl = Math.hypot(nrm.x, nrm.y, nrm.z);
+      if (nl > 1e-4) {
+        // Blend surface normal with camera line-of-sight so oblique facade clicks stand off cleanly into open air
+        const nx = nrm.x / nl;
+        const ny = Math.max(0, nrm.y / nl);
+        const nz = nrm.z / nl;
+        const bx = dirX * 0.55 + nx * 0.45;
+        const by = dirY * 0.55 + ny * 0.45;
+        const bz = dirZ * 0.55 + nz * 0.45;
+        const bl = Math.hypot(bx, by, bz);
+        if (bl > 1e-4) {
+          dirX = bx / bl;
+          dirY = by / bl;
+          dirZ = bz / bl;
+        }
+      }
+    }
+    let wx = hx + dirX * back;
+    let wy = hy + dirY * back + 6;
+    let wz = hz + dirZ * back;
 
     const col = this.collider;
     const rad = Math.max(2.2, this.colliderRadius || 2.2);
@@ -956,11 +1004,15 @@ export class FlyControls {
     };
   }
 
-  setGlide(on) {
-    this.glide = !!on;
+  setGlide(on, opts = {}) {
+    const next = !!on;
+    const wasGlide = this.glide;
+    this.glide = next;
     if (!this.glide) {
-      this.roll = 0;
-      this._vel.set(0, 0, 0);
+      // Do NOT snap `this.roll = 0` — `update(dt)` damps aerodynamic bank smoothly back to level!
+      if (!opts.coast) {
+        this._vel.set(0, 0, 0);
+      }
       this._avoidSide = 0;
       this._avoidActive = 0;
       this._avoidYawRate = 0;
@@ -969,10 +1021,10 @@ export class FlyControls {
       this._avoidPitchTarget = 0;
       this._avoidLiftVel = 0;
       this._manualCourseSteered = false;
-    } else {
+    } else if (!wasGlide || !opts.preserveCourse) {
       this._idle = 2.5;
       if (this.autopilotLoop.length >= 3) this._syncNearestLoopParam(true);
-      if (!this.freelook) {
+      if (!this.freelook && !(wasGlide && this.autoLook && opts.preserveCourse)) {
         this.moveYaw = this.yaw;
         this.movePitch = this.pitch;
         this._targetMoveYaw = this.yaw;
@@ -981,7 +1033,11 @@ export class FlyControls {
       const curMul = Math.max(0, Math.min(5.0, this.speedMul ?? 1.0));
       this._liveSpeedMul = curMul;
       this._lastSyncedSpeedMul = curMul;
-      this._vel.copy(this._travelForward()).multiplyScalar(this.glideSpeed * curMul);
+      if (!opts.smoothAccel || this._vel.lengthSq() < 0.25) {
+        this._vel.copy(this._travelForward()).multiplyScalar(
+          opts.smoothAccel ? Math.min(8, this.glideSpeed * curMul) : (this.glideSpeed * curMul)
+        );
+      }
     }
   }
 
@@ -1950,18 +2006,25 @@ export class FlyControls {
         if (outDot > -0.35) {
           const veerT = Math.min(1, (rXZ - softR) / Math.max(450, limR * 0.42));
           const veerPull = quintic01(veerT) * (0.14 + 0.34 * Math.max(0, outDot + 0.35));
-          // Slight tangential bias gives a graceful wide return arc rather than a sharp hairpin
+          // Lock outbound return-arc handedness while outside softR so near-180° headings never flip sign!
           const homeYaw = Math.atan2(p.x, p.z);
           const dHome = wrapAngleDelta(homeYaw - curCourseYaw);
-          const arcSign = Math.abs(dHome) > 2.5 ? (this._avoidSide >= 0 ? 1 : -1) : Math.sign(dHome || 1);
+          if (!this._veerArcSign) {
+            this._veerArcSign = Math.abs(dHome) > 0.15 ? Math.sign(dHome) : (this._avoidSide >= 0 ? 1 : -1);
+          }
+          const wideBlend = quintic01(Math.max(0, Math.min(1, (Math.abs(dHome) - 2.15) / 0.65)));
           const maxVeerStep = (0.48 * veerPull / Math.pow(turnK, 0.45)) * clampedDt;
-          const veerStep = Math.abs(dHome) > 2.5
-            ? arcSign * maxVeerStep
-            : Math.max(-maxVeerStep, Math.min(maxVeerStep, dHome * 0.85));
+          const directStep = Math.max(-maxVeerStep, Math.min(maxVeerStep, dHome * 0.85));
+          const arcStep = this._veerArcSign * maxVeerStep;
+          const veerStep = directStep * (1 - wideBlend) + arcStep * wideBlend;
           this._targetMoveYaw += veerStep;
           if (!decoupled) this._targetYaw += veerStep;
         }
+      } else {
+        this._veerArcSign = 0;
       }
+    } else {
+      this._veerArcSign = 0;
     }
 
     // 3rd-Order Fluid-Head Cinema Gimbal Damping (pre-filtered + jerk/accel/rate bounded -> zero whip-pans!)

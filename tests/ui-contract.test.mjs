@@ -470,6 +470,20 @@ test('Phase-25 UI contract: traveling Synth-Linear glyph loader, #sl-color-var p
   assert.ok(webmcpSrc.includes('colorVar'), 'src/webmcp.js exposes colorVar parameter to AI Movie-Set Director');
 });
 
+test('Phase-26 UI & runtime contract: non-snapping adaptive performance slewing & course-preserving Autopilot toggle', () => {
+  const main = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
+  assert.ok(
+    main.includes('applyPerformanceProfile({ smooth: true })') && main.includes('slewPerformanceBudgets(dt)'),
+    'adaptive auto quality mode slews budgets smoothly without DPR/bloomPasses mid-flight cuts'
+  );
+  assert.match(
+    main,
+    /controls\.setGlide\(\s*glideOn\s*,\s*\{\s*preserveCourse:\s*true,\s*coast:\s*true,\s*smoothAccel:\s*true\s*\}\s*\)/,
+    'setGlideState preserves course, roll, and momentum when toggling Autopilot'
+  );
+});
+
+
 
 
 

@@ -2329,17 +2329,21 @@ export function createTrailRibbonBatch(ribbonMat, maxSlots = 256, segs = 12) {
   const prevHeadX = new Float32Array(slots);
   const prevHeadY = new Float32Array(slots);
   const prevHeadZ = new Float32Array(slots);
+  const lastFrame = new Int32Array(slots);
   const inited = new Uint8Array(slots);
   let writeSlot = 0;
+  let frameTag = 0;
 
   function resetAll() {
     inited.fill(0);
+    lastFrame.fill(0);
     writeSlot = 0;
     geo.setDrawRange(0, 0);
   }
 
   function beginFrame() {
     writeSlot = 0;
+    frameTag = (frameTag + 1) | 0 || 1;
   }
 
   function emitRibbon(idKey, x, y, z, halfW, r, g, b, style = 0, stepMeters = 3.2, jumpReset = 125) {
@@ -2347,7 +2351,10 @@ export function createTrailRibbonBatch(ribbonMat, maxSlots = 256, segs = 12) {
     const hSlot = Math.max(0, Math.min(slots - 1, idKey | 0));
     const hBase = hSlot * nodes;
 
-    if (!inited[hSlot]) {
+    const skippedWhileCulled = inited[hSlot] && Math.abs(frameTag - lastFrame[hSlot]) > 2;
+    lastFrame[hSlot] = frameTag;
+
+    if (!inited[hSlot] || skippedWhileCulled) {
       for (let k = 0; k < nodes; k++) {
         histX[hBase + k] = x;
         histY[hBase + k] = y;
@@ -6076,7 +6083,10 @@ export function makeWeather(U) {
       m.makeTranslation((Math.random() - 0.5) * 900, 0, (Math.random() - 0.5) * 900);
       mesh.setMatrixAt(i, m);
       off[i] = Math.random() * 720;
-      spd[i] = speed * (0.78 + Math.random() * 0.50);
+      // Quantize fall speed to exact multiples of `uFallH / PC_LOOP` (`720 / 120 = 6.0 m/s`)
+      // so `mod(center.y + aOff - uTime * aSpeed, uFallH)` has 0.000m jump at `uTime = 120 -> 0`!
+      const rawSpd = speed * (0.78 + Math.random() * 0.50);
+      spd[i] = Math.max(6, Math.round(rawSpd / 6) * 6);
       swy[i] = 0.4 + Math.random() * 1.8;
       seedArr[i] = (i * 0.6180339887 + Math.random() * 0.15) % 1;
     }
@@ -8415,6 +8425,7 @@ export function createSceneViewCuller() {
   let swarmCapFrac = 1.0;
   let harborVisible = true;
   let spaceportVisible = true;
+  let streetDetailShown = true;
 
   const stats = {
     enabled: true,
@@ -8441,7 +8452,7 @@ export function createSceneViewCuller() {
       if (!parent || !Array.isArray(parent.children)) return;
       for (const ch of parent.children) {
         if (ch.userData && ch.userData.cullSpec) {
-          items.push({ obj: ch, spec: ch.userData.cullSpec, category });
+          items.push({ obj: ch, spec: ch.userData.cullSpec, category, vis: true });
         }
       }
     };
@@ -8461,13 +8472,14 @@ export function createSceneViewCuller() {
           obj: pv.pivot,
           category: 'searchlight',
           beamIdx: i,
+          vis: true,
           spec: {
             cx: pos.x,
-            cyBase: pos.y + 240,
+            cyBase: pos.y + 420,
             cz: pos.z,
-            r: 420,
+            r: 780,
             drawCallsEst: 1,
-            distMul: 0.92,
+            distMul: 1.15,
           },
         });
       }
@@ -8478,6 +8490,7 @@ export function createSceneViewCuller() {
       items.push({
         obj: harborObj.group,
         category: 'harbor',
+        vis: true,
         spec: {
           cx: hb.cx ?? 0,
           cyBase: 45,
@@ -8494,6 +8507,7 @@ export function createSceneViewCuller() {
       items.push({
         obj: spaceportObj.group,
         category: 'spaceport',
+        vis: true,
         spec: {
           cx: sp.cx ?? 0,
           cyBase: (sp.y || 0) + 260,
@@ -8508,6 +8522,7 @@ export function createSceneViewCuller() {
     stats.registeredGroups = items.length;
     harborVisible = true;
     spaceportVisible = true;
+    streetDetailShown = true;
   }
 
   function restoreAll() {
@@ -8524,7 +8539,9 @@ export function createSceneViewCuller() {
       } else {
         it.obj.visible = true;
       }
+      it.vis = it.obj.visible;
     }
+    streetDetailShown = true;
     if (refs.streetInfraObj && refs.streetInfraObj.setDetailVisible) {
       refs.streetInfraObj.setDetailVisible(true);
     }
@@ -8551,7 +8568,7 @@ export function createSceneViewCuller() {
     if (!enabled) restoreAll();
   }
 
-  function update(camera, { heightScale = 1, lensMode = 0, worldCurve = 0 } = {}) {
+  function update(camera, { heightScale = 1, lensMode = 0, worldCurve = 0, wideOptics = false } = {}) {
     if (!camera) return stats;
     // Automatically bypass directional frustum culling in 360° cubemap optics or curved planetoid mode!
     const omni = (lensMode >= 3.5) || (worldCurve >= 0.008);
@@ -8575,6 +8592,7 @@ export function createSceneViewCuller() {
     const activeHolos = (refs.holoGroup && refs.holoGroup.userData && refs.holoGroup.userData.activeHoloCount !== undefined)
       ? refs.holoGroup.userData.activeHoloCount
       : Infinity;
+    const wideGuard = (lensMode >= 0.5 || wideOptics) ? 1.45 : 1.0;
 
     let vis = 0;
     let culled = 0;
@@ -8587,20 +8605,26 @@ export function createSceneViewCuller() {
       const sp = it.spec;
       if (it.category === 'searchlight' && it.beamIdx >= activeBeams) {
         it.obj.visible = false;
+        it.vis = false;
         continue;
       }
       if (it.category === 'holo_frustum' && (sp.holoIdx ?? 0) >= activeHolos) {
         it.obj.visible = false;
+        it.vis = false;
         continue;
       }
 
+      const wasVis = it.vis !== false;
       const sy = sp.scaleWithHeight ? sp.cyBase * heightScale : sp.cyBase;
-      const sr = (sp.scaleWithHeight ? sp.r * Math.max(1, heightScale * 0.85) : sp.r) + 45;
+      const baseR = (sp.scaleWithHeight ? sp.r * Math.max(1, heightScale * 0.85) : sp.r) * wideGuard;
+      // Spatial & frustum retention hysteresis eliminates boundary pop-in/out chatter!
+      const sr = baseR + (wasVis ? 96 : 45);
       const dx = sp.cx - cxCam;
       const dy = sy - cyCam;
       const dz = sp.cz - czCam;
       const distSq = dx * dx + dy * dy + dz * dz;
-      const lim = maxDrawDist * (sp.distMul || 1.0) + sr;
+      const distHyst = wasVis ? 1.12 : 1.0;
+      const lim = maxDrawDist * (sp.distMul || 1.0) * distHyst + sr;
 
       let show = true;
       if (distSq > sr * sr) {
@@ -8613,6 +8637,7 @@ export function createSceneViewCuller() {
         }
       }
       it.obj.visible = show;
+      it.vis = show;
       if (show) {
         vis++;
       } else {
@@ -8625,7 +8650,10 @@ export function createSceneViewCuller() {
 
     if (refs.streetInfraObj && refs.streetInfraObj.setDetailVisible) {
       const coreDist = Math.hypot(cxCam, czCam) - ((refs.city && refs.city.span) || 900);
-      const showStreetDetail = cyCam < streetDetailAlt && coreDist < streetDetailDist;
+      const altLim = streetDetailShown ? streetDetailAlt * 1.15 : streetDetailAlt;
+      const dstLim = streetDetailShown ? streetDetailDist * 1.15 : streetDetailDist;
+      const showStreetDetail = cyCam < altLim && coreDist < dstLim;
+      streetDetailShown = showStreetDetail;
       refs.streetInfraObj.setDetailVisible(showStreetDetail);
       if (!showStreetDetail) savedDraws += 4;
     }

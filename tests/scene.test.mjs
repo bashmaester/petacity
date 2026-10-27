@@ -3529,6 +3529,106 @@ test('Phase-25: magnetic avoidance + open-gap/POI gaze, non-Tesla & pixel billbo
   assert.ok(Math.abs(decoded.tune.colorVar - 0.83) < 1e-3, `colorVar roundtrips through compact _v:2 #s= token (${decoded.tune.colorVar})`);
 });
 
+test('Phase-26 continuity: zero camera or scene cuts across {point,normal} raycast, glide toggles, open-path loop bridge, viewCuller hysteresis & 120s shader wrap', () => {
+  const U = makeUniforms();
+  const world = makeWorld(U);
+  const { city, collider } = growCity(4417, 5, world.towerMat, 1.0, {});
+
+  const prevWin = globalThis.window;
+  globalThis.window = { addEventListener() {}, removeEventListener() {} };
+  try {
+    const cam = new THREE.PerspectiveCamera(62, 16 / 9, 2, 34000);
+    cam.position.set(640, 115, -520);
+    const ctl = new FlyControls(cam, { addEventListener() {}, removeEventListener() {} }, { cityLimitRadius: 2400 });
+    ctl.collider = collider;
+    ctl.collision = true;
+    ctl.avoidance = true;
+
+    // 1) Viewport double-click `{ point, normal }` payload never collapses to `(0, 0, 0)`
+    const hitPayload = {
+      point: new THREE.Vector3(460, 78, -360),
+      normal: new THREE.Vector3(0.707, 0, -0.707),
+    };
+    const safe = ctl.computeSafeDestinationFromHit(hitPayload, cam.position, 42);
+    assert.ok(safe, 'computeSafeDestinationFromHit accepts { point, normal } hit object');
+    assert.equal(safe.lookX, 460, 'preserves clicked lookX rather than 0');
+    assert.equal(safe.lookZ, -360, 'preserves clicked lookZ rather than 0');
+    assert.ok(Math.hypot(safe.x - 460, safe.z - (-360)) < 130, 'safe standoff stays near clicked structure');
+
+    // 2) `setCourseHeading` honors `holdSec` & smoothly releases off-axis POI gaze
+    ctl.setGlide(true);
+    ctl.setGazeMode(2);
+    ctl._autoLookPoi = { name: 'Side Landmark', x: 900, y: 120, z: 0 };
+    ctl._autoLookTimer = 6.0;
+    ctl.setCourseHeading(-0.85, -0.05, { engageGlide: true, holdSec: 4.5 });
+    assert.equal(ctl._headingHoldTimer, 4.5, 'setCourseHeading honors holdSec option');
+    assert.ok(ctl._autoLookTimer <= 1.25, 'off-axis POI glance eases out promptly toward chosen sky heading');
+
+    // 3) `setGlide` with `preserveCourse` / `coast` never snaps aerodynamic roll, velocity, or decoupled moveYaw
+    ctl.moveYaw = 0.12;
+    ctl.yaw = 0.62;
+    ctl.roll = 0.14;
+    ctl._vel.set(-10, 0, -38);
+    ctl.setGlide(true, { preserveCourse: true, coast: true, smoothAccel: true });
+    assert.ok(Math.abs(ctl.moveYaw - 0.12) < 1e-6, 'redundant setGlide(true, {preserveCourse}) preserves decoupled moveYaw');
+    assert.ok(Math.abs(ctl.roll - 0.14) < 1e-6, 'setGlide(true) preserves aerodynamic roll');
+    ctl.setGlide(false, { coast: true });
+    assert.ok(Math.abs(ctl.roll - 0.14) < 1e-6, 'setGlide(false, {coast}) does not snap roll to 0 in 1 frame');
+    assert.ok(ctl.velocity.length() > 30, 'setGlide(false, {coast}) coasts smoothly instead of freezing velocity in 1 frame');
+
+    // 4) `CameraPathRecorder` open-path loop wraps smoothly via C2 return bridge (zero cross-city teleport cut!)
+    const rec = new CameraPathRecorder();
+    rec.loop = true;
+    rec.addKeyframe({ x: 0, y: 95, z: 0, yaw: 0, pitch: 0 }, 0);
+    rec.addKeyframe({ x: 260, y: 115, z: -220, yaw: -0.6, pitch: -0.05 }, 1.0);
+    rec.addKeyframe({ x: 580, y: 130, z: -480, yaw: -1.1, pitch: -0.08 }, 2.0);
+    rec.play(true);
+    const pCam = new THREE.PerspectiveCamera(60, 16 / 9, 2, 30000);
+    rec.applyAt(0, pCam);
+    let prevPos = pCam.position.clone();
+    let maxStep = 0;
+    for (let f = 0; f < 420; f++) {
+      rec.updatePlayback(1 / 60, pCam);
+      const step = pCam.position.distanceTo(prevPos);
+      if (step > maxStep) maxStep = step;
+      prevPos.copy(pCam.position);
+    }
+    assert.ok(maxStep < 14, `open-path loop playback bridges smoothly with zero teleport cut (maxStep=${maxStep.toFixed(2)}m < 14m)`);
+
+    // 5) `createSceneViewCuller` searchlight full-height sphere & street-detail altitude hysteresis
+    const beams = makeSearchlights(city, world.beamMat);
+    let streetVis = true;
+    const streetInfraMock = { setDetailVisible(v) { streetVis = v; } };
+    const culler = createSceneViewCuller();
+    culler.registerCity({ city, beams, streetInfraObj: streetInfraMock });
+    culler.configure({ streetDetailAlt: 500, streetDetailDist: 2000 });
+    cam.position.set(0, 495, 0);
+    culler.update(cam, { heightScale: 1, lensMode: 0, worldCurve: 0 });
+    assert.equal(streetVis, true, 'street detail visible below streetDetailAlt');
+    cam.position.set(0, 520, 0);
+    culler.update(cam, { heightScale: 1, lensMode: 0, worldCurve: 0 });
+    assert.equal(streetVis, true, 'hysteresis band keeps street detail visible just above streetDetailAlt (no 1-frame pop)');
+    cam.position.set(0, 590, 0);
+    culler.update(cam, { heightScale: 1, lensMode: 0, worldCurve: 0 });
+    assert.equal(streetVis, false, 'street detail culls cleanly well above hysteresis ceiling');
+
+    // 6) `PC_LOOP = 120.0` exact weather fall-speed periodicity & GLSL `loopAnimTime`
+    const weather = makeWeather(U);
+    const rainMesh = weather.group.children[0];
+    const spdAttr = rainMesh.geometry.getAttribute('aSpeed');
+    const fallH = rainMesh.material.uniforms.uFallH.value;
+    for (let i = 0; i < Math.min(64, spdAttr.count); i++) {
+      const s = spdAttr.getX(i);
+      const cyc = (120.0 * s) / fallH;
+      assert.ok(Math.abs(cyc - Math.round(cyc)) < 1e-5, `weather particle #${i} speed ${s} completes integer cycles (${cyc}) per 120s loop`);
+    }
+    assert.ok(SHADERS.GLSL_NOISE.includes('loopAnimTime'), 'GLSL_NOISE provides loopAnimTime for wrap-free signage & hologram animation');
+  } finally {
+    globalThis.window = prevWin;
+  }
+});
+
+
 
 
 

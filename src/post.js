@@ -650,7 +650,8 @@ void main() {
       vec2 sub = fract(gl_FragCoord.xy / 7.0);
       vec2 sp = vec2(grainHash(cell + 3.1), grainHash(cell + 9.7)) * 0.7 + 0.15;
       float d = length((sub - sp) * 7.0);
-      float speck = exp(-d * d * 1.6) * (0.55 + 0.45 * sin(uTime * (0.6 + hc * 3.0) + hc * 90.0));
+      float spW = max(1.0, floor((0.6 + hc * 3.0) * 19.098593 + 0.5)) * 0.0523598776;
+      float speck = exp(-d * d * 1.6) * (0.55 + 0.45 * sin(uTime * spW + hc * 90.0));
       col += vec3(speck * 0.55 * min(uFilm * 1.2, 1.0));
     }
   }

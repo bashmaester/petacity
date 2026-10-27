@@ -517,10 +517,23 @@ function boot() {
   let frameMsEMA = 16.67;
   let lowFpsTimer = 0;
   let highFpsTimer = 0;
+  let autoTierCooldown = 0;
   let frameCounter = 0;
   let perfWarmupFrames = 12;
   let bootCompleted = false;
   let storageSaveTimer = 0;
+  const initHighProf = PERFORMANCE_PROFILES.high;
+  const livePerfState = {
+    maxDrawDist: initHighProf.maxDrawDist,
+    vehDrawDist: initHighProf.vehDrawDist,
+    streetDetailDist: initHighProf.streetDetailDist,
+    streetDetailAlt: initHighProf.streetDetailAlt,
+    swarmCapFrac: initHighProf.swarmCapFrac,
+    cloudPuffFrac: initHighProf.cloudPuffFrac,
+    weatherCapFrac: initHighProf.weatherCapFrac,
+    perfQuality: initHighProf.perfQuality,
+  };
+  let perfSlewTarget = null;
 
   // Non-destructive baseline snapshot for live Music -> Environment modulation
   const baseUniformSnap = {
@@ -546,11 +559,29 @@ function boot() {
     return qualityMode === 'auto' ? autoTier : (PERFORMANCE_PROFILES[qualityMode] ? qualityMode : 'high');
   }
 
-  function applyPerformanceProfile() {
+  function applyPerformanceProfile({ smooth = false } = {}) {
     const tierName = getEffectiveQualityTier();
     const prof = PERFORMANCE_PROFILES[tierName] || PERFORMANCE_PROFILES.high;
-    viewCuller.setProfile(prof);
     viewCuller.setEnabled(viewCulling);
+
+    if (smooth) {
+      // Mid-flight adaptive governance: slew continuous draw/detail budgets gradually across frames
+      // and NEVER resize DPR/render-targets or flip `bloomPasses` mid-flight (eliminates sudden scene cuts!).
+      perfSlewTarget = prof;
+      return;
+    }
+
+    perfSlewTarget = null;
+    livePerfState.maxDrawDist = prof.maxDrawDist;
+    livePerfState.vehDrawDist = prof.vehDrawDist;
+    livePerfState.streetDetailDist = prof.streetDetailDist;
+    livePerfState.streetDetailAlt = prof.streetDetailAlt;
+    livePerfState.swarmCapFrac = prof.swarmCapFrac;
+    livePerfState.cloudPuffFrac = prof.cloudPuffFrac;
+    livePerfState.weatherCapFrac = prof.weatherCapFrac;
+    livePerfState.perfQuality = prof.perfQuality;
+
+    viewCuller.setProfile(prof);
     U.uPerfQuality.value = prof.perfQuality;
     if (world.clouds && world.clouds.setQualityFrac) {
       world.clouds.setQualityFrac(prof.cloudPuffFrac);
@@ -574,6 +605,46 @@ function boot() {
         renderer.setPixelRatio(targetDpr);
         post.setSize(window.innerWidth, window.innerHeight, targetDpr);
       }
+    }
+  }
+
+  function slewPerformanceBudgets(dt) {
+    if (!perfSlewTarget) return;
+    const tgt = perfSlewTarget;
+    const alpha = 1 - Math.exp(-Math.max(0.001, dt) * 1.15);
+    livePerfState.maxDrawDist += (tgt.maxDrawDist - livePerfState.maxDrawDist) * alpha;
+    livePerfState.vehDrawDist += (tgt.vehDrawDist - livePerfState.vehDrawDist) * alpha;
+    livePerfState.streetDetailDist += (tgt.streetDetailDist - livePerfState.streetDetailDist) * alpha;
+    livePerfState.streetDetailAlt += (tgt.streetDetailAlt - livePerfState.streetDetailAlt) * alpha;
+    livePerfState.swarmCapFrac += (tgt.swarmCapFrac - livePerfState.swarmCapFrac) * alpha;
+    livePerfState.cloudPuffFrac += (tgt.cloudPuffFrac - livePerfState.cloudPuffFrac) * alpha;
+    livePerfState.weatherCapFrac += (tgt.weatherCapFrac - livePerfState.weatherCapFrac) * alpha;
+    livePerfState.perfQuality += (tgt.perfQuality - livePerfState.perfQuality) * alpha;
+
+    viewCuller.configure({
+      maxDrawDist: livePerfState.maxDrawDist,
+      vehDrawDist: livePerfState.vehDrawDist,
+      streetDetailDist: livePerfState.streetDetailDist,
+      streetDetailAlt: livePerfState.streetDetailAlt,
+      swarmCapFrac: livePerfState.swarmCapFrac,
+    });
+    U.uPerfQuality.value = livePerfState.perfQuality;
+    if (world.clouds && world.clouds.setQualityFrac) {
+      world.clouds.setQualityFrac(livePerfState.cloudPuffFrac);
+    }
+    if (weather && weather.group && weather.group.children && weather.group.children[0] && weather.group.children[0].geometry) {
+      const wg = weather.group.children[0].geometry;
+      if (wg.attributes && wg.attributes.position) {
+        const total = wg.attributes.position.count;
+        wg.setDrawRange(0, Math.max(256, Math.round(total * livePerfState.weatherCapFrac)));
+      }
+    }
+    if (
+      Math.abs(tgt.maxDrawDist - livePerfState.maxDrawDist) < 12 &&
+      Math.abs(tgt.cloudPuffFrac - livePerfState.cloudPuffFrac) < 0.01 &&
+      Math.abs(tgt.swarmCapFrac - livePerfState.swarmCapFrac) < 0.01
+    ) {
+      perfSlewTarget = null;
     }
   }
 
@@ -3297,9 +3368,11 @@ function boot() {
 
   function setGlideState(on, announce = false) {
     glideOn = !!on;
-    fly = null;
-    controls.syncFromCamera();
-    controls.setGlide(glideOn);
+    if (fly !== null) {
+      fly = null;
+      controls.syncFromCamera();
+    }
+    controls.setGlide(glideOn, { preserveCourse: true, coast: true, smoothAccel: true });
     const b = $('#b-glide');
     b.textContent = '\u2708\uFE0E';
     b.classList.toggle('on', glideOn);
@@ -3728,34 +3801,38 @@ function boot() {
       const dt = Math.min(rawDt, 0.05);
       frameCounter = (frameCounter + 1) | 0;
 
-      // Rolling frame-time telemetry + gentle adaptive FPS governor in `auto` mode
+      // Rolling frame-time telemetry + gentle non-snapping adaptive FPS governor in `auto` mode
+      if (autoTierCooldown > 0) autoTierCooldown = Math.max(0, autoTierCooldown - dt);
       if (perfWarmupFrames > 0) {
         perfWarmupFrames--;
       } else if (rawDt > 0.001 && rawDt < 0.25) {
-        frameMsEMA += (rawDt * 1000 - frameMsEMA) * 0.08;
-        if (qualityMode === 'auto' && !(exporter && exporter.lockedResolution)) {
-          if (frameMsEMA > 27.5 && autoTier !== 'low') {
+        frameMsEMA += (rawDt * 1000 - frameMsEMA) * 0.05;
+        if (qualityMode === 'auto' && !(exporter && exporter.lockedResolution) && autoTierCooldown <= 0) {
+          if (frameMsEMA > 36.0 && autoTier !== 'low') {
             lowFpsTimer += dt;
             highFpsTimer = 0;
-            if (lowFpsTimer > 1.8) {
+            if (lowFpsTimer > 5.5) {
               autoTier = autoTier === 'high' ? 'medium' : 'low';
               lowFpsTimer = 0;
-              applyPerformanceProfile();
+              autoTierCooldown = 10.0;
+              applyPerformanceProfile({ smooth: true });
             }
-          } else if (frameMsEMA < 14.5 && autoTier !== 'high') {
+          } else if (frameMsEMA < 12.5 && autoTier !== 'high') {
             highFpsTimer += dt;
             lowFpsTimer = 0;
-            if (highFpsTimer > 5.0) {
+            if (highFpsTimer > 12.0) {
               autoTier = autoTier === 'low' ? 'medium' : 'high';
               highFpsTimer = 0;
-              applyPerformanceProfile();
+              autoTierCooldown = 10.0;
+              applyPerformanceProfile({ smooth: true });
             }
           } else {
-            lowFpsTimer = Math.max(0, lowFpsTimer - dt * 0.5);
-            highFpsTimer = Math.max(0, highFpsTimer - dt * 0.5);
+            lowFpsTimer = Math.max(0, lowFpsTimer - dt * 0.65);
+            highFpsTimer = Math.max(0, highFpsTimer - dt * 0.65);
           }
         }
       }
+      slewPerformanceBudgets(dt);
 
       // Seamless 120.0s periodic noise cycle — zero jump across wrap!
       U.uTime.value = (U.uTime.value + dt) % 120.0;
@@ -3858,6 +3935,11 @@ function boot() {
         heightScale,
         lensMode: postState.lensMode ?? 0,
         worldCurve,
+        wideOptics:
+          camFov > 74 ||
+          (postState.lensDistort ?? 0) < -0.06 ||
+          (postState.anamorphic ?? 0) > 0.08 ||
+          (postState.lensZoom ?? 1) < 0.94,
       });
 
       if (vehicles) vehicles.update(dt, tune.traffic, heightScale);

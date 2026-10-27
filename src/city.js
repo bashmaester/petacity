@@ -3629,7 +3629,7 @@ export function makeCityCollider(city) {
       pos.y = minGround;
       hit = true;
     }
-    for (let iter = 0; iter < 7; iter++) {
+    for (let iter = 0; iter < 12; iter++) {
       let iterHit = false;
       stamp = (stamp + 1) | 0 || 1;
       const x0 = Math.floor((pos.x - radius) / B);
@@ -3660,16 +3660,21 @@ export function makeCityCollider(city) {
             const penX = ex - Math.abs(lx);
             const penZ = ez - Math.abs(lz);
             const penTop = top + radius - pos.y;
-            if (iter >= 4 || (penTop < Math.min(penX, penZ) && penTop < radius * 1.5)) {
+            if (penTop < Math.min(penX, penZ) && penTop < radius * 1.15) {
               pos.y = top + radius + 0.25;
-            } else if (penX < penZ) {
-              lx = (lx >= 0 ? 1 : -1) * (ex + 0.05);
-              pos.x = b.cx + lx * b.cos + lz * b.sin;
-              pos.z = b.cz - lx * b.sin + lz * b.cos;
             } else {
-              lz = (lz >= 0 ? 1 : -1) * (ez + 0.05);
-              pos.x = b.cx + lx * b.cos + lz * b.sin;
-              pos.z = b.cz - lx * b.sin + lz * b.cos;
+              // If horizontal push ping-pongs across a narrow gap (< 2*radius) on iter >= 5,
+              // try the orthogonal horizontal axis (open street/avenue) instead of rooftop teleporting!
+              const preferX = (iter >= 5 && (iter & 1) === 1) ? (penX >= penZ) : (penX < penZ);
+              if (preferX) {
+                lx = (lx >= 0 ? 1 : -1) * (ex + 0.08);
+                pos.x = b.cx + lx * b.cos + lz * b.sin;
+                pos.z = b.cz - lx * b.sin + lz * b.cos;
+              } else {
+                lz = (lz >= 0 ? 1 : -1) * (ez + 0.08);
+                pos.x = b.cx + lx * b.cos + lz * b.sin;
+                pos.z = b.cz - lx * b.sin + lz * b.cos;
+              }
             }
           }
         }
@@ -3688,7 +3693,7 @@ export function makeCityCollider(city) {
           hit = true;
           iterHit = true;
           const penTop = top + radius - pos.y;
-          if (penTop < minR - dist && penTop < radius * 1.5) {
+          if (penTop < minR - dist && penTop < radius * 1.15) {
             pos.y = top + radius;
           } else if (dist > 1e-4) {
             pos.x = o.cx + (dx / dist) * minR;

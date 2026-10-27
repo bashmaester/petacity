@@ -75,6 +75,9 @@ export class CameraPathRecorder {
     this.speed = 1;
     this._recElapsed = 0;
     this._lastSampleT = -1;
+    this._loopBridgeActive = false;
+    this._loopBridgeT = 0;
+    this._loopBridgeDur = 0;
     this._qA = new THREE.Quaternion();
     this._qB = new THREE.Quaternion();
     this._qOut = new THREE.Quaternion();
@@ -103,6 +106,8 @@ export class CameraPathRecorder {
     this.recording = false;
     this.playing = false;
     this.playTime = 0;
+    this._loopBridgeActive = false;
+    this._loopBridgeT = 0;
     this._recElapsed = 0;
     this._lastSampleT = -1;
   }
@@ -388,8 +393,15 @@ export class CameraPathRecorder {
     }
     const i1 = Math.max(0, Math.min(n - 2, lo));
     const i2 = i1 + 1;
-    const i0 = this.loop ? (i1 - 1 + n) % n : Math.max(0, i1 - 1);
-    const i3 = this.loop ? (i2 + 1) % n : Math.min(n - 1, i2 + 1);
+    const fFirst = this.frames[0];
+    const fLast = this.frames[n - 1];
+    const closedEndpoints = this.loop && Math.hypot(
+      fLast.x - fFirst.x,
+      fLast.y - fFirst.y,
+      fLast.z - fFirst.z
+    ) < 35;
+    const i0 = closedEndpoints ? (i1 - 1 + n) % n : Math.max(0, i1 - 1);
+    const i3 = closedEndpoints ? (i2 + 1) % n : Math.min(n - 1, i2 + 1);
 
     const f0 = this.frames[i0];
     const f1 = this.frames[i1];
@@ -456,12 +468,62 @@ export class CameraPathRecorder {
   updatePlayback(dt, camera, controls = null) {
     if (!this.playing || !this.hasPath) {
       this.playing = false;
+      this._loopBridgeActive = false;
       return false;
     }
     const dur = this.duration;
-    this.playTime += Math.max(0, dt) * this.speed;
+    const stepDt = Math.max(0, dt) * this.speed;
+
+    if (this._loopBridgeActive) {
+      this._loopBridgeT += stepDt;
+      if (this._loopBridgeT >= this._loopBridgeDur) {
+        const carry = this._loopBridgeT - this._loopBridgeDur;
+        this._loopBridgeActive = false;
+        this._loopBridgeT = 0;
+        this.playTime = carry % dur;
+        this.applyAt(this.playTime, camera, controls);
+        return true;
+      }
+      if (camera) {
+        const fA = this.frames[this.frames.length - 1];
+        const fB = this.frames[0];
+        const u = Math.max(0, Math.min(1, this._loopBridgeT / Math.max(1e-4, this._loopBridgeDur)));
+        const s = u * u * u * (u * (u * 6 - 15) + 10);
+        const gap = Math.hypot(fB.x - fA.x, fB.z - fA.z);
+        const arcLift = Math.min(85, gap * 0.08) * Math.sin(Math.PI * s);
+        camera.position.set(
+          fA.x + (fB.x - fA.x) * s,
+          fA.y + (fB.y - fA.y) * s + arcLift,
+          fA.z + (fB.z - fA.z) * s
+        );
+        this._qA.set(fA.qx, fA.qy, fA.qz, fA.qw).normalize();
+        this._qB.set(fB.qx, fB.qy, fB.qz, fB.qw).normalize();
+        if (this._qA.dot(this._qB) < 0) {
+          this._qB.set(-this._qB.x, -this._qB.y, -this._qB.z, -this._qB.w);
+        }
+        this._qOut.copy(this._qA).slerp(this._qB, s);
+        camera.quaternion.copy(this._qOut);
+        if (controls && typeof controls.syncFromCamera === 'function') {
+          controls.syncFromCamera(controls.freelook);
+        }
+      }
+      return true;
+    }
+
+    this.playTime += stepDt;
     if (this.playTime >= dur) {
       if (this.loop) {
+        const fA = this.frames[this.frames.length - 1];
+        const fB = this.frames[0];
+        const endGap = Math.hypot(fB.x - fA.x, fB.y - fA.y, fB.z - fA.z);
+        if (endGap > 18) {
+          const over = this.playTime - dur;
+          this.playTime = dur;
+          this._loopBridgeActive = true;
+          this._loopBridgeDur = Math.max(1.6, Math.min(4.2, endGap / 145));
+          this._loopBridgeT = Math.min(this._loopBridgeDur * 0.5, over);
+          return this.updatePlayback(0, camera, controls);
+        }
         this.playTime = this.playTime % dur;
       } else {
         this.playTime = dur;
