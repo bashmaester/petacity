@@ -2,7 +2,7 @@
 
 Petacity is a **100% pure-code procedural city, multi-style shader sandbox, generative synthesizer, and WebMCP-enabled AI Movie Set**. Every building, street, river, ocean wave, cloud deck, hologram, vehicle, glyph sign, and musical note is generated deterministically in JavaScript, GLSL, and the Web Audio API — with **zero external 3D models, zero image textures, zero CDNs, and zero audio samples**.
 
-For AI agent integration and programmable movie-set control (`navigator.modelContext`, `window.petacity`, and `window.postMessage`), see **[`WEBMCP.md`](./WEBMCP.md)**.
+For a deep technical post-mortem of all techniques, engineering decisions (*what worked vs. what did not*), and the modular city engine blueprint, see **[`ARCHITECTURE_AND_LESSONS.md`](./ARCHITECTURE_AND_LESSONS.md)** and **[`HANDOFF.md`](./HANDOFF.md)**. For AI agent integration and programmable movie-set control (`navigator.modelContext`, `window.petacity`, and `window.postMessage`), see **[`WEBMCP.md`](./WEBMCP.md)**.
 
 ---
 

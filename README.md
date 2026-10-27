@@ -51,7 +51,9 @@ instead of hanging — and `npm test` includes a headless boot smoke test
 
 ## Documentation & WebMCP Movie-Set API
 
-- **[`DOCS.md`](./DOCS.md)** — Complete system architecture & technical reference (hydrology, 5 high-frequency water shaders, wind-guided 4D volumetric clouds, twin-headlight fleet, beam/holo-projector optics, 2nd-order turn damping, and 4-movement generative synthesizer).
+- **[`ARCHITECTURE_AND_LESSONS.md`](./ARCHITECTURE_AND_LESSONS.md)** — Deep-dive catalog of all procedural/shader/flight/audio techniques & decisions, candid retrospective (*what worked vs. what did not*), and architectural blueprint for a next-generation true modular city engine.
+- **[`HANDOFF.md`](./HANDOFF.md)** — Practical engineering handoff & operations guide: 16-file module map, runtime state precedence, critical invariants (`101/101` tests), and subsystem extraction order.
+- **[`DOCS.md`](./DOCS.md)** — Complete system feature & user controls reference (hydrology, 5 high-frequency water shaders, wind-guided 4D volumetric clouds, twin-headlight fleet, beam/holo-projector optics, Drone-DP gimbal, and 14-station generative synthesizer).
 - **[`WEBMCP.md`](./WEBMCP.md)** — Full AI Agent & Programmable Movie-Set Guide (`navigator.modelContext` WebMCP, `window.petacity` SDK, and `window.postMessage` RPC): raycast what the camera is looking at, run scripted dolly/orbit/chase shots, take over any skyscraper's lights + wrap 4-sided LED window-matrix messages around facades, hijack billboards, project holograms + terminating light cones in front of the camera, and puppeteer cars.
 
 The **Look** chips restyle the same city instantly. The tuning sliders scale
