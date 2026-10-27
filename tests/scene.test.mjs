@@ -3396,6 +3396,140 @@ test('Phase-24: camera turns decisively onto reverse/abeam minimap routeQueue wa
   assert.ok(cam.position.x > 220, `camera reached Eastbound destination (x=${cam.position.x.toFixed(1)})`);
 });
 
+test('Phase-25: magnetic avoidance + open-gap/POI gaze, non-Tesla & pixel billboards, wake-trail transit, blimp/ship separation, pop-free vehicles, double-click raycast & city-limit veer, and palette colorVar', () => {
+  // 1) Magnetic collision avoidance curves cleanly away from broad facades with generous clearance;
+  //    open-gap gaze aims away from close walls and gently drifts toward nearby POIs
+  const cam = new THREE.PerspectiveCamera(60, 1.6, 1, 12000);
+  const domStub = { addEventListener() {}, removeEventListener() {} };
+  const ctl = new FlyControls(cam, domStub, { cityLimitRadius: 900 });
+  const U = makeUniforms();
+  const world = makeWorld(U);
+  const { city, collider } = growCity(4417, 4, world.towerMat, 0.5, { transitAmt: 1.0, harborAmt: 1.2 });
+  const transitGrp = buildTransitInfrastructure(city, U, world.lampMat);
+  const harborObj = buildHarbor(city, U, world.beaconMat, world.lampMat);
+  const veh = makeVehicles(city, world.trailMat, 140, collider);
+  ctl.collider = collider;
+
+  // Open-space gaze pushes look yaw away from a blocking tower directly ahead
+  const blockingStub = {
+    hitsPoint(px, py, pz) {
+      // 28m-wide tower directly along -Z (`px in [-12, 16], pz in [-58, -18]`), open on both sides
+      return pz < -18 && pz > -58 && px > -12 && px < 16 && py < 200;
+    },
+    maxHeightNear() { return 200; },
+    groundHeightAt() { return 0; },
+  };
+  ctl.collision = true;
+  ctl.collider = blockingStub;
+  ctl.setPose({ x: 0, y: 60, z: 0, yaw: 0, pitch: 0 });
+  for (let i = 0; i < 20; i++) ctl._computeOpenGazeOffset(cam.position, 0, 0, 0.12);
+  assert.ok(Math.abs(ctl._openGazeYaw) > 0.18, `gaze steers into open space away from wall (_openGazeYaw=${ctl._openGazeYaw.toFixed(3)})`);
+
+  // Nearby POI preference selects closer unvisited landmark over far horizon landmark
+  ctl.collider = collider;
+  ctl.setPose({ x: 0, y: 260, z: 120, yaw: 0, pitch: 0 });
+  ctl.gazeMode = 1;
+  ctl.poiList = [
+    { name: 'Close Beacon', x: 55, y: 250, lookY: 255, z: -20 },
+    { name: 'Distant Arch', x: -160, y: 250, lookY: 255, z: -580 },
+  ];
+  const pickedPoi = ctl._pickNextAutoLookPoi(cam.position);
+  assert.equal(pickedPoi?.name, 'Close Beacon', 'auto-look favors nearby unvisited POI over distant POI');
+
+  // Double-click raycast safe destination & open-sky heading + outer city-limit veer-back
+  const towerIdx = 0;
+  const hitPt = new THREE.Vector3(city.x[towerIdx], 50, city.z[towerIdx]);
+  const safeDest = ctl.computeSafeDestinationFromHit(hitPt, new THREE.Vector3(city.x[towerIdx] + 180, 95, city.z[towerIdx] + 180), 42);
+  assert.ok(safeDest && !collider.hitsPoint(safeDest.x, safeDest.y, safeDest.z, 3.0, 1), 'raycast destination stands off safely outside tower');
+
+  ctl.setCourseHeading(1.15, -0.06);
+  assert.equal(ctl.glide, true, 'setCourseHeading engages smooth glide along open-sky ray');
+  assert.ok(ctl._headingHoldTimer > 10, 'open-sky heading holds course before gentle wander resumes');
+
+  // Fly far past cityLimitRadius (900m) heading away from city -> gently veers back toward center!
+  ctl.avoidance = false;
+  ctl.collision = false;
+  ctl._headingHoldTimer = 0;
+  ctl.routeQueue.length = 0;
+  ctl.setPose({ x: 0, y: 140, z: 1550, yaw: Math.PI, pitch: 0 }); // heading +Z (further away from origin!)
+  ctl.setGlide(true);
+  for (let i = 0; i < 240; i++) ctl.update(1 / 60);
+  const veerDelta = Math.abs(Math.atan2(-Math.sin(ctl.moveYaw), -Math.cos(ctl.moveYaw)) - Math.PI);
+  assert.ok(veerDelta > 0.25, `camera gently veers back toward city when well past cityLimitRadius (moveYaw=${ctl.moveYaw.toFixed(3)})`);
+
+  // 2) Billboards: Twin-Rotor VTOL Hover-Shuttle replaces car (`adKind == 1`) + pixelated `adKind 8..11`
+  assert.match(SHADERS.BILL_FRAG, /adKind = floor\(fract\(seed \* 29\.17\) \* 12\.0\)/, 'billboard shader selects across all 12 simulated ad kinds (0..11)');
+  assert.match(SHADERS.BILL_FRAG, /VTOL Hover-Shuttle/, 'adKind 1 renders Twin-Rotor Tilt-Duct VTOL Hover-Shuttle');
+  assert.match(SHADERS.BILL_FRAG, /adKind < 8\.5[\s\S]*adKind < 9\.5[\s\S]*adKind < 10\.5/, 'pixelated people, ship, skyline & abstract ads present');
+  assert.ok(!/sports-coupe|tesla/i.test(SHADERS.BILL_FRAG), 'no Tesla/coupe ad remains in BILL_FRAG');
+
+  // 3) Transit wake-trail glow ribbons + grounded/bracketed infrastructure
+  const wakeMesh = transitGrp && transitGrp.getObjectByName('transitWakeGuideway');
+  assert.ok(wakeMesh && wakeMesh.isMesh, 'transit builds subtle wave/wake-trail guideway ribbon');
+  assert.equal(wakeMesh.material.blending, THREE.AdditiveBlending);
+  assert.equal(wakeMesh.material.depthWrite, false);
+
+  // 4) Blimp separation, underway ship separation (docked ships exempt), and pop-free vehicle fade/cull immunity
+  assert.ok(veh && veh.heroCount > 0);
+  cam.position.set(0, 120, 220);
+  cam.updateMatrixWorld(true);
+  for (let s = 0; s < 24; s++) veh.update(0.25, 1.0, 1.0 + s * 0.25);
+  const blimps = [];
+  for (let idx = 0; idx < veh.heroCount; idx++) {
+    const st = veh.getVehicleState(idx);
+    if (st && st.className === 'blimp') blimps.push(st);
+  }
+  for (let i = 0; i < blimps.length; i++) {
+    for (let j = i + 1; j < blimps.length; j++) {
+      const bi = blimps[i];
+      const bj = blimps[j];
+      const d = Math.hypot(bi.x - bj.x, (bi.y - bj.y) * 2.2, bi.z - bj.z);
+      assert.ok(d >= 260, `blimps maintain generous airspace separation (d=${d.toFixed(1)}m)`);
+    }
+  }
+  assert.match(SHADERS.SWARM_VERT, /floor\(aCurveA\.w \* sp \* driverMul \* 120\.0 \+ 0\.5\)/, 'swarm vehicles quantize speed to 120s loop harmonics (zero 120s jump)');
+  assert.match(SHADERS.SWARM_VERT, /smoothstep\(0\.0, 0\.095, tt\)/, 'swarm vehicles fade smoothly at lane portals');
+
+  // Underway harbor ships repel when close while docked ships stay put at their piers
+  if (harborObj && harborObj.ships && harborObj.ships.length >= 2) {
+    const dockedBefore = harborObj.ships.filter((s) => s.spec.docked).map((s) => ({ x: s.mesh.position.x, z: s.mesh.position.z }));
+    const movingEntries = harborObj.ships.filter((s) => !s.spec.docked);
+    for (let k = 0; k < 45; k++) harborObj.update(0.2);
+    for (let i = 0; i < movingEntries.length; i++) {
+      for (let j = i + 1; j < movingEntries.length; j++) {
+        const afterDist = Math.hypot(
+          movingEntries[i].mesh.position.x - movingEntries[j].mesh.position.x,
+          movingEntries[i].mesh.position.z - movingEntries[j].mesh.position.z
+        );
+        assert.ok(afterDist > 260, `underway harbor ships stay separated offshore (dist=${afterDist.toFixed(1)}m)`);
+      }
+    }
+    const dockedAfter = harborObj.ships.filter((s) => s.spec.docked);
+    for (let i = 0; i < dockedBefore.length; i++) {
+      const drift = Math.hypot(dockedAfter[i].mesh.position.x - dockedBefore[i].x, dockedAfter[i].mesh.position.z - dockedBefore[i].z);
+      assert.ok(drift < 8.0, `docked ship stays moored at pier without separation drift (drift=${drift.toFixed(2)}m)`);
+    }
+  }
+
+  // 5) Cross-palette borrowing & `colorVar`: wired across materials, strict Metropolis monochrome, & state codec
+  const defTune = normalizeExactState({}).tune;
+  assert.equal(defTune.colorVar, 0.45);
+  const bladerunner = LOOK_BY_ID.bladerunner;
+  applyLook(U, bladerunner, { ...defTune, colorVar: 0.92, tint: 0.35 });
+  assert.ok(Math.abs(U.uColorVar.value - 0.92) < 1e-6, 'shared uniform uColorVar updated by applyLook');
+  for (const mat of [world.towerMat, world.beaconMat, world.lampMat, world.swarmMat, world.billMat]) {
+    assert.ok(mat.uniforms.uColorVar, 'material shares uColorVar uniform');
+  }
+  const metropolis = LOOK_BY_ID.metropolis;
+  applyTime(U, metropolis, 22.0, { ...defTune, colorVar: 1.0, tint: 0.0 });
+  assert.equal(U.uColorVar.value, 0, 'Metropolis clamps uColorVar to 0 to remain strictly monochrome');
+
+  const encoded = encodeExactState({ seed: 4417, radius: 5, lookId: 'bladerunner', tune: { ...defTune, colorVar: 0.83 } });
+  const decoded = decodeExactState(encoded);
+  assert.ok(Math.abs(decoded.tune.colorVar - 0.83) < 1e-3, `colorVar roundtrips through compact _v:2 #s= token (${decoded.tune.colorVar})`);
+});
+
+
 
 
 

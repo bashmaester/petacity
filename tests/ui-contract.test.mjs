@@ -449,6 +449,28 @@ test('Phase-23 UI contract: Shift+Up/Down smooth speed steps (0.1 above 0.1, 0.0
   assert.ok(html.includes('id="b-route-clear"'), '#b-route-clear exists on minimap bar');
 });
 
+test('Phase-25 UI contract: traveling Synth-Linear glyph loader, #sl-color-var palette variation, double-click raycast flight & WebMCP colorVar', () => {
+  // 1) Initial #loading overlay uses pure inline-SVG traveling Synth-Linear glyph marquee (no "Growing the city" copy)
+  assert.ok(!/Growing the city/i.test(html), '#loading no longer displays plain "Growing the city" text');
+  assert.match(html, /id="loading"[\s\S]*class="glyph-track"/, '#loading renders traveling Synth-Linear SVG glyph marquee');
+  assert.match(html, /@keyframes glyphMarquee/, 'CSS defines smooth traveling glyphMarquee animation');
+
+  // 2) Palette Color Variation slider (#sl-color-var + #color-var-label) sits alongside Tint
+  assert.ok(html.includes('id="sl-color-var"'), '#sl-color-var slider exists in index.html');
+  assert.ok(html.includes('id="color-var-label"'), '#color-var-label readout exists in index.html');
+  assert.ok(main.includes("'#sl-color-var'") && main.includes("'#color-var-label'"), 'main.js wires #sl-color-var & #color-var-label');
+
+  // 3) Double-click raycast flight & cityLimitRadius wired on viewport canvas
+  assert.ok(main.includes('handleViewportDoubleClick'), 'main.js defines handleViewportDoubleClick');
+  assert.match(main, /canvas\.addEventListener\(\s*'dblclick'/, 'viewport canvas listens for dblclick');
+  assert.ok(main.includes('controls.cityLimitRadius'), 'rebuild() updates controls.cityLimitRadius from city footprint');
+
+  // 4) WebMCP exposes colorVar in petacity_set_environment
+  const webmcpSrc = readFileSync(new URL('../src/webmcp.js', import.meta.url), 'utf8');
+  assert.ok(webmcpSrc.includes('colorVar'), 'src/webmcp.js exposes colorVar parameter to AI Movie-Set Director');
+});
+
+
 
 
 

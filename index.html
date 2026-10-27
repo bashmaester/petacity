@@ -488,11 +488,42 @@ button.icon-btn.rec-on, button.action.rec-on {
 #loading {
   position: fixed; inset: 0; z-index: 20;
   display: grid; place-items: center;
-  background: #070a12; color: var(--mute); font-size: 13px; letter-spacing: 0.12em;
+  background: radial-gradient(circle at 50% 50%, #0d1526 0%, #060911 72%);
+  color: var(--mute); font-size: 13px; letter-spacing: 0.12em;
   text-transform: uppercase;
   transition: opacity 0.6s ease, visibility 0s linear 0.6s;
 }
 #loading.out { opacity: 0; visibility: hidden; }
+#loading .glyph-sign {
+  width: min(360px, calc(100vw - 56px));
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(12, 20, 36, 0.92), rgba(7, 11, 22, 0.96));
+  border: 1px solid rgba(83, 243, 255, 0.28);
+  box-shadow: 0 0 34px rgba(40, 210, 255, 0.14), inset 0 0 18px rgba(83, 243, 255, 0.08);
+  overflow: hidden;
+  position: relative;
+}
+#loading .glyph-sign::after {
+  content: '';
+  position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(180deg, rgba(255,255,255,0.03) 0 1px, transparent 1px 3px);
+}
+#loading .glyph-viewport {
+  overflow: hidden;
+  mask-image: linear-gradient(90deg, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, #000 12%, #000 88%, transparent 100%);
+}
+#loading .glyph-track {
+  display: block;
+  width: 640px; height: 42px;
+  animation: glyphMarquee 4.6s linear infinite;
+  filter: drop-shadow(0 0 6px rgba(83, 243, 255, 0.65));
+}
+@keyframes glyphMarquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-320px); }
+}
 #loading .boot-error {
   max-width: min(680px, calc(100vw - 48px)); padding: 22px 24px;
   border-radius: 16px; background: rgba(18, 12, 20, 0.92);
@@ -562,10 +593,15 @@ button.icon-btn.rec-on, button.action.rec-on {
         <p id="look-blurb"></p>
 
         <div class="slider-grid" style="margin-top: 5px;">
-          <div class="slider-row wide" title="Look Tint Amount (0% = diverse natural stone/glass/paint per building &amp; car · 100% = full stylized look tint)">
+          <div class="slider-row wide" title="Palette Adherence (100% = stay closely faithful to the look palette · lower = allow out-of-palette chromatic excursion &amp; natural materials)">
             <span>&#x25D2;</span>
-            <input id="sl-tint" type="range" min="0" max="1" step="0.01" value="0.78" aria-label="Look tint amount">
+            <input id="sl-tint" type="range" min="0" max="1" step="0.01" value="0.78" aria-label="Look tint palette adherence">
             <em id="tint-label">Tint 78%</em>
+          </div>
+          <div class="slider-row wide" title="Color Variation (0% = strict uniform swatches · higher = outlines, windows &amp; lights borrow across palette swatches and interpolate wider hues)">
+            <span>&#x25CE;</span>
+            <input id="sl-color-var" type="range" min="0" max="1.2" step="0.01" value="0.45" aria-label="Color variation amount">
+            <em id="color-var-label">Var 45%</em>
           </div>
         </div>
 
@@ -1433,7 +1469,39 @@ button.icon-btn.rec-on, button.action.rec-on {
 </div>
 
 <div id="hint-flash"></div>
-<div id="loading">Growing the city…</div>
+<div id="loading" role="status" aria-label="Synthesizing city">
+  <div class="glyph-sign" aria-hidden="true">
+    <div class="glyph-viewport">
+      <svg class="glyph-track" viewBox="0 0 640 42" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="0" y1="4" x2="640" y2="4" stroke="#53f3ff" stroke-opacity="0.32" stroke-width="1"/>
+        <line x1="0" y1="38" x2="640" y2="38" stroke="#ffb84d" stroke-opacity="0.28" stroke-width="1"/>
+        <g id="glyph-strip-a" stroke-width="2.1">
+          <!-- 1: Minoan Trident-Psi -->
+          <path d="M18 32V10M10 15L18 22L26 15M13 32H23" stroke="#53f3ff"/>
+          <!-- 2: Double-Axe Labrys -->
+          <path d="M52 10V32M42 13L62 29M62 13L42 29M42 13V29M62 13V29" stroke="#ffb84d"/>
+          <!-- 3: Linear Solar Wheel + Cross -->
+          <circle cx="90" cy="21" r="9.5" stroke="#53f3ff"/>
+          <path d="M80.5 21H99.5M90 11.5V30.5" stroke="#53f3ff"/>
+          <!-- 4: Stepped Ziggurat Portal -->
+          <path d="M116 31V19H122V12H132V19H138V31M125 31V22H129V31" stroke="#ff6ad5"/>
+          <!-- 5: Cyber Syllabogram Ka-Ro -->
+          <path d="M156 11H174L162 21H175L160 32M156 17V31" stroke="#53f3ff"/>
+          <!-- 6: Twin Diamond Loom -->
+          <path d="M198 10L208 21L198 32L188 21Z" stroke="#ffb84d"/>
+          <circle cx="198" cy="21" r="2.4" fill="#53f3ff" stroke="none"/>
+          <!-- 7: Linear-B Spire & Crescent -->
+          <path d="M232 32V10M224 15H240M225 22C229 27 235 27 239 22" stroke="#53f3ff"/>
+          <!-- 8: Circuit Gate Sigma -->
+          <path d="M260 11H278M260 31H278M264 11V21L274 21V31" stroke="#ff6ad5"/>
+          <!-- 9: Winged Caduceus Node -->
+          <path d="M302 10V32M293 14L302 20L311 14M295 27H309" stroke="#ffb84d"/>
+        </g>
+        <use href="#glyph-strip-a" x="320"/>
+      </svg>
+    </div>
+  </div>
+</div>
 
 <script type="module" src="./src/main.js"></script>
 </body>

@@ -343,12 +343,14 @@ float evalGlyphLine(vec2 uv, float cols, float scrollT, float rowSeed, float gly
   return evalSynthGlyph(cUv, chSeed, glyphStyle, animT, 0.056);
 }
 
-// Simulated Commercial Ad Illustrations (Synth-Cola bottle, Cyber-Car, Off-World Ring Planet,
-// Fashion Visor Portrait, Steaming Noodle Bowl, Market Candlesticks, Equalizer & Chrono Dial)
+// Simulated Commercial & Pixel-Matrix Billboard Art (12 graphic archetypes:
+// Synth-Beverage, Twin-Rotor VTOL Hover-Shuttle, Ringed Off-World Colony, Cyber-Optics Portrait,
+// Steaming Noodle Bowl, Market Candlesticks, Equalizer, Chrono Dial, plus Pixelated People,
+// Pixelated Cruiser Ship, Pixelated Skyline Buildings & Pixelated Abstract Forms!)
 vec3 evalSimulatedAd(vec2 uv, float seed, float glyphStyle, float animT, vec3 colA, vec3 colB, vec3 darkBg) {
   float ph = fract(animT / PC_LOOP);
   float ang = ph * PC_TAU;
-  float adKind = floor(fract(seed * 29.17) * 8.0);
+  float adKind = floor(fract(seed * 29.17) * 12.0);
   // Diversify ad palette per-seed so adjacent billboards feel like distinct competing brands!
   vec3 altC = vec3(fract(seed * 3.7) * 0.7 + 0.3, fract(seed * 7.1) * 0.6 + 0.35, fract(seed * 11.3) * 0.7 + 0.3);
   vec3 brandA = mix(colA, mix(colA, altC, 0.45), step(0.45, fract(seed * 5.1)));
@@ -364,7 +366,6 @@ vec3 evalSimulatedAd(vec2 uv, float seed, float glyphStyle, float animT, vec3 co
     float body = step(-0.34, bp.y) * step(bp.y, 0.17) * (1.0 - smoothstep(halfW - 0.012, halfW, abs(bp.x)));
     float bottle = clamp(max(neck, body), 0.0, 1.0);
     float labelBand = bottle * step(-0.10, bp.y) * step(bp.y, 0.05);
-    // Rising effervescent bubbles (looped!)
     float bub = 0.0;
     for (int i = 0; i < 4; i++) {
       float fi = float(i);
@@ -382,20 +383,29 @@ vec3 evalSimulatedAd(vec2 uv, float seed, float glyphStyle, float animT, vec3 co
     col = mix(col, brandA * 1.2, title);
     col = mix(col, brandB * 0.85, badgeBox * (1.0 - priceTxt));
   } else if (adKind < 1.5) {
-    // 1: Sleek Cyber-Coupe / Spinner Showroom Ad + Speed Lines
-    vec2 cp = (uv - vec2(0.46, 0.42)) * vec2(1.0, 1.35);
-    float chassis = step(-0.34, cp.x) * step(cp.x, 0.36) * step(-0.10, cp.y) * step(cp.y, 0.04 + 0.09 * (1.0 - abs(cp.x * 2.4)));
-    float canopy = step(-0.14, cp.x) * step(cp.x, 0.16) * step(0.02, cp.y) * (1.0 - smoothstep(0.09, 0.12, length((cp - vec2(0.0, 0.02)) * vec2(0.75, 1.1))));
-    float wheelL = 1.0 - smoothstep(0.055, 0.072, length((cp - vec2(-0.20, -0.09)) * vec2(1.15, 1.0)));
-    float wheelR = 1.0 - smoothstep(0.055, 0.072, length((cp - vec2(0.21, -0.09)) * vec2(1.15, 1.0)));
-    float car = clamp(max(chassis, canopy) - (wheelL + wheelR) * 0.5, 0.0, 1.0);
-    float rimGlow = (1.0 - smoothstep(0.015, 0.032, abs(length((cp - vec2(-0.20, -0.09)) * vec2(1.15, 1.0)) - 0.045)))
-                  + (1.0 - smoothstep(0.015, 0.032, abs(length((cp - vec2(0.21, -0.09)) * vec2(1.15, 1.0)) - 0.045)));
-    float streak = step(0.75, fract(uv.y * 14.0)) * step(uv.x, 0.24 + 0.1 * sin(ang * 4.0 + uv.y * 9.0)) * step(0.28, uv.y) * step(uv.y, 0.56);
-    float hdr = evalGlyphLine(vec2(uv.x * 0.88 + 0.06, clamp((uv.y - 0.72) / 0.20, 0.0, 1.0)), 6.0, 0.0, seed * 19.0, glyphStyle, animT) * step(0.72, uv.y) * step(uv.y, 0.92);
-    float spec = evalGlyphLine(vec2(uv.x, clamp((uv.y - 0.07) / 0.14, 0.0, 1.0)), 11.0, animT * 0.6, seed * 43.0, glyphStyle, animT) * step(0.07, uv.y) * step(uv.y, 0.21);
-    col = mix(col, brandA * 1.1, car + rimGlow * 0.9);
-    col += brandB * (streak * 0.65 + spec * 0.9);
+    // 1: Twin-Rotor Tilt-Duct Heavy VTOL Hover-Shuttle (non-automotive aerospace craft + lift plumes!)
+    vec2 vp = (uv - vec2(0.46, 0.47)) * vec2(1.0, 1.25);
+    float pod = (1.0 - smoothstep(0.13, 0.155, length(vp * vec2(0.72, 1.35)))) * step(-0.11, vp.y);
+    float tailBoom = step(0.08, vp.x) * step(vp.x, 0.36) * (1.0 - smoothstep(0.018, 0.030, abs(vp.y - 0.055)));
+    float tailFin = step(0.28, vp.x) * step(vp.x, 0.36) * step(0.05, vp.y) * step(vp.y, 0.17 - (vp.x - 0.28) * 0.9);
+    vec2 dL = (vp - vec2(-0.22, 0.03)) * vec2(1.05, 1.85);
+    vec2 dR = (vp - vec2(0.19, 0.03)) * vec2(1.05, 1.85);
+    float rL = length(dL);
+    float rR = length(dR);
+    float shroud = (1.0 - smoothstep(0.11, 0.135, rL)) * smoothstep(0.065, 0.085, rL)
+                 + (1.0 - smoothstep(0.11, 0.135, rR)) * smoothstep(0.065, 0.085, rR);
+    float rotAng = ang * 12.0;
+    float spinBlades = step(rL, 0.095) * step(0.45, abs(sin(atan(dL.y, dL.x) * 3.0 + rotAng)))
+                     + step(rR, 0.095) * step(0.45, abs(sin(atan(dR.y, dR.x) * 3.0 - rotAng)));
+    float skid = (1.0 - smoothstep(0.010, 0.020, abs(vp.y + 0.145))) * step(-0.24, vp.x) * step(vp.x, 0.22)
+               + (1.0 - smoothstep(0.010, 0.020, abs(abs(vp.x) - 0.12))) * step(-0.145, vp.y) * step(vp.y, -0.06);
+    float jetWash = ((1.0 - smoothstep(0.02, 0.085, abs(vp.x + 0.22))) + (1.0 - smoothstep(0.02, 0.085, abs(vp.x - 0.19))))
+                  * step(-0.30, vp.y) * step(vp.y, -0.02) * (0.45 + 0.55 * fract(vp.y * 14.0 + ph * 16.0));
+    float vtol = clamp(pod + tailBoom + tailFin + shroud + skid * 0.85, 0.0, 1.0);
+    float hdr = evalGlyphLine(vec2(uv.x * 0.88 + 0.06, clamp((uv.y - 0.75) / 0.18, 0.0, 1.0)), 6.0, 0.0, seed * 19.0, glyphStyle, animT) * step(0.75, uv.y) * step(uv.y, 0.93);
+    float spec = evalGlyphLine(vec2(uv.x, clamp((uv.y - 0.06) / 0.13, 0.0, 1.0)), 11.0, animT * 0.6, seed * 43.0, glyphStyle, animT) * step(0.06, uv.y) * step(uv.y, 0.19);
+    col = mix(col, brandA * 1.12, vtol);
+    col += brandB * clamp(spinBlades * 0.75 + jetWash * 0.70 + spec * 0.90, 0.0, 1.3);
     col = mix(col, brandB * 1.18, hdr);
   } else if (adKind < 2.5) {
     // 2: Off-World Colony Travel Ad ("A New Life Awaits"): Ringed Planet + Arc Trajectory + Departures
@@ -468,7 +478,7 @@ vec3 evalSimulatedAd(vec2 uv, float seed, float glyphStyle, float animT, vec3 co
     float top = evalGlyphLine(vec2(uv.x * 0.88 + 0.06, clamp((uv.y - 0.78) / 0.15, 0.0, 1.0)), 7.0, -animT * 0.5, seed * 15.0, glyphStyle, animT) * step(0.78, uv.y) * step(uv.y, 0.93);
     col = mix(col, mix(brandA, brandB, clamp((uv.y - 0.24) / 0.55, 0.0, 1.0)) * 1.2, eq);
     col = mix(col, brandA * 1.15, top);
-  } else {
+  } else if (adKind < 7.5) {
     // 7: Luxury Chrono / Radar Dial + Sweeping Hand + Minimalist Crest
     vec2 dp = (uv - vec2(0.30, 0.50)) * vec2(1.3, 1.0);
     float r = length(dp);
@@ -481,6 +491,88 @@ vec3 evalSimulatedAd(vec2 uv, float seed, float glyphStyle, float animT, vec3 co
     float txt2 = evalGlyphLine(vec2(clamp((uv.x - 0.54) / 0.40, 0.0, 1.0), clamp((uv.y - 0.22) / 0.18, 0.0, 1.0)), 6.0, 0.0, seed * 71.0, glyphStyle, animT) * step(0.54, uv.x) * step(0.22, uv.y) * step(uv.y, 0.40);
     col = mix(col, brandA * 1.15, clamp(dial + ticks * 0.8 + txt1, 0.0, 1.0));
     col = mix(col, brandB * 1.25, clamp(hand + txt2 * 0.85, 0.0, 1.0));
+  } else if (adKind < 8.5) {
+    // 8: Pixelated Walking People (LED-matrix citizens striding across a glowing pixel crosswalk!)
+    vec2 gRes = vec2(32.0, 22.0);
+    vec2 pId = floor(uv * gRes);
+    vec2 pSub = fract(uv * gRes);
+    float ledDot = step(0.14, pSub.x) * step(pSub.x, 0.86) * step(0.14, pSub.y) * step(pSub.y, 0.86);
+    float stride = floor(mod(ph * 48.0, 2.0)) * 2.0 - 1.0;
+    float pMaskA = 0.0;
+    float pMaskB = 0.0;
+    for (int k = 0; k < 2; k++) {
+      float fk = float(k);
+      float cx = mod(floor(8.0 + fk * 12.0 + ph * (12.0 + fk * 4.0) * 2.0), 32.0);
+      float dx = pId.x - cx;
+      if (dx > 16.0) dx -= 32.0;
+      if (dx < -16.0) dx += 32.0;
+      float sK = (k == 0) ? stride : -stride;
+      float head = step(abs(dx), 1.5) * step(14.0, pId.y) * step(pId.y, 16.5);
+      float visorPx = step(0.0, dx) * step(dx, 1.6) * step(15.0, pId.y) * step(pId.y, 15.8);
+      float coat = step(abs(dx), 2.2) * step(8.0, pId.y) * step(pId.y, 13.5);
+      float armSwing = step(abs(dx - sK * 2.4), 0.7) * step(9.5, pId.y) * step(pId.y, 12.8);
+      float legL = step(abs(dx - sK * 1.3), 0.75) * step(3.0, pId.y) * step(pId.y, 8.0);
+      float legR = step(abs(dx + sK * 1.3), 0.75) * step(3.0, pId.y) * step(pId.y, 8.0);
+      float fig = clamp(head + coat + armSwing + legL + legR, 0.0, 1.0);
+      if (k == 0) { pMaskA = max(pMaskA, fig); pMaskB = max(pMaskB, visorPx); }
+      else { pMaskB = max(pMaskB, fig); pMaskA = max(pMaskA, visorPx); }
+    }
+    float crosswalk = step(1.5, pId.y) * step(pId.y, 2.6) * step(0.5, mod(floor(pId.x * 0.5), 2.0));
+    float hdr = evalGlyphLine(vec2(uv.x * 0.88 + 0.06, clamp((uv.y - 0.81) / 0.14, 0.0, 1.0)), 6.0, 0.0, seed * 23.0, glyphStyle, animT) * step(0.81, uv.y) * step(uv.y, 0.95);
+    col = mix(col, brandA * 1.18, clamp(pMaskA + crosswalk * 0.65, 0.0, 1.0) * ledDot);
+    col = mix(col, brandB * 1.25, pMaskB * ledDot);
+    col = mix(col, brandB * 1.15, hdr);
+  } else if (adKind < 9.5) {
+    // 9: Pixelated Ocean / Star Cruiser Ship + Scrolling Pixel Waves & Lit Portholes
+    vec2 gRes = vec2(34.0, 22.0);
+    vec2 pId = floor(uv * gRes);
+    vec2 pSub = fract(uv * gRes);
+    float ledDot = step(0.13, pSub.x) * step(pSub.x, 0.87) * step(0.13, pSub.y) * step(pSub.y, 0.87);
+    float bobPx = floor(0.5 + 0.6 * sin(ang * 3.0));
+    float sy = pId.y - bobPx;
+    float hull = step(5.0, sy) * step(sy, 8.5) * step(4.0 + (8.5 - sy) * 0.9, pId.x) * step(pId.x, 29.0 - (5.5 - min(sy, 5.5)));
+    float deck1 = step(8.6, sy) * step(sy, 11.5) * step(8.0, pId.x) * step(pId.x, 25.0);
+    float bridgePx = step(11.6, sy) * step(sy, 14.2) * step(15.0, pId.x) * step(pId.x, 22.5);
+    float funnelPx = step(11.6, sy) * step(sy, 15.8) * step(10.0, pId.x) * step(pId.x, 12.8);
+    float portholes = deck1 * step(0.45, mod(pId.x, 2.0)) * step(9.5, sy) * step(sy, 10.6);
+    float waveShift = floor(ph * 34.0 * 3.0);
+    float waveRow = step(2.0, pId.y) * step(pId.y, 4.4) * step(0.45, sin((pId.x + waveShift) * 0.65 + pId.y * 1.7));
+    float plumePx = step(16.0, sy) * step(sy, 17.5) * step(5.0, pId.x) * step(pId.x, 11.0) * step(0.4, fract((pId.x - waveShift * 0.5) * 0.31));
+    col = mix(col, brandA * 1.15, clamp(hull + deck1 * 0.85 + bridgePx, 0.0, 1.0) * ledDot);
+    col = mix(col, brandB * 1.25, clamp(funnelPx + portholes + waveRow * 0.85 + plumePx * 0.65, 0.0, 1.0) * ledDot);
+  } else if (adKind < 10.5) {
+    // 10: Pixelated Megastructure Skyline Buildings + Skybridge & Blinking Pixel Beacons
+    vec2 gRes = vec2(32.0, 22.0);
+    vec2 pId = floor(uv * gRes);
+    vec2 pSub = fract(uv * gRes);
+    float ledDot = step(0.13, pSub.x) * step(pSub.x, 0.87) * step(0.13, pSub.y) * step(pSub.y, 0.87);
+    // Left spire, central stepped ziggurat, right twin tower & skybridge
+    float twL = step(3.0, pId.x) * step(pId.x, 8.5) * step(2.0, pId.y) * step(pId.y, 17.5);
+    float zigW = max(1.5, 6.2 - floor(max(0.0, pId.y - 2.0) / 3.0) * 1.1);
+    float zig = step(abs(pId.x - 16.0), zigW) * step(2.0, pId.y) * step(pId.y, 16.5);
+    float twR = step(23.5, pId.x) * step(pId.x, 28.5) * step(2.0, pId.y) * step(pId.y, 15.5);
+    float skyBr = step(8.5, pId.x) * step(pId.x, 23.5) * step(10.5, pId.y) * step(pId.y, 11.8);
+    float bldMask = clamp(twL + zig + twR + skyBr, 0.0, 1.0);
+    float winPx = bldMask * step(0.52, hash12(pId + floor(seed * 19.0))) * step(0.4, mod(pId.y, 2.0));
+    float blink = step(0.35, 0.5 + 0.5 * sin(ang * 4.0 + pId.x));
+    float beaconPx = (step(abs(pId.x - 5.5), 0.7) * step(18.0, pId.y) * step(pId.y, 19.2)
+                    + step(abs(pId.x - 16.0), 0.7) * step(17.0, pId.y) * step(pId.y, 18.2)) * blink;
+    col = mix(col, brandA * 0.78, bldMask * ledDot);
+    col = mix(col, brandB * 1.30, clamp(winPx + beaconPx * 1.2, 0.0, 1.0) * ledDot);
+  } else {
+    // 11: Pixelated Generative Abstract Forms (LED color-field rings, stepped blocks & cellular mosaic)
+    vec2 gRes = vec2(28.0, 20.0);
+    vec2 pId = floor(uv * gRes);
+    vec2 pSub = fract(uv * gRes);
+    float ledDot = step(0.14, pSub.x) * step(pSub.x, 0.86) * step(0.14, pSub.y) * step(pSub.y, 0.86);
+    vec2 cP = (pId - vec2(13.5, 9.5)) / vec2(10.0, 8.0);
+    float ep = floor(mod(ph * 16.0 + seed * 8.0, 16.0));
+    float ringP = step(0.42, sin(length(cP) * 9.5 - ang * 2.0));
+    float blockP = step(0.48, hash12(floor(pId / 3.0) + vec2(ep, floor(seed * 29.0))));
+    float diagP = step(abs(cP.x + cP.y * 0.8), 0.28);
+    col = mix(col, brandA * 1.15, clamp(blockP * 0.85 + diagP * 0.65, 0.0, 1.0) * ledDot);
+    col = mix(col, brandB * 1.25, ringP * (1.0 - blockP * 0.45) * ledDot);
+    col += (brandA + brandB) * 0.42 * diagP * ringP * ledDot;
   }
   return col;
 }
@@ -500,6 +592,33 @@ export const GLSL_UTIL = /* glsl */ `
 vec3 saturate3(vec3 c, float s) {
   float l = dot(c, vec3(0.299, 0.587, 0.114));
   return mix(vec3(l), c, s);
+}
+
+// Luminance-preserving 3D hue rotation around the achromatic diagonal
+vec3 rotateHue3(vec3 c, float ang) {
+  float k = 0.57735027;
+  vec3 axis = vec3(k);
+  float ca = cos(ang);
+  float sa = sin(ang);
+  vec3 rot = c * ca + cross(axis, c) * sa + axis * dot(axis, c) * (1.0 - ca);
+  return max(rot, vec3(0.0));
+}
+
+// Palette adherence vs chromatic excursion:
+// High tintVal keeps colors close to the look palette; lower tintVal and higher varVal
+// smoothly interpolate across AND outside the palette (while keeping mono looks grayscale).
+vec3 excursePalette(vec3 palCol, float seedA, float seedB, float tintVal, float varVal, float monoFlag) {
+  float monoGate = 1.0 - clamp(monoFlag, 0.0, 1.0);
+  float adhere = clamp(tintVal, 0.0, 1.0);
+  float vAmt = clamp(varVal, 0.0, 1.5);
+  float outSpread = ((1.0 - adhere) * (0.45 + 0.75 * vAmt) + vAmt * 0.22 * (1.0 - adhere * 0.65)) * monoGate;
+  if (outSpread <= 0.002) return palCol;
+  float hueAng = (seedA - 0.5) * 3.8 * outSpread;
+  vec3 shifted = rotateHue3(palCol, hueAng);
+  // Blend subtle warm/cool spectral chroma so even narrow palettes blossom when Tint is lowered
+  float luma = max(dot(palCol, vec3(0.299, 0.587, 0.114)), 0.06);
+  vec3 spectral = luma * (vec3(1.0) + 0.62 * cos(6.2831853 * (seedB + vec3(0.0, 0.33, 0.67))));
+  return mix(shifted, max(spectral, vec3(0.0)), clamp(outSpread * 0.42, 0.0, 0.58));
 }
 `;
 
@@ -2083,6 +2202,7 @@ uniform vec3 uPoolCol;
 uniform float uLightK;
 uniform float uDayPhase;
 uniform float uTint;
+uniform float uColorVar;
 uniform float uSignAmt;
 uniform float uMegaWrap;
 uniform float uGlyphStyle;
@@ -2134,13 +2254,21 @@ void main() {
   vec3 vdir = normalize(vWorld - cameraPosition);
 
   float h = hash12(vec2(vSeed * 127.1, floor(vKind + 0.5) * 311.7));
+  float borrowAmt = clamp(0.28 + 0.72 * uColorVar, 0.0, 1.35);
   vec3 lookBase = mix(uBaseA, uBaseB, h);
   if (uUsePal > 0.5) {
     lookBase = pickPal(hash12(vec2(vSeed * 91.3, 7.7)));
     lookBase *= 0.92 + 0.16 * hash12(vec2(vSeed * 13.1, 2.2));
+  } else {
+    float facadeBorrow = hash12(vec2(vSeed * 53.7, 14.9));
+    if (facadeBorrow > 0.72) {
+      vec3 borrowSw = mix(uAmb * 0.75, uPoolCol * 0.42, fract(facadeBorrow * 7.3));
+      lookBase = mix(lookBase, borrowSw, clamp(0.22 * borrowAmt, 0.0, 0.35));
+    }
   }
+  lookBase = excursePalette(lookBase, fract(vSeed * 19.37), fract(vSeed * 31.11), uTint, uColorVar, uBillMono);
   vec3 natBase = pickNaturalArch(hash12(vec2(vSeed * 73.9, 4.3))) * (0.84 + 0.30 * h);
-  // Look acts as a controllable tint over diverse per-building real materials!
+  // Look acts as palette adherence over diverse per-building architectural materials & spectral hues!
   vec3 base = mix(natBase, lookBase, clamp(uTint, 0.0, 1.0));
 
   float sty = vStyle;
@@ -2336,13 +2464,22 @@ void main() {
       litWin *= blinds * holoPulse;
 
       float r2 = hash12(gid + vec2(vSeed * 37.7, 5.0));
-      vec3 lookWin = uWinA;
-      if (r2 > 0.55) lookWin = uWinB;
-      if (r2 > 0.82) lookWin = uWinC;
-      vec3 natWin = vec3(1.0, 0.82, 0.56);
-      if (r2 > 0.45) natWin = vec3(1.0, 0.93, 0.82);
-      if (r2 > 0.76) natWin = vec3(0.76, 0.88, 1.0);
-      vec3 wc = mix(natWin, lookWin, clamp(0.22 + 0.78 * uTint, 0.0, 1.0));
+      float r3 = hash12(gid + vec2(vSeed * 83.1, flrHash * 19.0));
+      vec3 lookWin = mix(uWinA, uWinB, smoothstep(0.28, 0.72, r2));
+      if (r2 > 0.76) lookWin = mix(lookWin, uWinC, smoothstep(0.76, 0.94, r2));
+      // Borrow from wider look swatches (edge neon, billboard accents, streetlamp warmth) on varied floors & suites!
+      float winBorrowGate = step(1.0 - 0.34 * borrowAmt, r3);
+      if (winBorrowGate > 0.5) {
+        float wbSel = fract(r3 * 13.7 + vSeed * 5.3);
+        vec3 wbCol = styleBillColor(uBillA);
+        if (wbSel > 0.34) wbCol = styleBillColor(uBillB);
+        if (wbSel > 0.68) wbCol = mix(uEdgeCol, uPoolCol * 1.25, fract(wbSel * 7.1));
+        lookWin = mix(lookWin, wbCol, clamp(0.42 + 0.36 * uColorVar, 0.0, 0.85));
+      }
+      lookWin = excursePalette(lookWin, r3, fract(r2 * 7.9 + vSeed), uTint, uColorVar, uBillMono);
+      vec3 natWin = mix(vec3(1.0, 0.82, 0.56), vec3(1.0, 0.94, 0.84), smoothstep(0.22, 0.68, r2));
+      if (r2 > 0.70) natWin = mix(natWin, vec3(0.74, 0.89, 1.0), smoothstep(0.70, 0.95, r2));
+      vec3 wc = mix(natWin, lookWin, clamp(0.18 + 0.82 * uTint, 0.0, 1.0));
 
       // Exterior glass express elevator shaft on tall towers: integer-harmonic looped cab cycle!
       float nCols = max(3.0, floor(vDims.x / bayW));
@@ -2454,13 +2591,32 @@ void main() {
     col = roofBase;
   }
 
+  // Per-building outline & accent-band palette borrowing: instead of every tower sharing one outline hue,
+  // towers borrow across uEdgeCol, uBillA, uBillB, uWinA, uWinB, uWinC & uPoolCol + continuous interpolations!
+  float outHash = hash12(vec2(vSeed * 61.7, 19.3));
+  float outMixH = hash12(vec2(vSeed * 43.1, 8.7));
+  vec3 borrowedEdge = uEdgeCol;
+  float edgeBorrowGate = clamp(0.32 + 0.68 * uColorVar, 0.0, 1.0);
+  if (outHash > 1.0 - 0.56 * edgeBorrowGate) {
+    float sel = fract(outHash * 11.73);
+    vec3 altEdge = styleBillColor(uBillA);
+    if (sel > 0.22) altEdge = styleBillColor(uBillB);
+    if (sel > 0.44) altEdge = uWinA;
+    if (sel > 0.64) altEdge = uWinB;
+    if (sel > 0.82) altEdge = mix(uWinC, uPoolCol * 1.35, outMixH);
+    borrowedEdge = mix(uEdgeCol, altEdge, 0.45 + 0.55 * outMixH);
+  } else {
+    borrowedEdge = mix(uEdgeCol, mix(uWinA, styleBillColor(uBillA), outMixH), 0.18 * uColorVar);
+  }
+  borrowedEdge = excursePalette(borrowedEdge, outMixH, fract(vSeed * 23.9), uTint, uColorVar, uBillMono);
+
   if (vKind > 2.5) {
-    col = saturate3(uEdgeCol, uSat) * (1.1 + uBandGlow);
+    col = saturate3(borrowedEdge, uSat) * (1.1 + uBandGlow);
   } else if (vKind > 1.5 && vKind < 2.5) {
-    col += saturate3(uWinC, uSat) * 0.2;
+    col += saturate3(mix(uWinC, borrowedEdge, 0.35 * uColorVar), uSat) * 0.2;
   } else if (isStreetPod > 0.5 && vKind > 0.5 && wy < 9.5) {
     float rim = 1.0 - abs(vLocal.y) * 1.6;
-    col += saturate3(styleBillColor(mix(uPoolCol, uBillA, 0.35)), uSat) * clamp(rim, 0.0, 1.0) * 0.38 * max(uLightK, 0.2);
+    col += saturate3(styleBillColor(mix(uPoolCol, borrowedEdge, 0.38)), uSat) * clamp(rim, 0.0, 1.0) * 0.38 * max(uLightK, 0.2);
   }
 
   vec3 ad = 0.5 - abs(vLocal);
@@ -2471,7 +2627,7 @@ void main() {
   float wd = fwidth(ed);
   float edge = 1.0 - smoothstep(0.0, max(wd, 1e-5) * 1.8, ed);
   float eK = uEdge + edgeBoost;
-  vec3 eCol = saturate3(isMedia > 0.5 ? styleBillColor(uBillA) : uEdgeCol, uSat);
+  vec3 eCol = saturate3(isMedia > 0.5 ? styleBillColor(mix(uBillA, uBillB, outMixH * uColorVar)) : borrowedEdge, uSat);
   col = mix(col, eCol * (0.55 + uBandGlow * 0.35), edge * min(eK, 1.0));
   col += eCol * edge * max(eK - 1.0, 0.0);
 
@@ -2534,6 +2690,10 @@ uniform float uHazeSun;
 uniform float uTime;
 uniform float uSat;
 uniform float uTint;
+uniform float uColorVar;
+uniform vec3 uBillA;
+uniform vec3 uBillB;
+uniform float uBillMono;
 varying vec3 vN;
 varying vec3 vFlat;
 varying vec3 vWorld;
@@ -2560,7 +2720,8 @@ void main() {
   float panelShade = (0.92 + 0.08 * step(0.09, cofferX) * step(cofferX, 0.91) * step(0.10, cofferY)) * megaSeam;
   float lmMatHash = hash12(floor(vFlat.xz * 0.004) + vec2(3.7, 9.1));
   vec3 natStone = mix(vec3(0.55, 0.52, 0.47), vec3(0.35, 0.41, 0.48), step(0.5, lmMatHash));
-  vec3 base = mix(natStone, uCol, clamp(0.20 + 0.80 * uTint, 0.0, 1.0)) * mix(panelShade, 1.0, uFlat * 0.7);
+  vec3 lmLookCol = excursePalette(uCol, lmMatHash, fract(lmMatHash * 9.3 + uRole * 0.17), uTint, uColorVar, uBillMono);
+  vec3 base = mix(natStone, lmLookCol, clamp(0.20 + 0.80 * uTint, 0.0, 1.0)) * mix(panelShade, 1.0, uFlat * 0.7);
 
   float dif = max(dot(n, normalize(uSunDir)), 0.0);
   float toonD = floor(dif * 3.0 + 0.5) / 3.0;
@@ -2698,12 +2859,14 @@ void main() {
     }
   }
 
-  // Crisp silhouette & architectural edge highlight (honouring Tron/Outrun/Anime edge glow)
+  // Crisp silhouette & architectural edge highlight (borrowing across look swatches + Color Variation!)
   float rim = pow(1.0 - max(dot(-vdir, n), 0.0), 2.3);
   vec3 boxAd = 0.5 - abs(vLocalP);
   float minAd = min(min(abs(boxAd.x), abs(boxAd.y)), abs(boxAd.z));
   float boxCrease = 1.0 - smoothstep(0.0, max(fwidth(minAd), 1e-4) * 1.7, minAd);
-  vec3 eCol = saturate3(uEdgeCol, uSat);
+  vec3 lmAltEdge = (uRole > 1.5) ? mix(uBillA, uWinA, lmMatHash) : mix(uWinB, uBillB, lmMatHash);
+  vec3 lmEdgeRaw = excursePalette(mix(uEdgeCol, lmAltEdge, clamp(0.28 + 0.42 * uColorVar, 0.0, 0.78)), lmMatHash, fract(lmMatHash * 5.7), uTint, uColorVar, uBillMono);
+  vec3 eCol = saturate3(lmEdgeRaw, uSat);
   col += eCol * (rim * 0.55 + boxCrease * 0.45) * uEdge * (0.65 + 0.35 * uBandGlow);
 
   float dist = length(vWorld - cameraPosition);
@@ -2793,10 +2956,12 @@ uniform float uLightK;
 uniform float uVehLight;
 uniform float uBillMono;
 uniform float uTint;
+uniform float uColorVar;
 varying vec3 vHullCol;
 varying vec3 vPartTint;
 varying vec3 vWorldN;
 varying float vRole;
+${GLSL_UTIL}
 void main() {
   vec3 n = normalize(vWorldN);
   float sunD = max(dot(n, normalize(uSunDir)), 0.0);
@@ -2811,7 +2976,8 @@ void main() {
   if (coatId > 0.64) autoPaint = vec3(0.24, 0.27, 0.31);
   if (coatId > 0.78) autoPaint = vec3(0.74, 0.16, 0.20);
   if (coatId > 0.90) autoPaint = vec3(0.18, 0.42, 0.36);
-  vec3 effHull = mix(autoPaint, vHullCol, clamp(uTint, 0.0, 1.0));
+  vec3 lookHull = excursePalette(vHullCol, coatId, fract(coatId * 9.7), uTint, uColorVar, uBillMono);
+  vec3 effHull = mix(autoPaint, lookHull, clamp(uTint, 0.0, 1.0));
   float vL = max(uVehLight, 0.0);
 
   vec3 col;
@@ -2847,8 +3013,10 @@ attribute float aPhase;
 attribute float aSize;
 uniform float uTime;
 varying float vTwinkle;
+varying float vPhase;
 ${GLSL_CURVE}
 void main() {
+  vPhase = aPhase;
   vTwinkle = 0.55 + 0.45 * sin(uTime * 2.61799388 + aPhase * 6.28318);
   vec4 wp = modelMatrix * vec4(position, 1.0);
   wp.xyz = bendWorld(wp.xyz);
@@ -2860,10 +3028,19 @@ void main() {
 
 export const BEACON_FRAG = /* glsl */ `
 uniform vec3 uBeaconCol;
+uniform vec3 uWinA;
+uniform vec3 uWinB;
+uniform vec3 uEdgeCol;
+uniform vec3 uBillA;
+uniform float uBillMono;
+uniform float uTint;
+uniform float uColorVar;
 uniform float uLightK;
 uniform float uVehLight;
 uniform float uSteady;
 varying float vTwinkle;
+varying float vPhase;
+${GLSL_UTIL}
 void main() {
   if (uVehLight <= 0.005) discard;
   vec2 c = gl_PointCoord - 0.5;
@@ -2871,7 +3048,20 @@ void main() {
   if (r > 1.0) discard;
   float core = pow(1.0 - r, 2.2);
   float tw = mix(vTwinkle, 1.0, uSteady);
-  gl_FragColor = vec4(uBeaconCol * (0.9 + core * 1.4), clamp(core * tw * uLightK * uVehLight, 0.0, 1.0));
+
+  // Borrow across the look palette for varied rooftop & streetlamp light accents!
+  float pSel = fract(vPhase * 17.31);
+  float pMix = fract(vPhase * 43.19);
+  vec3 altLight = uWinA;
+  if (pSel > 0.30) altLight = uWinB;
+  if (pSel > 0.62) altLight = uEdgeCol;
+  if (pSel > 0.84) altLight = uBillA;
+  float borrowFrac = (uSteady > 0.5 ? 0.28 : 0.48) * clamp(0.35 + 0.65 * uColorVar, 0.0, 1.2);
+  vec3 bCol = mix(uBeaconCol, altLight, step(1.0 - borrowFrac, fract(vPhase * 7.73)) * (0.45 + 0.50 * pMix));
+  bCol = excursePalette(bCol, pSel, pMix, uTint, uColorVar, uBillMono);
+  float lum = dot(bCol, vec3(0.299, 0.587, 0.114));
+  bCol = mix(bCol, vec3(lum), clamp(uBillMono, 0.0, 1.0));
+  gl_FragColor = vec4(bCol * (0.9 + core * 1.4), clamp(core * tw * uLightK * uVehLight, 0.0, 1.0));
 }
 `;
 
@@ -3067,16 +3257,18 @@ void main() {
   float mdl = fract(aCurveB.w * 13.73);
   vModel = mdl;
 
-  // Non-uniform platoon & driver-tempo traffic kinematics:
-  // monotone phase warp f(raw) = raw + amp * sin(2*pi*(n*raw - waveT)) (with 2*pi*n*amp < 0.72 < 1.0 so velocity stays positive, compressing platoons at red waves & accelerating on green waves!)
+  // Dynamic platoon & driver-tempo traffic kinematics quantized to 120s loop harmonics
+  // so swarm cars NEVER wrap-pop at PC_LOOP boundaries and fade smoothly at portals!
   float sp = max(uTrafficSpeed, 0.0);
   float driverMul = 0.76 + 0.52 * fract(aCurveB.w * 29.17);
-  float rawT = aCurveB.w + uTime * aCurveA.w * sp * driverMul;
+  float orbRate = (sp > 0.001) ? (max(1.0, floor(aCurveA.w * sp * driverMul * 120.0 + 0.5)) / 120.0) : 0.0;
+  float waveRate = (sp > 0.001) ? (max(1.0, floor(0.08 * max(sp, 0.25) * 120.0 + 0.5)) / 120.0) : 0.0;
+  float rawT = aCurveB.w + uTime * orbRate;
   float platoonAmp = (aCurveA.z < 55.0) ? 0.036 : 0.018;
-  float warpedT = rawT + platoonAmp * sin(6.2831853 * (3.0 * rawT - uTime * 0.08 * max(sp, 0.25)) + aCurveA.x * 0.008);
+  float warpedT = rawT + platoonAmp * sin(6.2831853 * (3.0 * rawT - uTime * waveRate) + aCurveA.x * 0.008);
   float tt = fract(warpedT);
   bool isRing = abs(aCurveC.w) <= 0.5;
-  float portal = isRing ? 1.0 : smoothstep(0.0, 0.045, tt) * smoothstep(1.0, 0.955, tt);
+  float portal = isRing ? 1.0 : smoothstep(0.0, 0.095, tt) * smoothstep(1.0, 0.905, tt);
   vFade = portal;
 
   float eps = 0.008;
@@ -3132,10 +3324,12 @@ uniform float uLightK;
 uniform float uVehLight;
 uniform float uBillMono;
 uniform float uTint;
+uniform float uColorVar;
 varying vec3 vColor;
 varying vec3 vLocalP;
 varying float vFade;
 varying float vModel;
+${GLSL_UTIL}
 void main() {
   if (vFade < 0.02) discard;
   float nose = smoothstep(0.26, 0.48, vLocalP.x);
@@ -3152,7 +3346,8 @@ void main() {
   if (coatId > 0.40) natCar = vec3(0.18, 0.27, 0.42);
   if (coatId > 0.60) natCar = vec3(0.84, 0.87, 0.90);
   if (coatId > 0.78) natCar = vec3(0.72, 0.17, 0.21);
-  vec3 carTint = mix(natCar, vColor, clamp(uTint, 0.0, 1.0));
+  vec3 lookCar = excursePalette(vColor, coatId, vModel, uTint, uColorVar, uBillMono);
+  vec3 carTint = mix(natCar, lookCar, clamp(uTint, 0.0, 1.0));
 
   float canopy = step(-0.18, vLocalP.x) * step(vLocalP.x, 0.24) * smoothstep(0.08, 0.32, vLocalP.y);
   vec3 hullCol = mix(vec3(0.09, 0.11, 0.15) + carTint * 0.42, vec3(0.05, 0.08, 0.13), canopy * 0.75);
@@ -3263,18 +3458,20 @@ void main() {
   }
 
   float driverMul = 0.76 + 0.52 * fract(aCurveB.w * 29.17);
-  float rawT = aCurveB.w + uTime * aCurveA.w * sp * driverMul;
+  float orbRate = max(1.0, floor(aCurveA.w * sp * driverMul * 120.0 + 0.5)) / 120.0;
+  float waveRate = max(1.0, floor(0.08 * max(sp, 0.25) * 120.0 + 0.5)) / 120.0;
+  float rawT = aCurveB.w + uTime * orbRate;
   float platoonAmp = (aCurveA.z < 55.0) ? 0.036 : 0.018;
-  float warpedT = rawT + platoonAmp * sin(6.2831853 * (3.0 * rawT - uTime * 0.08 * max(sp, 0.25)) + aCurveA.x * 0.008);
+  float warpedT = rawT + platoonAmp * sin(6.2831853 * (3.0 * rawT - uTime * waveRate) + aCurveA.x * 0.008);
   float ttHead = fract(warpedT);
   bool isRing = abs(aCurveC.w) <= 0.5;
 
   // Arc-length-consistent parameter lag (0.85s at trailLen=1.0 -> ~50..130m of curved light trail!)
-  float maxLag = min(0.28, aCurveA.w * max(sp, 0.25) * driverMul * 0.88 * uTrailLen + 0.006);
+  float maxLag = min(0.28, orbRate * 0.88 * uTrailLen + 0.006);
   float availLag = isRing ? maxLag : min(maxLag, max(0.0, ttHead - 0.004));
   float ttSample = isRing ? fract(ttHead - uSeg * availLag) : max(0.0, ttHead - uSeg * availLag);
 
-  float portal = isRing ? 1.0 : smoothstep(0.0, 0.045, ttHead) * smoothstep(1.0, 0.955, ttHead) * smoothstep(0.008, 0.05, availLag / max(maxLag, 1e-4));
+  float portal = isRing ? 1.0 : smoothstep(0.0, 0.095, ttHead) * smoothstep(1.0, 0.905, ttHead) * smoothstep(0.008, 0.05, availLag / max(maxLag, 1e-4));
   vFade = portal;
   if (portal <= 0.01) {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
@@ -3913,8 +4110,12 @@ void main() {
 export const BILL_FRAG = /* glsl */ `
 uniform vec3 uBillA;
 uniform vec3 uBillB;
+uniform vec3 uEdgeCol;
+uniform vec3 uWinA;
 uniform float uBillK;
 uniform float uBillMono;
+uniform float uTint;
+uniform float uColorVar;
 uniform float uSignAmt;
 uniform float uGlyphStyle;
 uniform float uSignAnim;
@@ -3938,15 +4139,17 @@ void main() {
   vec3 darkBg = mix(uBillB, uBillA, 0.22) * 0.08;
   vec3 col = darkBg;
 
-  if (layoutId < 0.56) {
-    // Simulated Diverse Commercial Advertisements (8 graphic product/brand archetypes:
-    // Synth-Beverage bottle + bubbles, Cyber-Coupe showroom, Ringed Off-World Travel,
-    // Fashion Visor Portrait, Steaming Noodle Bowl, Market Candlesticks, Club Equalizer, Chrono Dial)
+  if (layoutId < 0.64) {
+    // Simulated Diverse Commercial Advertisements (12 graphic & LED-pixelated archetypes:
+    // Synth-Beverage, VTOL Hover-Shuttle, Ringed Off-World Travel, Fashion Visor Portrait,
+    // Steaming Noodle Bowl, Market Candlesticks, Club Equalizer, Chrono Dial,
+    // plus Pixelated Walking People, Cruiser Ship, Megastructure Skyline & Abstract Forms!)
     vec4 simAd = evalSimulatedAd(vUv, vSeed * 31.7, uGlyphStyle, animT);
     float palShift = fract(vSeed * 7.91);
-    vec3 adAccentA = mix(uBillA, vec3(1.0, 0.66, 0.16), step(0.35, palShift) * 0.48 * (1.0 - uBillMono));
-    if (palShift > 0.68) adAccentA = mix(uBillA, vec3(0.32, 0.96, 0.58), 0.45 * (1.0 - uBillMono));
-    vec3 adAccentB = mix(uBillB, vec3(0.98, 0.28, 0.58), (1.0 - step(0.5, palShift)) * 0.42 * (1.0 - uBillMono));
+    vec3 adAccentA = mix(uBillA, uEdgeCol, step(0.45, palShift) * 0.45 * clamp(0.35 + uColorVar, 0.0, 1.0));
+    vec3 adAccentB = mix(uBillB, uWinA, (1.0 - step(0.55, palShift)) * 0.42 * clamp(0.35 + uColorVar, 0.0, 1.0));
+    adAccentA = excursePalette(adAccentA, palShift, fract(vSeed * 17.3), uTint, uColorVar, uBillMono);
+    adAccentB = excursePalette(adAccentB, fract(palShift + 0.37), fract(vSeed * 29.1), uTint, uColorVar, uBillMono);
     vec3 fgCol = mix(adAccentA, adAccentB, clamp(simAd.y, 0.0, 1.0)) + vec3(0.98, 0.95, 0.86) * simAd.z * 0.46;
     vec3 bgGrad = mix(darkBg, mix(adAccentB, adAccentA, vUv.y) * 0.16, 0.65);
     col = mix(bgGrad, fgCol, clamp(simAd.x, 0.0, 1.0));
@@ -4401,3 +4604,47 @@ void main() {
   gl_FragColor = vec4(col * 0.92, clamp(a, 0.0, 0.56));
 }
 `;
+
+/* ------------------------------------------- subtle transit wave-wake guideways */
+
+export const TRANSIT_WAKE_VERT = /* glsl */ `
+attribute vec3 aColor;
+varying vec3 vColor;
+varying vec2 vUv;
+${GLSL_CURVE}
+void main() {
+  vColor = aColor;
+  vUv = uv;
+  vec4 wp = modelMatrix * vec4(position, 1.0);
+  wp.xyz = bendWorld(wp.xyz);
+  gl_Position = projectionMatrix * viewMatrix * wp;
+}
+`;
+
+export const TRANSIT_WAKE_FRAG = /* glsl */ `
+uniform float uTime;
+uniform float uLightK;
+uniform float uVehLight;
+uniform float uBillMono;
+varying vec3 vColor;
+varying vec2 vUv;
+void main() {
+  if (uVehLight <= 0.005) discard;
+  float ay = abs(vUv.y * 2.0 - 1.0);
+  float phaseA = uTime * (6.2831853 * 16.0 / 120.0);
+  float phaseB = uTime * (6.2831853 * 9.0 / 120.0);
+  // Subtle Kelvin-like twin magnetic wake ripples + gossamer center shimmer
+  float ripple = 0.08 * sin(vUv.x * 26.0 - phaseA);
+  float crest = exp(-pow((ay - (0.54 + ripple)) / 0.19, 2.0)) * 0.72;
+  float core = exp(-pow(ay / 0.52, 2.0)) * 0.28;
+  float wave = 0.62 + 0.38 * sin(vUv.x * 14.0 - phaseA) * cos(vUv.x * 5.0 + phaseB);
+  float edgeTaper = smoothstep(1.0, 0.78, ay);
+  float a = (crest + core) * wave * edgeTaper * (0.28 + 0.72 * max(uLightK, 0.28)) * clamp(uVehLight, 0.0, 1.6) * 0.22;
+  if (a < 0.004) discard;
+  vec3 col = vColor * (0.68 + 0.42 * wave);
+  float lum = dot(col, vec3(0.299, 0.587, 0.114));
+  col = mix(col, vec3(lum), clamp(uBillMono, 0.0, 1.0));
+  gl_FragColor = vec4(col, clamp(a, 0.0, 0.24));
+}
+`;
+

@@ -268,10 +268,12 @@ const tune = initialExact
       glyphStyle: 0, signAnim: 1,
       holoDensity: 1, holoScale: 1, holoScan: 1,
       trailMode: 1, trailLength: 1,
+      colorVar: 0.45,
       ...initialExact.tune,
     }
   : {
       tint: params.get('tn') !== null ? clampFloat(params.get('tn'), 0, 1, initLookDefTint) : initLookDefTint,
+      colorVar: params.get('cv') !== null ? clampFloat(params.get('cv'), 0, 1.2, 0.45) : 0.45,
       win: 1, glow: 1, fog: 1, lights: 1, traffic: 1,
       searchLight: params.get('sl') !== null ? clampFloat(params.get('sl'), 0, 2.5, 1) : 1,
       searchCount: params.get('sc') !== null ? clampFloat(params.get('sc'), 0, 2, 1) : 1,
@@ -639,13 +641,23 @@ function boot() {
     }
 
     const isDirectMapPin = !!(opts.fromMinimap && !spot.kind);
+    const isRaycastHit = !!(opts.fromRaycast && Number.isFinite(spot.y));
     const terrAtTarget = cityCollider && cityCollider.groundHeightAt ? cityCollider.groundHeightAt(spot.x, spot.z) : 0;
     let targetX = spot.x;
     let targetZ = spot.z;
     let cruiseY;
     let lookY;
+    let lookX = spot.x;
+    let lookZ = spot.z;
 
-    if (isDirectMapPin) {
+    if (isRaycastHit) {
+      targetX = spot.x;
+      targetZ = spot.z;
+      cruiseY = spot.y;
+      lookX = Number.isFinite(spot.lookX) ? spot.lookX : spot.x;
+      lookY = Number.isFinite(spot.lookY) ? spot.lookY : spot.y;
+      lookZ = Number.isFinite(spot.lookZ) ? spot.lookZ : spot.z;
+    } else if (isDirectMapPin) {
       const roofNear = cityCollider && cityCollider.maxHeightNear
         ? cityCollider.maxHeightNear(spot.x, spot.z, 18) * heightScale
         : 0;
@@ -665,7 +677,7 @@ function boot() {
     }
 
     const curved = bendWorldPoint(targetX, cruiseY, targetZ, worldCurve, U.uPlanetR.value);
-    const curvedLook = bendWorldPoint(spot.x, lookY, spot.z, worldCurve, U.uPlanetR.value);
+    const curvedLook = bendWorldPoint(lookX, lookY, lookZ, worldCurve, U.uPlanetR.value);
 
     // Engage Autopilot BEFORE enqueueing so syncFromCamera() doesn't overwrite the queued course!
     if (!glideOn) setGlideState(true, false);
@@ -688,6 +700,118 @@ function boot() {
       ? `\u2708\uFE0E Route +Stop #${userStops} \u00B7 ${spot.name || 'Map Pin'}`
       : `\u2708\uFE0E Flying to \u2192 ${spot.name || 'Map Pin'}`);
   }
+
+  // Double-click anywhere in the 3D view (#stage):
+  // - If the ray hits a building, landmark, bridge, transit deck, harbor ship/pier, or city street/water,
+  //   compute a collision-safe stand-off destination and fly smoothly there (Shift+DblClick appends!).
+  // - If the ray misses (open sky / distant horizon), smoothly set the flight heading along that ray!
+  const viewRaycaster = new THREE.Raycaster();
+  const viewNdc = new THREE.Vector2();
+  const hitWorldNormal = new THREE.Vector3();
+  const hitRotMat = new THREE.Matrix3();
+  function handleViewportDoubleClick(ev) {
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    if (!rect || rect.width < 4 || rect.height < 4) return;
+    viewNdc.set(
+      ((ev.clientX - rect.left) / rect.width) * 2 - 1,
+      -((ev.clientY - rect.top) / rect.height) * 2 + 1
+    );
+    camera.updateMatrixWorld();
+    viewRaycaster.setFromCamera(viewNdc, camera);
+
+    const structTargets = [
+      cityMesh,
+      landmarkGroup,
+      placeGroup,
+      bridgeGroup,
+      transitGroup,
+      harborObj && harborObj.group,
+      spaceportObj && spaceportObj.group,
+    ].filter(Boolean);
+    let hit = null;
+    let hitLabel = 'View Spot';
+    const structHits = viewRaycaster.intersectObjects(structTargets, true);
+    if (structHits.length > 0 && structHits[0].distance < 11000) {
+      hit = structHits[0];
+      if (hit.object === cityMesh) hitLabel = 'Tower Overlook';
+      else if (landmarkGroup && landmarkGroup.getObjectById(hit.object.id)) hitLabel = 'Landmark';
+      else if (bridgeGroup && bridgeGroup.getObjectById(hit.object.id)) hitLabel = 'Bridge Span';
+      else if (harborObj && harborObj.group && harborObj.group.getObjectById(hit.object.id)) hitLabel = 'Harbor';
+    } else {
+      const groundTargets = [waterGroup, world && world.ground].filter(Boolean);
+      const groundHits = viewRaycaster.intersectObjects(groundTargets, true);
+      const maxGroundR = Math.max(1500, (controls.cityLimitRadius || 2400) * 1.18);
+      if (groundHits.length > 0 && groundHits[0].distance < 9500) {
+        const gh = groundHits[0];
+        if (Math.hypot(gh.point.x, gh.point.z) <= maxGroundR) {
+          hit = gh;
+          hitLabel = (waterGroup && waterGroup.getObjectById(gh.object.id)) ? 'Waterfront' : 'Street Spot';
+        }
+      }
+    }
+
+    if (hit) {
+      hitWorldNormal.set(0, 1, 0);
+      if (hit.face && hit.face.normal) {
+        hitWorldNormal.copy(hit.face.normal);
+        if (hit.object === cityMesh && Number.isInteger(hit.instanceId) && city && city.rot) {
+          const rY = city.rot[hit.instanceId] || 0;
+          if (rY !== 0) {
+            const cR = Math.cos(rY), sR = Math.sin(rY);
+            const nx = hitWorldNormal.x * cR + hitWorldNormal.z * sR;
+            const nz = -hitWorldNormal.x * sR + hitWorldNormal.z * cR;
+            hitWorldNormal.set(nx, hitWorldNormal.y, nz);
+          }
+        } else if (hit.object && hit.object.matrixWorld) {
+          hitRotMat.getNormalMatrix(hit.object.matrixWorld);
+          hitWorldNormal.applyMatrix3(hitRotMat);
+        }
+        hitWorldNormal.normalize();
+      }
+      const safe = controls.computeSafeDestinationFromHit(
+        { point: hit.point, normal: hitWorldNormal },
+        camera.position
+      );
+      if (safe) {
+        enqueueSpotRoute(
+          {
+            name: hitLabel,
+            x: safe.x,
+            y: safe.y,
+            z: safe.z,
+            lookX: safe.lookX,
+            lookY: safe.lookY,
+            lookZ: safe.lookZ,
+          },
+          { fromRaycast: true, append: !!ev.shiftKey }
+        );
+        return;
+      }
+    }
+
+    // No 3D intersection (sky / open horizon): set flight heading smoothly along the ray!
+    const dir = viewRaycaster.ray.direction;
+    const targetYaw = Math.atan2(-dir.x, -dir.z);
+    const targetPitch = Math.max(-0.78, Math.min(0.78, Math.asin(Math.max(-1, Math.min(1, dir.y)))));
+    director.stopCameraScript();
+    if (pathRecorder && pathRecorder.playing) {
+      pathRecorder.pause();
+      syncPathUI();
+    }
+    fly = null;
+    if (camSpeed <= 0.005) {
+      camSpeed = 0.5;
+      controls.rampSpeedMultiplier(camSpeed);
+      $('#sl-camspeed').value = String(camSpeed);
+      syncFeatureLabels();
+    }
+    if (!glideOn) setGlideState(true, false);
+    controls.setCourseHeading(targetYaw, targetPitch, { engageGlide: true, holdSec: 4.5 });
+    const compassDeg = Math.round(((((-targetYaw * 180) / Math.PI) % 360) + 360) % 360);
+    flash(`\u2708\uFE0E Heading \u2192 ${compassDeg}\u00B0`);
+  }
+  canvas.addEventListener('dblclick', handleViewportDoubleClick);
 
   controls.onRouteArrive = (wp) => {
     if (wp && wp.name) flash(`Arrived \u00B7 ${wp.name}`);
@@ -931,6 +1055,7 @@ function boot() {
     controls.collision = collideOn;
     controls.avoidance = avoidOn;
     controls.heightScale = heightScale;
+    controls.cityLimitRadius = Math.max(1350, (city.suburbSpan || city.span || 1200) * 1.18);
     while (cityGroup.children.length) {
       const ch = cityGroup.children.pop();
       ch.traverse?.((o) => o.geometry && o.geometry.dispose());
@@ -1251,6 +1376,7 @@ function boot() {
 
   function syncFeatureLabels() {
     $('#tint-label').textContent = `Tint ${Math.round((tune.tint ?? 0.72) * 100)}%`;
+    $('#color-var-label').textContent = `Var ${Math.round((tune.colorVar ?? 0.45) * 100)}%`;
     $('#water-amt-label').textContent = (waterMode === 4 || waterAmount <= 0.005) ? 'Off' : `${Math.round(waterAmount * 100)}%`;
     $('#shoredist-label').textContent = `${shoreDist.toFixed(1)}\u00D7`;
     $('#water-scale-label').textContent = `Scale ${(tune.waterScale ?? 1).toFixed(2)}\u00D7`;
@@ -1324,6 +1450,7 @@ function boot() {
     $('#seed-input').value = String(seed);
     $('#sel-look').value = lookId;
     $('#sl-tint').value = String(tune.tint ?? 0.72);
+    $('#sl-color-var').value = String(tune.colorVar ?? 0.45);
     $('#sel-camstyle').value = String(camStyle);
     $('#sel-gaze-mode').value = String(gazeMode);
     if ($('#sel-edit-trans')) $('#sel-edit-trans').value = editTransition;
@@ -2350,6 +2477,10 @@ function boot() {
   }
   bindSlider($('#sl-tint'), (v) => {
     tune.tint = clampFloat(v, 0, 1, 0.72);
+    refreshLook();
+  });
+  bindSlider($('#sl-color-var'), (v) => {
+    tune.colorVar = clampFloat(v, 0, 1.2, 0.45);
     refreshLook();
   });
   $('#sel-camstyle').value = String(camStyle);
@@ -4080,6 +4211,10 @@ function boot() {
     }
     if (patch.tint !== undefined) {
       tune.tint = clampFloat(patch.tint, 0, 1, tune.tint ?? 0.72);
+      needRefreshLook = true;
+    }
+    if (patch.colorVar !== undefined) {
+      tune.colorVar = clampFloat(patch.colorVar, 0, 1.2, tune.colorVar ?? 0.45);
       needRefreshLook = true;
     }
     if (patch.customPalette && typeof patch.customPalette === 'object') {

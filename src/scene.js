@@ -19,6 +19,7 @@ import {
   BILL_VERT, BILL_FRAG, WEATHER_VERT, WEATHER_FRAG,
   DUST_VERT, DUST_FRAG,
   HOLO_VERT, HOLO_FRAG,
+  TRANSIT_WAKE_VERT, TRANSIT_WAKE_FRAG,
 } from './shaders.js';
 
 export { WATER_MODE_NAMES, TERRAIN_MODE_NAMES };
@@ -171,6 +172,7 @@ export function makeUniforms() {
     uWindAngle: { value: 0.52 },
     uWindStrength: { value: 1.0 },
     uTint: { value: 0.72 },
+    uColorVar: { value: 0.45 },
     uWaterAmt: { value: 1.0 },
     uShoreDist: { value: 1.0 },
     uRiverOrigin: { value: new THREE.Vector4(0, 0, 0.7, 4800) },
@@ -415,7 +417,7 @@ export function makeWorld(U) {
     fragmentShader: TOWER_FRAG,
     uniforms: pick(U, [
       'uSunDir', 'uSunCol', 'uSunK', 'uAmb', 'uAmbG', 'uBaseA', 'uBaseB',
-      'uPal', 'uUsePal', 'uTint', 'uWinDensity', 'uWinGlow', 'uWinA', 'uWinB', 'uWinC',
+      'uPal', 'uUsePal', 'uTint', 'uColorVar', 'uWinDensity', 'uWinGlow', 'uWinA', 'uWinB', 'uWinC',
       'uEdge', 'uEdgeCol', 'uBandGlow', 'uToon', 'uFlat',
       'uFogCol', 'uSunFogCol', 'uFogDensity', 'uFogHeight', 'uHazeSun', 'uTime', 'uDayPhase', 'uSat',
       'uBillA', 'uBillB', 'uBillK', 'uBillMono',
@@ -429,13 +431,17 @@ export function makeWorld(U) {
   const beaconMat = new THREE.ShaderMaterial({
     vertexShader: BEACON_VERT,
     fragmentShader: BEACON_FRAG,
-    uniforms: pick(U, ['uTime', 'uLightK', 'uVehLight', 'uBeaconCol', 'uSteady', 'uWorldCurve', 'uPlanetR']),
+    uniforms: pick(U, [
+      'uTime', 'uLightK', 'uVehLight', 'uBeaconCol',
+      'uWinA', 'uWinB', 'uEdgeCol', 'uBillA', 'uBillMono', 'uTint', 'uColorVar',
+      'uSteady', 'uWorldCurve', 'uPlanetR',
+    ]),
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
   });
 
-  // street lamps: same glow, steady instead of pulsing, look-tinted colour
+  // street lamps: same glow, steady instead of pulsing, look-tinted colour + palette borrowing
   const lampMat = new THREE.ShaderMaterial({
     vertexShader: BEACON_VERT,
     fragmentShader: BEACON_FRAG,
@@ -444,6 +450,13 @@ export function makeWorld(U) {
       uLightK: U.uLightK,
       uVehLight: U.uVehLight,
       uBeaconCol: U.uLampCol,
+      uWinA: U.uWinA,
+      uWinB: U.uWinB,
+      uEdgeCol: U.uEdgeCol,
+      uBillA: U.uBillA,
+      uBillMono: U.uBillMono,
+      uTint: U.uTint,
+      uColorVar: U.uColorVar,
       uSteady: { value: 1 },
       uWorldCurve: U.uWorldCurve,
       uPlanetR: U.uPlanetR,
@@ -507,7 +520,8 @@ export function makeWorld(U) {
     vertexShader: BILL_VERT,
     fragmentShader: BILL_FRAG,
     uniforms: pick(U, [
-      'uBillA', 'uBillB', 'uBillK', 'uBillMono',
+      'uBillA', 'uBillB', 'uEdgeCol', 'uWinA', 'uBillK', 'uBillMono',
+      'uTint', 'uColorVar',
       'uSignAmt', 'uGlyphStyle', 'uSignAnim',
       'uTime', 'uLightK', 'uSat', 'uWorldCurve', 'uPlanetR',
     ]),
@@ -540,7 +554,7 @@ export function makeWorld(U) {
   const swarmMat = new THREE.ShaderMaterial({
     vertexShader: SWARM_VERT,
     fragmentShader: SWARM_FRAG,
-    uniforms: pick(U, ['uTime', 'uTrafficSpeed', 'uHeightScale', 'uLightK', 'uVehLight', 'uBillMono', 'uTint', 'uWorldCurve', 'uPlanetR']),
+    uniforms: pick(U, ['uTime', 'uTrafficSpeed', 'uHeightScale', 'uLightK', 'uVehLight', 'uBillMono', 'uTint', 'uColorVar', 'uWorldCurve', 'uPlanetR']),
   });
 
   const swarmTrailMat = new THREE.ShaderMaterial({
@@ -571,8 +585,9 @@ export function makeLandmarkMaterial(U, hex = '#4a5568', role = 0) {
       uCol: { value: col(hex) },
       uRole: { value: role },
       ...pick(U, [
-        'uSunDir', 'uSunCol', 'uSunK', 'uAmb', 'uAmbG', 'uTint', 'uWinDensity', 'uWinGlow',
+        'uSunDir', 'uSunCol', 'uSunK', 'uAmb', 'uAmbG', 'uTint', 'uColorVar', 'uWinDensity', 'uWinGlow',
         'uWinA', 'uWinB', 'uWinC', 'uEdge', 'uEdgeCol', 'uBandGlow', 'uToon', 'uFlat',
+        'uBillA', 'uBillB', 'uBillMono',
         'uPoolCol', 'uLightK',
         'uFogCol', 'uSunFogCol', 'uFogDensity', 'uFogHeight', 'uHazeSun', 'uTime', 'uDayPhase', 'uSat',
         'uWorldCurve', 'uPlanetR',
@@ -2896,6 +2911,7 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
 
   const curveU = trailMat && trailMat.uniforms ? trailMat.uniforms : null;
   const uTintRef = (opts.U && opts.U.uTint) || (curveU && curveU.uTint) || { value: 0.72 };
+  const uColorVarRef = (opts.U && opts.U.uColorVar) || (curveU && curveU.uColorVar) || { value: 0.45 };
   const uVehLightRef = (opts.U && opts.U.uVehLight) || (curveU && curveU.uVehLight) || { value: 1.0 };
   const bodyMat = new THREE.ShaderMaterial({
     vertexShader: VEHICLE_VERT,
@@ -2906,6 +2922,7 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
       uVehLight: uVehLightRef,
       uBillMono: { value: 0 },
       uTint: uTintRef,
+      uColorVar: uColorVarRef,
       uWorldCurve: (curveU && curveU.uWorldCurve) || { value: 0 },
       uPlanetR: (curveU && curveU.uPlanetR) || { value: 2100 },
     },
@@ -3444,6 +3461,30 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     return choices[Math.floor(h01(i + stepSeed * 991, 67) * choices.length) % choices.length];
   };
 
+  // Hoisted camera pose for pop-free off-camera respawns & near-camera frustum-cull immunity
+  let cullFrustum = null;
+  let cullCamX = 0, cullCamY = 0, cullCamZ = 0;
+  let hasCamPose = false;
+  const respawnFade = new Float32Array(total).fill(1.0);
+  const blimpSepMul = new Float32Array(total).fill(1.0);
+  const blimpSepY = new Float32Array(total);
+  const blimpIndices = [];
+  for (let i = 0; i < total; i++) {
+    if (classOf[i] === 5) blimpIndices.push(i);
+  }
+
+  // Group air-ring segments by ringId so Blimps can be placed onto distinct orbital rings & staggered phases!
+  const ringGroups = [];
+  const ringById = new Map();
+  for (let idx = 0; idx < lanes.length; idx++) {
+    const L = lanes[idx];
+    if (L.ringId !== undefined && !L.railLoop) {
+      let arr = ringById.get(L.ringId);
+      if (!arr) { arr = []; ringById.set(L.ringId, arr); ringGroups.push(arr); }
+      arr.push(idx);
+    }
+  }
+
   const assignRoute = (i, lap) => {
     const cc = classOf[i];
     const pool = lanePoolIdx[cc];
@@ -3458,7 +3499,38 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
       }
       if (sameAlt.length > 0) usePool = sameAlt;
     }
-    laneIdx[i] = usePool[Math.floor(h01(i + lap * 997, 23) * usePool.length) % usePool.length];
+
+    // Stagger giant Blimps (cc === 5) across distinct orbital rings & separated altitudes!
+    if (cc === 5 && ringGroups.length > 0) {
+      const bOrd = local[i];
+      const grp = ringGroups[(bOrd + lap) % ringGroups.length];
+      const segPos = Math.floor(((bOrd / Math.max(1, classCount[5])) * grp.length + lap) % grp.length);
+      laneIdx[i] = grp[segPos];
+    } else if (lap > 0 && hasCamPose && usePool.length > 1) {
+      // Pop-free respawn: never drop a respawning vehicle near or right in front of the camera!
+      let bestChoice = usePool[Math.floor(h01(i + lap * 997, 23) * usePool.length) % usePool.length];
+      let bestDistSq = -1;
+      for (let att = 0; att < 10; att++) {
+        const candIdx = usePool[Math.floor(h01(i + lap * 997 + att * 131, 23 + att) * usePool.length) % usePool.length];
+        const cL = lanes[candIdx];
+        const sx = cL.x1 - cullCamX;
+        const sy = (cL.y1 ?? cL.y ?? 20) * curHeightScale - cullCamY;
+        const sz = cL.z1 - cullCamZ;
+        const ex = cL.x2 - cullCamX;
+        const ez = cL.z2 - cullCamZ;
+        const dSq = Math.min(sx * sx + sy * sy + sz * sz, ex * ex + sy * sy + ez * ez);
+        if (dSq > bestDistSq) {
+          bestDistSq = dSq;
+          bestChoice = candIdx;
+          if (dSq > 520 * 520) break;
+        }
+      }
+      laneIdx[i] = bestChoice;
+    } else {
+      laneIdx[i] = usePool[Math.floor(h01(i + lap * 997, 23) * usePool.length) % usePool.length];
+    }
+    if (lap > 0) respawnFade[i] = 0.0;
+
     const L = lanes[laneIdx[i]];
     prevLane[i] = L.prevIdx !== undefined ? L.prevIdx : -1;
     poseInit[i] = 0; // re-seed smoothed heading cleanly on route teleport
@@ -3475,6 +3547,12 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
       latOf[i] = (h01(i, 41) - 0.5) * 1.4;
       const isDeck0 = (L.nominalLayer || L.layer) === 'ground';
       vOf[i] = isDeck0 ? 0 : (h01(i, 43) - 0.5) * 1.8;
+    } else if (cc === 5) {
+      // Same-sense blimp orbit per ring + staggered altitude shells so blimps keep generous airspace!
+      dir[i] = ((L.ringId || 0) % 2 === 0) ? 1 : -1;
+      nextLane[i] = dir[i] > 0 && L.nextIdx !== undefined ? L.nextIdx : (dir[i] < 0 && L.prevIdx !== undefined ? L.prevIdx : -1);
+      latOf[i] = ((local[i] % 3) - 1) * 26;
+      vOf[i] = ((local[i] % 4) - 1.5) * 18;
     } else {
       dir[i] = h01(i + lap * 613, 31) < 0.5 ? 1 : -1;
       nextLane[i] = dir[i] > 0 && L.nextIdx !== undefined ? L.nextIdx : (dir[i] < 0 && L.prevIdx !== undefined ? L.prevIdx : -1);
@@ -3488,10 +3566,22 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
 
   function setPalette(lookOrCols) {
     const isLook = lookOrCols && !Array.isArray(lookOrCols);
-    const pal = isLook
+    const basePal = isLook
       ? (lookOrCols.signals && lookOrCols.signals.vehicles) || VEHICLE_COLORS
       : (Array.isArray(lookOrCols) && lookOrCols.length ? lookOrCols : VEHICLE_COLORS);
     const mono = isLook && lookOrCols.signals && lookOrCols.signals.billMono > 0.5;
+    // Allow traffic to borrow accent hues from the wider look palette (windows, outlines, billboards)
+    const pal = (isLook && !mono && lookOrCols.tower && lookOrCols.signals)
+      ? [
+          ...basePal,
+          lookOrCols.accent,
+          lookOrCols.tower.winA,
+          lookOrCols.tower.winB,
+          lookOrCols.tower.edgeCol,
+          lookOrCols.signals.billA,
+          lookOrCols.signals.billB,
+        ].filter(Boolean)
+      : basePal;
     if (bodyMat.uniforms && bodyMat.uniforms.uBillMono) {
       bodyMat.uniforms.uBillMono.value = mono ? 1 : 0;
     }
@@ -3501,7 +3591,7 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     for (let i = 0; i < total; i++) {
       const cc = classOf[i];
       c.set(pal[Math.floor(h01(i, 37) * pal.length) % pal.length]);
-      c.offsetHSL(mono ? 0 : (h01(i, 59) - 0.5) * 0.05, 0, (h01(i, 61) - 0.5) * 0.12);
+      c.offsetHSL(mono ? 0 : (h01(i, 59) - 0.5) * 0.08, 0, (h01(i, 61) - 0.5) * 0.12);
       bodies[cc].setColorAt(local[i], c);
       if (rotors[cc]) rotors[cc].setColorAt(local[i], c);
       if (cc === 0) thrusters.setColorAt(local[i], c);
@@ -3523,7 +3613,7 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     if (swarmColors && swarmGeo) {
       for (let i = 0; i < swarmCap; i++) {
         c.set(pal[Math.floor(h01(i, 173) * pal.length) % pal.length]);
-        c.offsetHSL(mono ? 0 : (h01(i, 179) - 0.5) * 0.05, 0, (h01(i, 181) - 0.5) * 0.12);
+        c.offsetHSL(mono ? 0 : (h01(i, 179) - 0.5) * 0.08, 0, (h01(i, 181) - 0.5) * 0.12);
         swarmColors[i * 3 + 0] = c.r;
         swarmColors[i * 3 + 1] = c.g;
         swarmColors[i * 3 + 2] = c.b;
@@ -3536,7 +3626,11 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     const cc = classOf[i];
     const V = VEHICLE_CLASSES[cc];
     assignRoute(i, 0);
-    t[i] = h01(i, 17);
+    const L0 = lanes[laneIdx[i]];
+    const isClosed0 = L0.nextIdx !== undefined && L0.prevIdx !== undefined;
+    t[i] = cc === 5
+      ? ((local[i] / Math.max(1, classCount[5])) + h01(i, 17) * 0.12) % 1
+      : (isClosed0 ? h01(i, 17) : (0.12 + 0.76 * h01(i, 17)));
     phase[i] = h01(i, 19) * Math.PI * 2;
     scl[i] = V.scale * (0.82 + h01(i, 29) * 0.4);
   }
@@ -3643,11 +3737,13 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     yaw += (o.sway || 0);
     bank += (o.roll || 0);
 
-    const portal = posCur.closed
-      ? 1
-      : smoothstep(0, 0.035, posCur.tt) * smoothstep(1, 0.965, posCur.tt);
+    const canContinueEnd = posCur.closed || (L.directed && nextLane[i] >= 0);
+    const canContinueStart = posCur.closed || (L.directed && prevLane[i] >= 0);
+    const startPortal = canContinueStart ? 1 : smoothstep(0, 0.11, posCur.tt);
+    const endPortal = canContinueEnd ? 1 : smoothstep(1, 0.89, posCur.tt);
+    const portal = startPortal * endPortal * respawnFade[i];
 
-    p.set(posCur.x, posCur.y, posCur.z);
+    p.set(posCur.x, posCur.y + blimpSepY[i], posCur.z);
     e.set(0, yaw + (o.spinY || 0), pitch, 'YXZ');
     q.setFromEuler(e);
     if (bank !== 0) {
@@ -3661,7 +3757,7 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
         qw * cx - qx * sx
       );
     }
-    const sc = scl[i] * (o.pulse || 1) * (0.15 + 0.85 * portal);
+    const sc = scl[i] * (o.pulse || 1) * portal;
     s.set(sc * (o.stretch || 1), sc, sc * (o.wMul || 1));
     m.compose(p, q, s);
   };
@@ -3803,8 +3899,6 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
   const transitStations = (city.transit && Array.isArray(city.transit.stations)) ? city.transit.stations : [];
 
   // View-Frustum & Distance Culling state for hero vehicles + GPU swarm scaling
-  let cullFrustum = null;
-  let cullCamX = 0, cullCamY = 0, cullCamZ = 0;
   let cullMaxDistSq = Infinity;
   let swarmQualityFrac = 1.0;
   let lastVisibleHeroCount = 0;
@@ -3813,12 +3907,63 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
   const cullTestSphere = new THREE.Sphere();
   const zeroMat = new THREE.Matrix4().makeScale(0, 0, 0);
 
+  // Live 3D separation between giant 112m Blimps (class 5) so they never crowd or pass too close!
+  function applyBlimpSeparation(n, dt) {
+    if (blimpIndices.length < 2 || dt <= 0) return;
+    const minSep = 330;
+    const kSep = 1 - Math.exp(-Math.min(0.15, dt) * 2.6);
+    for (let a = 0; a < blimpIndices.length; a++) {
+      const i = blimpIndices[a];
+      if (i >= n) continue;
+      evalLane(lanes[laneIdx[i]], Math.max(0, Math.min(1, t[i])), tmp);
+      lastWorldPos[i * 3 + 0] = tmp.x;
+      lastWorldPos[i * 3 + 1] = (laneY(lanes[laneIdx[i]], t[i]) + vOf[i]) * curHeightScale + blimpSepY[i];
+      lastWorldPos[i * 3 + 2] = tmp.z;
+    }
+    for (let a = 0; a < blimpIndices.length; a++) {
+      const i = blimpIndices[a];
+      if (i >= n || overrides.has(i)) continue;
+      let wantMul = 1.0;
+      let wantY = 0.0;
+      evalLane(lanes[laneIdx[i]], Math.max(0, Math.min(1, t[i])), tmp);
+      const fwdX = tmp.dx * dir[i];
+      const fwdZ = tmp.dz * dir[i];
+      const ix = lastWorldPos[i * 3 + 0];
+      const iy = lastWorldPos[i * 3 + 1];
+      const iz = lastWorldPos[i * 3 + 2];
+      for (let b = 0; b < blimpIndices.length; b++) {
+        if (a === b) continue;
+        const j = blimpIndices[b];
+        if (j >= n) continue;
+        const rx = lastWorldPos[j * 3 + 0] - ix;
+        const ry = lastWorldPos[j * 3 + 1] - iy;
+        const rz = lastWorldPos[j * 3 + 2] - iz;
+        const d3 = Math.hypot(rx, ry, rz);
+        if (d3 < minSep && d3 > 1e-3) {
+          const urg = (minSep - d3) / minSep;
+          const aheadDot = (rx * fwdX + rz * fwdZ) / Math.max(1, Math.hypot(rx, rz));
+          if (aheadDot > 0.05 || (Math.abs(aheadDot) <= 0.05 && i > j)) {
+            wantMul = Math.min(wantMul, Math.max(0.34, 1.0 - urg * 0.72));
+          } else {
+            wantMul = Math.max(wantMul, Math.min(1.22, 1.0 + urg * 0.25));
+          }
+          const ySign = ry === 0 ? (i < j ? 1 : -1) : (ry > 0 ? -1 : 1);
+          wantY += ySign * urg * 42;
+        }
+      }
+      wantY = Math.max(-46, Math.min(46, wantY));
+      blimpSepMul[i] += (wantMul - blimpSepMul[i]) * kSep;
+      blimpSepY[i] += (wantY - blimpSepY[i]) * kSep;
+    }
+  }
+
   function setViewCull(frustum, camPos, maxDist = 3400, swarmFrac = 1.0) {
     cullFrustum = frustum || null;
     if (camPos) {
       cullCamX = camPos.x || 0;
       cullCamY = camPos.y || 0;
       cullCamZ = camPos.z || 0;
+      hasCamPose = true;
     }
     const d = Number.isFinite(maxDist) && maxDist > 0 ? maxDist : 3400;
     cullMaxDistSq = d * d;
@@ -3863,11 +4008,15 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
     let visCount = 0;
     let cullCount = 0;
     if (collision && dt > 0) applyCollision(n);
+    if (dt > 0) applyBlimpSeparation(n, dt);
     const dampK = dt > 0 ? (1 - Math.exp(-dt * 4.5)) : 1;
     for (let i = 0; i < n; i++) {
       const cc = classOf[i];
       if (cc === 2 && curTransitAmt <= 0.01) continue;
       if (cc === 2 && curTransitAmt < 1.0 && local[i] >= Math.max(1, Math.ceil(classCount[2] * curTransitAmt))) continue;
+      if (respawnFade[i] < 1.0 && dt > 0) {
+        respawnFade[i] = Math.min(1.0, respawnFade[i] + dt * 1.25);
+      }
       const V = VEHICLE_CLASSES[cc];
       const L = lanes[laneIdx[i]];
       const ph = phase[i];
@@ -3917,6 +4066,7 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
         const hv = Math.sin(elapsed * 0.31 + ph * 3.1);
         if (hv > 0.84) targetThrottle *= 0.32;
       }
+      if (cc === 5) targetThrottle *= blimpSepMul[i];
       dynThrottle[i] += (targetThrottle - dynThrottle[i]) * dampK;
       const throttle = dynThrottle[i];
       if (!collision) spd[i] = baseSpd[i];
@@ -3960,12 +4110,12 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
       const isDeck0 = (curL.nominalLayer || curL.layer) === 'ground';
       const li = local[i];
 
-      // Fast View-Frustum & Horizon Culling for off-screen traffic (skips Matrix4/Quaternion/Coach/Beam CPU & GPU work!)
+      // Fast View-Frustum & Horizon Culling for off-screen traffic (440m near-camera immunity sphere prevents edge pops!)
       if (cullFrustum && !ov) {
         evalLane(curL, Math.max(0, Math.min(1, t[i])), tmp);
         const approxY = curL.railLoop
           ? (laneY(curL, t[i]) + 2.2)
-          : (isDeck0 ? Math.max(5.2, laneY(curL, t[i])) : (laneY(curL, t[i]) + vOf[i]) * curHeightScale);
+          : (isDeck0 ? Math.max(5.2, laneY(curL, t[i])) : (laneY(curL, t[i]) + vOf[i]) * curHeightScale + blimpSepY[i]);
         lastWorldPos[i * 3 + 0] = tmp.x;
         lastWorldPos[i * 3 + 1] = approxY;
         lastWorldPos[i * 3 + 2] = tmp.z;
@@ -3973,11 +4123,11 @@ export function makeVehicles(city, trailMat, count = 260, collider = null, opts 
         const dyC = approxY - cullCamY;
         const dzC = tmp.z - cullCamZ;
         const distSq = dxC * dxC + dyC * dyC + dzC * dzC;
-        const boundR = cc === 2 ? 155 : (cc === 5 ? 185 : 68);
+        const boundR = cc === 2 ? 195 : (cc === 5 ? 235 : 112);
         cullTestSphere.center.set(tmp.x, approxY, tmp.z);
         cullTestSphere.radius = boundR;
         const classDistLimSq = (cc === 5 || cc === 2) ? cullMaxDistSq * 2.2 : cullMaxDistSq;
-        if (distSq > 22500 && (distSq > classDistLimSq || !cullFrustum.intersectsSphere(cullTestSphere))) {
+        if (distSq > 193600 && (distSq > classDistLimSq || !cullFrustum.intersectsSphere(cullTestSphere))) {
           active[cc]++;
           cullCount++;
           if (!wasCulled[i]) {
@@ -6260,6 +6410,9 @@ export function applyLook(U, look, tune = { win: 1, glow: 1, fog: 1 }) {
   if (tune.vehLight !== undefined && U.uVehLight) U.uVehLight.value = tune.vehLight;
   if (tune.trailMode !== undefined && U.uTrailMode) U.uTrailMode.value = tune.trailMode;
   if (tune.trailLength !== undefined && U.uTrailLen) U.uTrailLen.value = tune.trailLength;
+  if (tune.colorVar !== undefined && U.uColorVar) {
+    U.uColorVar.value = ((sig.billMono ?? 0) > 0.5) ? 0 : Math.max(0, Math.min(1.5, tune.colorVar));
+  }
   if (tune.clouds !== undefined) {
     const clTune = Math.max(0, tune.clouds);
     const baseCloud = (look.sky.cloud === 0 && clTune > 1.02) ? 0.34 : look.sky.cloud;
@@ -6519,6 +6672,9 @@ export function applyTime(U, look, hours = 12, tune = { lights: 1, glow: 1 }) {
   if (tune.windAngle !== undefined && U.uWindAngle) U.uWindAngle.value = (tune.windAngle * Math.PI) / 180;
   if (tune.windStrength !== undefined && U.uWindStrength) U.uWindStrength.value = tune.windStrength;
   if (tune.tint !== undefined && U.uTint) U.uTint.value = tune.tint;
+  if (tune.colorVar !== undefined && U.uColorVar) {
+    U.uColorVar.value = (look.signals && look.signals.billMono > 0.5) ? 0 : Math.max(0, Math.min(1.5, tune.colorVar));
+  }
   if (tune.signAmt !== undefined && U.uSignAmt) U.uSignAmt.value = tune.signAmt;
   if (tune.megaWrap !== undefined && U.uMegaWrap) U.uMegaWrap.value = tune.megaWrap;
   if (tune.glyphStyle !== undefined && U.uGlyphStyle) U.uGlyphStyle.value = tune.glyphStyle;
@@ -6573,61 +6729,164 @@ export function buildTransitInfrastructure(city, U, lampMat = null) {
   const pierMat = makeLandmarkMaterial(U, '#3b4456', 0);
   const stationMat = makeLandmarkMaterial(U, '#506078', 2);
   const lineGlowMats = transit.lines.map((ln) => makeCurvedBasicMaterial(U, ln.color || '#53d9ff'));
+  const wakeMat = new THREE.ShaderMaterial({
+    vertexShader: TRANSIT_WAKE_VERT,
+    fragmentShader: TRANSIT_WAKE_FRAG,
+    uniforms: pick(U, ['uTime', 'uLightK', 'uVehLight', 'uBillMono', 'uWorldCurve', 'uPlanetR']),
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+  });
 
   const beamBoxes = [];
   const pierBoxes = [];
   const lampPts = [];
   const lampPhases = [];
   const lampSizes = [];
+  const wakePos = [];
+  const wakeUv = [];
+  const wakeCol = [];
+  const wakeIdx = [];
+  const wakeLineIds = [];
+  let bracketCount = 0;
+  let strutCount = 0;
+
+  const stations = transit.stations || [];
 
   for (let lIdx = 0; lIdx < transit.lines.length; lIdx++) {
     const ln = transit.lines[lIdx];
     const yG = ln.y;
-    const glowMat = lineGlowMats[lIdx];
+    const supports = Array.isArray(ln.supports) ? ln.supports : [];
+    const baseLineCol = col(ln.color || '#53d9ff');
 
+    // 1. Render grounded vertical pier struts & cantilevered building sky-brackets!
+    for (let pIdx = 0; pIdx < supports.length; pIdx++) {
+      const sp = supports[pIdx];
+      if (sp.kind === 'bracket' && Number.isFinite(sp.bx) && Number.isFinite(sp.bz)) {
+        const dx = sp.bx - sp.x;
+        const dz = sp.bz - sp.z;
+        const span = Math.hypot(dx, dz);
+        if (span > 1.5 && span < 68) {
+          const rotB = Math.atan2(dx, dz);
+          const armLen = span + 3.0;
+          const mx = sp.x + dx * 0.5;
+          const mz = sp.z + dz * 0.5;
+          // Horizontal cantilevered box girder into adjacent skyscraper facade + T-cradle
+          pierBoxes.push({ x: mx, y: sp.y - 1.15, z: mz, w: 1.9, h: 1.15, d: armLen, rot: rotB, pitch: 0 });
+          pierBoxes.push({ x: sp.x, y: sp.y - 0.85, z: sp.z, w: 5.4, h: 0.75, d: 3.2, rot: sp.rot || 0, pitch: 0 });
+          // Diagonal steel knee-brace anchored lower on the building column
+          const dropY = Math.min(11.0, Math.max(4.5, sp.y * 0.28));
+          const diagLen = Math.hypot(span, dropY) + 2.4;
+          const diagPitch = Math.atan2(dropY, span);
+          pierBoxes.push({
+            x: mx,
+            y: sp.y - 1.3 - dropY * 0.5,
+            z: mz,
+            w: 1.1,
+            h: 0.85,
+            d: diagLen,
+            rot: rotB,
+            pitch: diagPitch,
+          });
+          bracketCount++;
+        }
+      } else {
+        const gY = Number.isFinite(sp.groundY) ? sp.groundY : 0;
+        const colH = Math.max(3.0, sp.y - gY + 1.6);
+        const colCenterY = gY - 1.2 + colH * 0.5;
+        pierBoxes.push({ x: sp.x, y: colCenterY, z: sp.z, w: 2.4, h: colH, d: 2.4, rot: sp.rot || 0, pitch: 0 });
+        pierBoxes.push({ x: sp.x, y: sp.y - 0.9, z: sp.z, w: 5.8, h: 0.95, d: 3.4, rot: sp.rot || 0, pitch: 0 });
+        strutCount++;
+      }
+    }
+
+    // Helper: only place physical guideway deck segments where directly anchored by a station or support!
+    const hasLocalSupport = (qx, qz) => {
+      for (let i = 0; i < supports.length; i++) {
+        const sp = supports[i];
+        const dx = qx - sp.x, dz = qz - sp.z;
+        if (dx * dx + dz * dz <= 54 * 54) return true;
+      }
+      for (let i = 0; i < stations.length; i++) {
+        const st = stations[i];
+        if (st.lineId !== lIdx) continue;
+        const dx = qx - st.x, dz = qz - st.z;
+        if (dx * dx + dz * dz <= 48 * 48) return true;
+      }
+      return false;
+    };
+
+    let cumArc = 0;
     for (let s = 0; s < ln.segments.length; s++) {
       const sg = ln.segments[s];
-      const steps = sg.straight ? Math.max(4, Math.ceil(Math.hypot(sg.x2 - sg.x1, sg.z2 - sg.z1) / 96)) : 6;
-      for (let k = 0; k < steps; k++) {
-        const t0 = k / steps;
-        const t1 = (k + 1) / steps;
-        const u0 = 1 - t0, u1 = 1 - t1;
-        const x0 = u0 * u0 * sg.x1 + 2 * u0 * t0 * sg.cx + t0 * t0 * sg.x2;
-        const z0 = u0 * u0 * sg.z1 + 2 * u0 * t0 * sg.cz + t0 * t0 * sg.z2;
-        const x1 = u1 * u1 * sg.x1 + 2 * u1 * t1 * sg.cx + t1 * t1 * sg.x2;
-        const z1 = u1 * u1 * sg.z1 + 2 * u1 * t1 * sg.cz + t1 * t1 * sg.z2;
+      const steps = sg.straight ? Math.max(5, Math.ceil(Math.hypot(sg.x2 - sg.x1, sg.z2 - sg.z1) / 76)) : 8;
+      const halfW = 3.1;
+      let prevVertBase = -1;
+      for (let k = 0; k <= steps; k++) {
+        const tS = k / steps;
+        const uS = 1 - tS;
+        const px = uS * uS * sg.x1 + 2 * uS * tS * sg.cx + tS * tS * sg.x2;
+        const pz = uS * uS * sg.z1 + 2 * uS * tS * sg.cz + tS * tS * sg.z2;
         const syA = sg.y1 !== undefined ? sg.y1 : yG;
         const syB = sg.y2 !== undefined ? sg.y2 : yG;
-        const y0 = syA + (syB - syA) * (t0 * t0 * (3 - 2 * t0));
-        const y1 = syA + (syB - syA) * (t1 * t1 * (3 - 2 * t1));
-        const horizLen = Math.hypot(x1 - x0, z1 - z0) || 1;
-        const segLen = Math.hypot(horizLen, y1 - y0) || 1;
-        const mx = (x0 + x1) * 0.5;
-        const my = (y0 + y1) * 0.5;
-        const mz = (z0 + z1) * 0.5;
-        const rot = Math.atan2(x1 - x0, z1 - z0);
-        const slopePitch = -Math.atan2(y1 - y0, horizLen);
-        beamBoxes.push({ x: mx, y: my - 0.7, z: mz, w: 5.6, h: 1.35, d: segLen + 0.6, rot, pitch: slopePitch });
+        const py = syA + (syB - syA) * (tS * tS * (3 - 2 * tS));
+        const tx = 2 * uS * (sg.cx - sg.x1) + 2 * tS * (sg.x2 - sg.cx);
+        const tz = 2 * uS * (sg.cz - sg.z1) + 2 * tS * (sg.z2 - sg.cz);
+        const tLen = Math.hypot(tx, tz) || 1;
+        const nx = -tz / tLen;
+        const nz = tx / tLen;
+        if (k > 0) {
+          const prevBase = prevVertBase;
+          const prevMidX = (wakePos[prevBase * 3] + wakePos[(prevBase + 1) * 3]) * 0.5;
+          const prevMidY = (wakePos[prevBase * 3 + 1] + wakePos[(prevBase + 1) * 3 + 1]) * 0.5;
+          const prevMidZ = (wakePos[prevBase * 3 + 2] + wakePos[(prevBase + 1) * 3 + 2]) * 0.5;
+          const dHoriz = Math.hypot(px - prevMidX, pz - prevMidZ) || 1;
+          cumArc += dHoriz;
 
-        const strip = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.36, segLen + 0.4), glowMat);
-        strip.position.set(mx, my - 0.15, mz);
-        strip.rotation.order = 'YXZ';
-        strip.rotation.y = rot;
-        strip.rotation.x = slopePitch;
-        strip.frustumCulled = false;
-        group.add(strip);
-
-        if (sg.straight && y0 < 95 && k > 0) {
-          pierBoxes.push({ x: x0, y: y0 * 0.5, z: z0, w: 2.3, h: y0 - 0.8, d: 2.3, rot, pitch: 0 });
+          const mx = (px + prevMidX) * 0.5;
+          const my = (py + prevMidY) * 0.5 + 0.35;
+          const mz = (pz + prevMidZ) * 0.5;
+          if (hasLocalSupport(mx, mz)) {
+            const segLen = Math.hypot(dHoriz, py - prevMidY) || 1;
+            const rot = Math.atan2(px - prevMidX, pz - prevMidZ);
+            const slopePitch = -Math.atan2(py - prevMidY, dHoriz);
+            beamBoxes.push({ x: mx, y: my - 0.72, z: mz, w: 4.8, h: 1.05, d: segLen + 0.5, rot, pitch: slopePitch });
+          }
         }
+        const vBase = wakePos.length / 3;
+        wakePos.push(px - nx * halfW, py - 0.12, pz - nz * halfW);
+        wakePos.push(px + nx * halfW, py - 0.12, pz + nz * halfW);
+        wakeUv.push(cumArc / 95.0, 0);
+        wakeUv.push(cumArc / 95.0, 1);
+        wakeCol.push(baseLineCol.r, baseLineCol.g, baseLineCol.b, baseLineCol.r, baseLineCol.g, baseLineCol.b);
+        wakeLineIds.push(lIdx, lIdx);
+        if (prevVertBase >= 0) {
+          wakeIdx.push(prevVertBase, prevVertBase + 1, vBase, prevVertBase + 1, vBase + 1, vBase);
+        }
+        prevVertBase = vBase;
       }
     }
   }
 
-  const mkInst = (list, mat) => {
+  let wakeGeo = null;
+  if (wakePos.length >= 6 && wakeIdx.length >= 3) {
+    wakeGeo = new THREE.BufferGeometry();
+    wakeGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(wakePos), 3));
+    wakeGeo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(wakeUv), 2));
+    wakeGeo.setAttribute('aColor', new THREE.BufferAttribute(new Float32Array(wakeCol), 3));
+    wakeGeo.setIndex(wakeIdx);
+    const wakeMesh = new THREE.Mesh(wakeGeo, wakeMat);
+    wakeMesh.frustumCulled = false;
+    wakeMesh.name = 'transitWakeGuideway';
+    group.add(wakeMesh);
+  }
+
+  const mkInst = (list, mat, name) => {
     if (!list.length) return;
     const geo = new THREE.BoxGeometry(1, 1, 1);
     const mesh = new THREE.InstancedMesh(geo, mat, list.length);
+    mesh.name = name || '';
     mesh.frustumCulled = false;
     const m = new THREE.Matrix4();
     const q = new THREE.Quaternion();
@@ -6646,12 +6905,12 @@ export function buildTransitInfrastructure(city, U, lampMat = null) {
     mesh.instanceMatrix.needsUpdate = true;
     group.add(mesh);
   };
-  mkInst(beamBoxes, guideMat);
-  mkInst(pierBoxes, pierMat);
+  mkInst(beamBoxes, guideMat, 'transitSupportedDeck');
+  mkInst(pierBoxes, pierMat, 'transitSupports');
 
   // Elevated glass-canopy Transit Stations
-  for (let i = 0; i < (transit.stations || []).length; i++) {
-    const st = transit.stations[i];
+  for (let i = 0; i < stations.length; i++) {
+    const st = stations[i];
     const stGroup = new THREE.Group();
     stGroup.position.set(st.x, st.y, st.z);
     stGroup.rotation.y = st.rot;
@@ -6702,11 +6961,46 @@ export function buildTransitInfrastructure(city, U, lampMat = null) {
     group.add(pts);
   }
 
+  group.userData.transitStats = {
+    bracketCount,
+    strutCount,
+    supportedBeamCount: beamBoxes.length,
+    wakeVertCount: wakePos.length / 3,
+  };
+
   group.setLook = (look) => {
     const pal = computeSpecialPalette(look, U, 0.37);
     guideMat.uniforms.uCol.value.copy(pal.secondary);
     pierMat.uniforms.uCol.value.copy(pal.pad);
     stationMat.uniforms.uCol.value.copy(pal.gallery);
+    const isMono = !!(look && look.signals && look.signals.billMono > 0.5);
+    const tintAmt = U && U.uTint ? clamp01(U.uTint.value) : 0.75;
+    const lookSwatches = look && look.signals
+      ? [look.accent, look.signals.billA, look.signals.billB].filter(Boolean)
+      : [];
+    const tmpC = new THREE.Color();
+    for (let lIdx = 0; lIdx < lineGlowMats.length; lIdx++) {
+      const origHex = transit.lines[lIdx].color || '#53d9ff';
+      tmpC.set(origHex);
+      if (isMono) {
+        const l = tmpC.r * 0.299 + tmpC.g * 0.587 + tmpC.b * 0.114;
+        tmpC.setRGB(l, l, l);
+      } else if (lookSwatches.length) {
+        const sw = col(lookSwatches[lIdx % lookSwatches.length]);
+        tmpC.lerp(sw, tintAmt * 0.68);
+      }
+      lineGlowMats[lIdx].color.copy(tmpC);
+    }
+    if (wakeGeo) {
+      const cAttr = wakeGeo.getAttribute('aColor');
+      for (let v = 0; v < wakeLineIds.length; v++) {
+        const mc = lineGlowMats[wakeLineIds[v] % lineGlowMats.length].color;
+        cAttr.array[v * 3 + 0] = mc.r;
+        cAttr.array[v * 3 + 1] = mc.g;
+        cAttr.array[v * 3 + 2] = mc.b;
+      }
+      cAttr.needsUpdate = true;
+    }
   };
   return group;
 }
@@ -7216,6 +7510,13 @@ export function buildHarbor(city, U, beaconMat = null, lampMat = null, opts = {}
     boatCol.set(isMonoHarbor ? '#b6b6b6' : ((look && look.signals && look.signals.lamp) || '#ffd894'));
   }
 
+  const shipAng = new Float64Array(activeShips.length);
+  const shipThrottle = new Float32Array(activeShips.length).fill(1.0);
+  const shipCrossOff = new Float32Array(activeShips.length);
+  for (let i = 0; i < activeShips.length; i++) {
+    shipAng[i] = (activeShips[i].spec.phase || 0) * Math.PI * 2;
+  }
+
   function update(dt) {
     elapsed += dt;
     for (let i = 0; i < boatMeshes.length; i++) {
@@ -7223,19 +7524,59 @@ export function buildHarbor(city, U, beaconMat = null, lampMat = null, opts = {}
       b.mesh.position.y = b.baseY + Math.sin(elapsed * 1.4 + b.phase) * 0.22;
       b.mesh.rotation.z = Math.sin(elapsed * 1.1 + b.phase) * 0.035;
     }
+
+    // Live separation between underway offshore ships (docked pier vessels are exempt!)
+    if (dt > 0 && activeShips.length > 1) {
+      const minShipSep = 350;
+      const kShip = 1 - Math.exp(-Math.min(0.15, dt) * 2.4);
+      for (let i = 0; i < activeShips.length; i++) {
+        const sA = activeShips[i];
+        if (sA.spec.docked) continue;
+        let wantThrot = 1.0;
+        let wantCross = 0.0;
+        const yawA = sA.mesh.rotation.y;
+        const fwdX = Math.sin(yawA), fwdZ = Math.cos(yawA);
+        for (let j = 0; j < activeShips.length; j++) {
+          if (i === j) continue;
+          const sB = activeShips[j];
+          if (sB.spec.docked) continue;
+          const rx = sB.mesh.position.x - sA.mesh.position.x;
+          const rz = sB.mesh.position.z - sA.mesh.position.z;
+          const d = Math.hypot(rx, rz);
+          if (d < minShipSep && d > 1e-3) {
+            const urg = (minShipSep - d) / minShipSep;
+            const ahead = (rx * fwdX + rz * fwdZ) / d;
+            if (ahead > 0.05 || (Math.abs(ahead) <= 0.05 && i > j)) {
+              wantThrot = Math.min(wantThrot, Math.max(0.32, 1.0 - urg * 0.75));
+            } else {
+              wantThrot = Math.max(wantThrot, Math.min(1.24, 1.0 + urg * 0.26));
+            }
+            const outProj = rx * sA.spec.outX + rz * sA.spec.outZ;
+            const cSign = outProj === 0 ? (i > j ? 1 : -1) : (outProj > 0 ? -1 : 1);
+            wantCross += cSign * urg * 95;
+          }
+        }
+        wantCross = Math.max(-85, Math.min(130, wantCross));
+        shipThrottle[i] += (wantThrot - shipThrottle[i]) * kShip;
+        shipCrossOff[i] += (wantCross - shipCrossOff[i]) * kShip;
+      }
+    }
+
     for (let i = 0; i < activeShips.length; i++) {
       const { spec, mesh } = activeShips[i];
       if (spec.docked) {
         mesh.position.y = spec.y + Math.sin(elapsed * 0.65 + spec.seed * 6) * 0.25;
         mesh.rotation.z = Math.sin(elapsed * 0.52 + spec.seed * 6) * 0.014;
       } else {
-        // Smooth oval offshore sea-lane cruise!
-        const omega = spec.speed / Math.max(300, spec.sweepSpan);
-        const ang = elapsed * omega + spec.phase * Math.PI * 2;
+        // Smooth oval offshore sea-lane cruise with live underway ship separation!
+        const omega = (spec.speed * shipThrottle[i]) / Math.max(300, spec.sweepSpan);
+        shipAng[i] += omega * dt;
+        const ang = shipAng[i];
+        const crossAmp = spec.crossAmp ?? 135;
         const along = Math.sin(ang) * spec.sweepSpan;
-        const cross = Math.cos(ang) * 145;
-        const vx = spec.tanX * Math.cos(ang) * spec.sweepSpan - spec.outX * Math.sin(ang) * 145;
-        const vz = spec.tanZ * Math.cos(ang) * spec.sweepSpan - spec.outZ * Math.sin(ang) * 145;
+        const cross = Math.cos(ang) * crossAmp + shipCrossOff[i];
+        const vx = spec.tanX * Math.cos(ang) * spec.sweepSpan - spec.outX * Math.sin(ang) * crossAmp;
+        const vz = spec.tanZ * Math.cos(ang) * spec.sweepSpan - spec.outZ * Math.sin(ang) * crossAmp;
         const dirSign = spec.speed >= 0 ? 1 : -1;
         mesh.position.set(
           spec.cx + spec.tanX * along + spec.outX * cross,

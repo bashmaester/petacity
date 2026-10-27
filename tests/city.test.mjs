@@ -837,6 +837,65 @@ test('Phase-20 city: zero crossed portal holos, 7+ planar/Archimedean/abstract h
   assert.equal(bare.extraHolos.length, 0);
 });
 
+test('Phase-25 city: magneticFieldAt repulsion & canyon equilibrium, grounded/bracketed transit supports, and separated offshore ships', () => {
+  const city = generateCity({ seed: 4417, radius: 5, transitAmt: 1.0, harborAmt: 1.2 });
+  const col = makeCityCollider(city);
+  assert.equal(typeof col.magneticFieldAt, 'function', 'collider exposes magneticFieldAt');
+  assert.equal(typeof col.findNearestBuildingAnchor, 'function', 'collider exposes findNearestBuildingAnchor');
+
+  // Synthetic 2-tower canyon check: repulsion pushes away from walls and cancels at centerline x = 0
+  const canyon = makeCityCollider({
+    count: 2,
+    x: new Float32Array([-25, 25]),
+    y: new Float32Array([80, 80]),
+    z: new Float32Array([0, 0]),
+    w: new Float32Array([30, 30]), // inner walls at x = -10 and x = +10
+    h: new Float32Array([160, 160]),
+    d: new Float32Array([80, 80]),
+    rot: new Float32Array([0, 0]),
+    landmarks: [],
+    waterMode: 4,
+    waterAmt: 0,
+    terrainMode: 4,
+    terrainScale: 0,
+  });
+  const mfRight = canyon.magneticFieldAt(6, 50, 0, 40, 1);
+  assert.ok(mfRight.fx < -0.1, `near +10m wall, magnetic force pushes toward -X (fx=${mfRight.fx.toFixed(3)})`);
+  assert.ok(Math.abs(mfRight.minDist - 4) < 0.05, `exact signed wall clearance minDist=${mfRight.minDist.toFixed(2)}`);
+  const mfCenter = canyon.magneticFieldAt(0, 50, 0, 40, 1);
+  assert.ok(Math.abs(mfCenter.fx) < 1e-5, `opposing canyon walls cancel symmetrically at x=0 (fx=${mfCenter.fx})`);
+
+  const anchor = canyon.findNearestBuildingAnchor(6, 50, 0, 20);
+  assert.ok(anchor && Math.abs(anchor.wx - 10) < 0.2, 'findNearestBuildingAnchor snaps cleanly onto tower facade');
+
+  // Transit lines stay in urban canopy, carry structural brackets/struts, and never clip obstacles
+  assert.equal(city.transit.active, true);
+  for (const ln of city.transit.lines) {
+    assert.ok(Array.isArray(ln.supports) && ln.supports.length >= 4, `line ${ln.id} carries structural supports`);
+    for (const sp of ln.supports) {
+      assert.ok(sp.kind === 'bracket' || sp.kind === 'strut', `valid support kind=${sp.kind}`);
+      if (sp.kind === 'bracket') {
+        assert.ok(Number.isFinite(sp.bx) && Number.isFinite(sp.bz), 'bracket records building facade anchor');
+      } else {
+        assert.ok(Number.isFinite(sp.groundY) && sp.y > sp.groundY, 'strut stands above dry ground');
+      }
+    }
+    for (const sg of ln.segments) {
+      assert.equal(col.hitsPoint(sg.x1, sg.y1 + 1.5, sg.z1, 1.8, 1), false, 'transit segment endpoint stays outside buildings');
+    }
+  }
+
+  // Harbor offshore moving ships (!docked) start well separated while docked ships remain at piers
+  const movingShips = (city.harbor.ships || []).filter((s) => !s.docked);
+  for (let i = 0; i < movingShips.length; i++) {
+    for (let j = i + 1; j < movingShips.length; j++) {
+      const dist = Math.hypot(movingShips[i].x - movingShips[j].x, movingShips[i].z - movingShips[j].z);
+      assert.ok(dist >= 280, `offshore underway ships start separated (dist=${dist.toFixed(1)}m)`);
+    }
+  }
+});
+
+
 
 
 

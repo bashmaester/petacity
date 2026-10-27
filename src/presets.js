@@ -279,6 +279,7 @@ const DEF_TUNE = {
   holoScan: 1,
   trailMode: 1,
   trailLength: 1,
+  colorVar: 0.45,
 };
 
 const DEF_RADIO = {

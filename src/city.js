@@ -3708,7 +3708,163 @@ export function makeCityCollider(city) {
     return hit;
   }
 
-  return { groundHeightAt, maxHeightNear, hitsPoint, resolveSphere };
+  /**
+   * Smooth 3D magnetic repulsion field around buildings, landmarks, and terrain.
+   * Opposing facades across an avenue cancel cleanly on the canyon midline, steering
+   * the camera between buildings with generous clearance before physical contact.
+   */
+  function magneticFieldAt(px, py, pz, range = 48, heightScale = 1, out = null) {
+    const res = out || { fx: 0, fy: 0, fz: 0, minDist: range };
+    res.fx = 0;
+    res.fy = 0;
+    res.fz = 0;
+    res.minDist = range;
+    const R = Math.max(4, range);
+
+    const gY = groundHeightAt(px, pz);
+    const gClear = py - gY;
+    const gRange = Math.min(28, R * 0.65);
+    if (gClear < gRange) {
+      const gu = Math.max(0, gClear) / Math.max(1, gRange);
+      const gw = (1 - gu) * (1 - gu) / (0.22 + gu * 0.78);
+      res.fy += gw * 1.15;
+      if (gClear < res.minDist) res.minDist = Math.max(0, gClear);
+    }
+
+    stamp = (stamp + 1) | 0 || 1;
+    const x0 = Math.floor((px - R) / B);
+    const x1 = Math.floor((px + R) / B);
+    const z0 = Math.floor((pz - R) / B);
+    const z1 = Math.floor((pz + R) / B);
+    for (let ix = x0; ix <= x1; ix++) {
+      for (let iz = z0; iz <= z1; iz++) {
+        const arr = buckets.get(keyOf(ix, iz));
+        if (!arr) continue;
+        for (let a = 0; a < arr.length; a++) {
+          const idx = arr[a];
+          if (seen[idx] === stamp) continue;
+          seen[idx] = stamp;
+          const b = boxes[idx];
+          const top = b.top * heightScale;
+          const bot = b.bot * heightScale;
+          const roofOver = py - top;
+          if (roofOver > 16 || py < bot - 8) continue;
+
+          const dx = px - b.cx;
+          const dz = pz - b.cz;
+          if (Math.abs(dx) > b.rad + R || Math.abs(dz) > b.rad + R) continue;
+          const lx = dx * b.cos - dz * b.sin;
+          const lz = dx * b.sin + dz * b.cos;
+          const sdx = Math.abs(lx) - b.hw;
+          const sdz = Math.abs(lz) - b.hd;
+          const ox = Math.max(0, sdx);
+          const oz = Math.max(0, sdz);
+          const horizD = Math.hypot(ox, oz);
+          const vAbove = Math.max(0, roofOver);
+          const d = Math.hypot(horizD, vAbove);
+          if (d >= R) continue;
+          if (d < res.minDist) res.minDist = d;
+
+          // Smooth vertical taper near roof crest so repulsion lifts & fades seamlessly above roofs
+          const vGate = roofOver <= 0 ? 1.0 : Math.max(0, 1 - roofOver / 16);
+          const u = d / R;
+          const strength = ((1 - u) * (1 - u) / (0.16 + u * 0.84)) * vGate;
+
+          let nlx = 0;
+          let nlz = 0;
+          if (horizD > 1e-4) {
+            nlx = (lx >= 0 ? 1 : -1) * (ox / horizD);
+            nlz = (lz >= 0 ? 1 : -1) * (oz / horizD);
+          } else {
+            // Inside XZ footprint: push outward through nearest facade wall
+            if (sdx > sdz) nlx = lx >= 0 ? 1 : -1;
+            else nlz = lz >= 0 ? 1 : -1;
+          }
+          const nwx = nlx * b.cos + nlz * b.sin;
+          const nwz = -nlx * b.sin + nlz * b.cos;
+          res.fx += nwx * strength;
+          res.fz += nwz * strength;
+
+          if (py > top - 22 && top < 140) {
+            const roofProx = Math.max(0, 1 - Math.abs(py - top) / 22);
+            res.fy += strength * roofProx * 0.65;
+          }
+        }
+      }
+    }
+
+    for (let i = 0; i < discs.length; i++) {
+      const o = discs[i];
+      const top = o.top * heightScale;
+      const roofOver = py - top;
+      if (roofOver > 16) continue;
+      if (o.arch && py < top * 0.62 && Math.hypot(px - o.cx, pz - o.cz) < o.r * 0.52) continue;
+      const dx = px - o.cx;
+      const dz = pz - o.cz;
+      const centerD = Math.hypot(dx, dz);
+      const horizD = Math.max(0, centerD - o.r);
+      const d = Math.hypot(horizD, Math.max(0, roofOver));
+      if (d >= R) continue;
+      if (d < res.minDist) res.minDist = d;
+      const vGate = roofOver <= 0 ? 1.0 : Math.max(0, 1 - roofOver / 16);
+      const u = d / R;
+      const strength = ((1 - u) * (1 - u) / (0.16 + u * 0.84)) * vGate;
+      const inv = centerD > 1e-4 ? (1 / centerD) : 0;
+      res.fx += (inv > 0 ? dx * inv : 1) * strength;
+      res.fz += (inv > 0 ? dz * inv : 0) * strength;
+    }
+
+    return res;
+  }
+
+  /**
+   * Finds the nearest adjacent building facade at altitude `py` within `maxDist`
+   * so elevated transit viaducts can anchor cantilevered sky-brackets into real towers.
+   */
+  function findNearestBuildingAnchor(px, py, pz, maxDist = 42, heightScale = 1) {
+    stamp = (stamp + 1) | 0 || 1;
+    let best = null;
+    let bestD = maxDist;
+    const x0 = Math.floor((px - maxDist) / B);
+    const x1 = Math.floor((px + maxDist) / B);
+    const z0 = Math.floor((pz - maxDist) / B);
+    const z1 = Math.floor((pz + maxDist) / B);
+    for (let ix = x0; ix <= x1; ix++) {
+      for (let iz = z0; iz <= z1; iz++) {
+        const arr = buckets.get(keyOf(ix, iz));
+        if (!arr) continue;
+        for (let a = 0; a < arr.length; a++) {
+          const idx = arr[a];
+          if (seen[idx] === stamp) continue;
+          seen[idx] = stamp;
+          const b = boxes[idx];
+          const top = b.top * heightScale;
+          const bot = b.bot * heightScale;
+          if (top < py + 1.5 || bot > py - 2.0) continue;
+          if (Math.min(b.hw, b.hd) < 5.5) continue;
+          const dx = px - b.cx;
+          const dz = pz - b.cz;
+          const lx = dx * b.cos - dz * b.sin;
+          const lz = dx * b.sin + dz * b.cos;
+          const clx = Math.max(-b.hw, Math.min(b.hw, lx));
+          const clz = Math.max(-b.hd, Math.min(b.hd, lz));
+          const d = Math.hypot(lx - clx, lz - clz);
+          if (d >= 3.5 && d < bestD) {
+            bestD = d;
+            best = {
+              wx: b.cx + clx * b.cos + clz * b.sin,
+              wz: b.cz - clx * b.sin + clz * b.cos,
+              dist: d,
+              top,
+            };
+          }
+        }
+      }
+    }
+    return best;
+  }
+
+  return { groundHeightAt, maxHeightNear, hitsPoint, resolveSphere, magneticFieldAt, findNearestBuildingAnchor };
 }
 
 /** Street-level grit: kiosks, sheds, containers and light poles around a lot. */
@@ -4043,7 +4199,8 @@ function makeTransitNetwork(seed, radius, collider, inWater, transitAmt = 1.0, c
   const innerG = radius >= 4 ? 4 : Math.max(1, Math.min(2, radius));
   const midG = Math.max(2, Math.min(radius, 2));
   const outerG = Math.max(2, Math.min(radius, Math.floor(radius / 2) * 2 || 2));
-  const reachG = Math.max(innerG, radius);
+  const reachG = radius >= 4 ? Math.max(innerG, radius - 1) : Math.max(innerG, radius);
+  const maxCoreCoord = radius * CELL;
 
   const coastDist = (px, pz) => {
     if (!coastCfg) return 9999.0;
@@ -4052,15 +4209,26 @@ function makeTransitNetwork(seed, radius, collider, inWater, transitAmt = 1.0, c
       coastCfg.terrainSeedX, coastCfg.terrainSeedZ, coastCfg.shoreDist, coastCfg.waterAmount
     );
   };
+  const stepInlandStreet = (px, pz, ca, sa) => {
+    const sx = ca >= 0 ? -CELL : CELL;
+    const sz = sa >= 0 ? -CELL : CELL;
+    const dX = coastDist(px + sx, pz);
+    const dZ = coastDist(px, pz + sz);
+    const dXZ = coastDist(px + sx, pz + sz);
+    if (dX >= dZ && dX >= dXZ - 6) return [px + sx, pz];
+    if (dZ >= dX && dZ >= dXZ - 6) return [px, pz + sz];
+    return [px + sx, pz + sz];
+  };
   const retractNodeDry = (pt) => {
-    let { x, z, yOff = 0 } = pt;
+    let x = Math.round(pt.x / CELL) * CELL;
+    let z = Math.round(pt.z / CELL) * CELL;
+    const yOff = pt.yOff || 0;
     if (!coastCfg) return { x, z, yOff };
     const ca = Math.cos(coastCfg.coastAngle || 0.7);
     const sa = Math.sin(coastCfg.coastAngle || 0.7);
     let guard = 0;
-    while (coastDist(x, z) < 34.0 && guard++ < 28) {
-      x -= ca * (CELL * 0.5);
-      z -= sa * (CELL * 0.5);
+    while (coastDist(x, z) < 38.0 && guard++ < 20) {
+      [x, z] = stepInlandStreet(x, z, ca, sa);
     }
     return { x, z, yOff };
   };
@@ -4073,17 +4241,31 @@ function makeTransitNetwork(seed, radius, collider, inWater, transitAmt = 1.0, c
       let wet = false;
       for (let i = 0; i < nodes.length; i++) {
         const a = nodes[i], b = nodes[(i + 1) % nodes.length];
-        for (const f of [0.25, 0.5, 0.75]) {
-          if (coastDist(a.x + (b.x - a.x) * f, a.z + (b.z - a.z) * f) < 22.0) {
+        for (const f of [0.0, 0.25, 0.5, 0.75, 1.0]) {
+          if (coastDist(a.x + (b.x - a.x) * f, a.z + (b.z - a.z) * f) < 24.0) {
             wet = true;
             break;
           }
         }
+        if (wet) break;
       }
       if (!wet) break;
-      nodes = nodes.map((nd) => ({ x: nd.x - ca * (CELL * 0.5), z: nd.z - sa * (CELL * 0.5), yOff: nd.yOff }));
+      const sx = Math.abs(ca) >= Math.abs(sa) ? (ca >= 0 ? -CELL : CELL) : 0;
+      const sz = sx === 0 ? (sa >= 0 ? -CELL : CELL) : (Math.abs(sa) > 0.38 ? (sa >= 0 ? -CELL : CELL) : 0);
+      nodes = nodes.map((nd) => ({ x: nd.x + sx, z: nd.z + sz, yOff: nd.yOff }));
     }
-    return nodes;
+    // Remove consecutive duplicate nodes after grid snapping while keeping >= 4 nodes
+    const dedup = [];
+    for (let i = 0; i < nodes.length; i++) {
+      const prev = dedup[dedup.length - 1];
+      if (!prev || Math.hypot(nodes[i].x - prev.x, nodes[i].z - prev.z) > 12) {
+        dedup.push(nodes[i]);
+      }
+    }
+    if (dedup.length >= 4 && Math.hypot(dedup[0].x - dedup[dedup.length - 1].x, dedup[0].z - dedup[dedup.length - 1].z) <= 12) {
+      dedup.pop();
+    }
+    return dedup.length >= 4 ? dedup : nodes;
   };
 
   // 3 architecturally distinct, multi-waypoint scenic transit trajectories:
@@ -4175,36 +4357,120 @@ function makeTransitNetwork(seed, radius, collider, inWater, transitAmt = 1.0, c
 
   for (let lIdx = 0; lIdx < routeDefs.length; lIdx++) {
     const sp = routeDefs[lIdx];
-    const dryNodes = ensureLoopDry(sp.nodes);
-    const rawSegs = makeRoundedPolySegments(dryNodes, sp.cr);
+    const clampCoreNodes = (nds) => nds.map((nd) => ({
+      x: Math.max(-maxCoreCoord, Math.min(maxCoreCoord, nd.x)),
+      z: Math.max(-maxCoreCoord, Math.min(maxCoreCoord, nd.z)),
+      yOff: nd.yOff,
+    }));
+    let dryNodes = ensureLoopDry(clampCoreNodes(sp.nodes));
+    const useCr = Math.min(16, sp.cr || 16);
+    let rawSegs = makeRoundedPolySegments(dryNodes, useCr);
     let yRail = sp.baseY;
     let foundClear = false;
-    for (let tryStep = 0; tryStep < 20; tryStep++) {
-      const yTry = sp.baseY + tryStep * 9.0;
-      if (isLoopClearAtY(rawSegs, yTry)) {
-        yRail = yTry;
-        foundClear = true;
-        break;
-      }
-    }
-    if (!foundClear && collider) {
-      let maxTop = sp.baseY;
-      for (const sg of rawSegs) {
-        for (let k = 0; k <= 12; k++) {
-          const t = k / 12, om = 1 - t;
-          const px = om * om * sg.x1 + 2 * om * t * sg.cx + t * t * sg.x2;
-          const pz = om * om * sg.z1 + 2 * om * t * sg.cz + t * t * sg.z2;
-          const top = collider.maxHeightNear(px, pz, 24);
-          if (top + 28 > maxTop) maxTop = top + 28;
+    const gridShifts = [[0, 0], [CELL, 0], [-CELL, 0], [0, CELL], [0, -CELL]];
+    for (let gIdx = 0; gIdx < gridShifts.length && !foundClear; gIdx++) {
+      const [gx, gz] = gridShifts[gIdx];
+      const candNodes = gIdx === 0
+        ? dryNodes
+        : ensureLoopDry(clampCoreNodes(sp.nodes.map((nd) => ({ x: nd.x + gx, z: nd.z + gz, yOff: nd.yOff }))));
+      const candSegs = gIdx === 0 ? rawSegs : makeRoundedPolySegments(candNodes, useCr);
+      for (let tryStep = 0; tryStep < 10; tryStep++) {
+        const yTry = sp.baseY + tryStep * 5.5;
+        if (isLoopClearAtY(candSegs, yTry)) {
+          dryNodes = candNodes;
+          rawSegs = candSegs;
+          yRail = yTry;
+          foundClear = true;
+          break;
         }
       }
-      yRail = maxTop;
     }
+    if (!foundClear) {
+      yRail = sp.baseY + 18.0;
+    }
+
     const segs = rawSegs.map((sg) => ({
       ...sg,
       y1: yRail + (sg.yOff1 || 0),
       y2: yRail + (sg.yOff2 || 0),
     }));
+
+    // Continuous C0/C1 obstacle-clearance pass: if any skybridge, rotated tower, or monument
+    // intrudes into a segment, lift its shared junction elevations smoothly above the obstacle!
+    if (collider && segs.length > 0) {
+      const nS = segs.length;
+      const juncY = segs.map((sg) => sg.y1);
+      for (let pass = 0; pass < 3; pass++) {
+        for (let s = 0; s < nS; s++) {
+          const sg = segs[s];
+          const nextS = (s + 1) % nS;
+          let reqY = 0;
+          for (let k = 0; k <= 12; k++) {
+            const t = k / 12;
+            const om = 1 - t;
+            const px = om * om * sg.x1 + 2 * om * t * sg.cx + t * t * sg.x2;
+            const pz = om * om * sg.z1 + 2 * om * t * sg.cz + t * t * sg.z2;
+            const py = juncY[s] * om + juncY[nextS] * t;
+            if (collider.hitsPoint(px, py, pz, 4.8) || collider.hitsPoint(px, py + 2.2, pz, 4.8)) {
+              const top = collider.maxHeightNear(px, pz, 5.5) + 6.5;
+              if (top > reqY) reqY = top;
+            }
+          }
+          if (reqY > juncY[s]) juncY[s] = reqY;
+          if (reqY > juncY[nextS]) juncY[nextS] = reqY;
+        }
+      }
+      for (let s = 0; s < nS; s++) {
+        segs[s].y1 = juncY[s];
+        segs[s].y2 = juncY[(s + 1) % nS];
+      }
+    }
+
+    // Structural supports: attach sky-brackets directly to adjacent skyscrapers or plant grounded struts on dry land
+    const supports = [];
+    for (let s = 0; s < segs.length; s++) {
+      const sg = segs[s];
+      const segLen = Math.hypot(sg.x2 - sg.x1, sg.z2 - sg.z1);
+      const count = sg.straight ? Math.max(1, Math.floor(segLen / 84)) : (segLen > 42 ? 1 : 0);
+      for (let k = 0; k < count; k++) {
+        const t = (k + 0.5) / count;
+        const om = 1 - t;
+        const px = om * om * sg.x1 + 2 * om * t * sg.cx + t * t * sg.x2;
+        const pz = om * om * sg.z1 + 2 * om * t * sg.cz + t * t * sg.z2;
+        const py = sg.y1 + (sg.y2 - sg.y1) * (t * t * (3 - 2 * t));
+        const dx = 2 * om * (sg.cx - sg.x1) + 2 * t * (sg.x2 - sg.cx);
+        const dz = 2 * om * (sg.cz - sg.z1) + 2 * t * (sg.z2 - sg.cz);
+        const rot = Math.atan2(dx, dz);
+        const anchor = collider && collider.findNearestBuildingAnchor
+          ? collider.findNearestBuildingAnchor(px, py, pz, 40)
+          : null;
+        if (anchor && anchor.dist <= 38) {
+          supports.push({
+            kind: 'bracket',
+            x: px,
+            y: py,
+            z: pz,
+            bx: anchor.wx,
+            bz: anchor.wz,
+            ax: anchor.wx,
+            az: anchor.wz,
+            rot,
+          });
+        } else if (!(inWater && inWater(px, pz, 5.5))) {
+          const gY = (collider && collider.groundHeightAt) ? collider.groundHeightAt(px, pz) : 0;
+          if (py - gY >= 4 && py - gY <= 96) {
+            supports.push({
+              kind: 'strut',
+              x: px,
+              y: py,
+              z: pz,
+              groundY: gY,
+              rot,
+            });
+          }
+        }
+      }
+    }
 
     lines.push({
       id: lIdx,
@@ -4213,6 +4479,7 @@ function makeTransitNetwork(seed, radius, collider, inWater, transitAmt = 1.0, c
       y: yRail,
       speed: sp.speed,
       segments: segs,
+      supports,
     });
 
     // Place elevated transit stations along dry straight avenue legs (sampling 1/4, 1/2, 3/4 span for clear pockets)
@@ -4457,12 +4724,14 @@ function makeHarbor(seed, radius, water, waterMode, waterAmount, coastAngle, coa
   };
 
   // Offshore Cruising Fleet (Container Ships & Luxury Cruise Liners steaming across open sea/lake with live Kelvin V-wakes!)
+  // Separated into distinct radial shipping lanes (`>= 320m` apart) + staggered orbital phases so moving ships never bunch up!
   if (waterMode === 1 || waterMode === 2 || waterMode === 3) {
     const cruiseFleet = Math.max(2, Math.min(10, Math.round(4 * maritimeAmt)));
     for (let s = 0; s < cruiseFleet; s++) {
       const isCruise = s % 2 === 1;
-      const distOut = (waterMode === 3 ? 520 : 620) + s * 240 + hash2i(s, 593, seed) * 180;
-      const sweepSpan = waterMode === 3 ? 680 : 1850 + s * 220;
+      const distOut = (waterMode === 3 ? 540 : 660) + s * 330 + hash2i(s, 593, seed) * 75;
+      const sweepSpan = waterMode === 3 ? 720 + s * 95 : 1850 + s * 260;
+      const evenPhase = (s / Math.max(1, cruiseFleet) + (hash2i(s, 599, seed) - 0.5) * 0.10 + 1.0) % 1.0;
       ships.push({
         kind: isCruise ? 'cruise' : 'container',
         docked: false,
@@ -4472,7 +4741,7 @@ function makeHarbor(seed, radius, water, waterMode, waterAmount, coastAngle, coa
         outX, outZ,
         sweepSpan,
         speed: (isCruise ? 22 : 17) * (s % 2 === 0 ? 1 : -1),
-        phase: hash2i(s, 599, seed),
+        phase: evenPhase,
         y: 0.15,
         len: (isCruise ? 210 : 195) + hash2i(s, 601, seed) * 40,
         wid: isCruise ? 28 : 30,

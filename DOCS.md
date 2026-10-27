@@ -165,6 +165,8 @@ To prevent open-ocean blotchiness and screen-space Moiré shimmer at grazing ang
 - **Keyboard Shortcuts & `localStorage` Starting State (`petacity.lastState.v1`)**:
   - `P` toggles Autopilot (`G` retained as alias; `Shift+P` plays recorded camera path), and `M` toggles Music.
   - `Shift+↑` / `Shift+↓` smoothly speeds up / slows down camera speed (`0.1×` steps above `0.1×`, and fine `0.01×` steps across `0.00×..0.10×`), and `Shift+←` / `Shift+→` crossfades to the previous / next music track.
+  - **Double-Click Viewport Raycast Flight & City-Limit Veer-Back**: Double-clicking any building, bridge, street, or park in the 3D viewport raycasts the exact surface point and queues a smooth collision-safe approach destination (`computeSafeDestinationFromHit`); double-clicking open sky smoothly aligns flight heading along that ray (`setCourseHeading`). Flying well past `controls.cityLimitRadius` gently banks the camera back toward the city center.
+  - **Magnetic-Field Collision Cushion, Open-Gap Gaze & Palette Color Variation (`#sl-color-var` / `colorVar`)**: Continuous 3D building repulsion fields (`collider.magneticFieldAt`) smoothly curve trajectories away from facades and center cleanly through narrow `7.8m` canyon cracks without wall-scraping, while `_computeOpenGazeOffset` aims camera gaze into open gaps and gently favors nearby unvisited POIs. Alongside `Tint` (`#sl-tint`, palette adherence), `Palette Color Variation` (`#sl-color-var`, `?cv=`, WebMCP `petacity_set_environment({ colorVar })`) governs cross-palette borrowing across building outlines/windows/lights plus luminance-preserving chromatic excursions (`Metropolis` stays strictly monochrome).
   - Whenever Petacity boots without explicit URL/demo scene parameters, it automatically restores the user's saved starting state from `localStorage` (`petacity.lastState.v1`) and persists subsequent changes cleanly without polluting `location.search`.
 
 ---
@@ -175,6 +177,6 @@ To prevent open-ocean blotchiness and screen-space Moiré shimmer at grazing ang
 # Start local static server on port 8000
 npm run serve   # or: python3 -m http.server 8000 --bind 0.0.0.0
 
-# Run full 95-test Node verification suite (city, scene, shaders, holos, trails, optics, anti-wobble Drone-DP gaze, Dubins route steering, transitions, culling, 14-station music sync, WebMCP, UI contract & JSDOM boot)
+# Run full 98-test Node verification suite (city, scene, shaders, holos, trails, optics, magnetic collision + open-gap gaze, transit supports/wakes, vehicle separation/fade, colorVar, WebMCP, UI contract & JSDOM boot)
 npm test
 ```

@@ -1029,7 +1029,8 @@ export function registerPetacityWebMCP({
             type: 'string',
             enum: ['bladerunner', 'realistic', 'anime', 'abstract', 'tron', 'outrun', 'clay', 'metropolis', 'custom'],
           },
-          tint: { type: 'number', minimum: 0, maximum: 1, description: 'Style tint intensity (`0` = neutral realism .. `1` = signature look).' },
+          tint: { type: 'number', minimum: 0, maximum: 1, description: 'Palette adherence (`1` = closely faithful to the look palette .. `0` = natural materials & wider chromatic excursion).' },
+          colorVar: { type: 'number', minimum: 0, maximum: 1.2, description: 'Cross-palette swatch borrowing & color variation (`0` = uniform swatches .. `1.2` = rich intra-palette & spectral variation).' },
           customPalette: {
             type: 'object',
             description: 'Custom look palette colors & shader style (automatically switches `look` to `custom` if `activate: true`).',

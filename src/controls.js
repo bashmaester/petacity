@@ -101,7 +101,7 @@ export function stepCameraSpeed(currentSpeed, dir, { min = 0, max = 3.5 } = {}) 
 }
 
 export class FlyControls {
-  constructor(camera, dom) {
+  constructor(camera, dom, opts = {}) {
     this.camera = camera;
     this.dom = dom;
     this.enabled = true;
@@ -181,6 +181,7 @@ export class FlyControls {
     this.heightScale = 1;
     this.worldCurve = 0;
     this.planetR = 2100;
+    this.cityLimitRadius = opts.cityLimitRadius || 3600;
 
     this.keys = new Set();
     this.yaw = 0;
@@ -194,6 +195,10 @@ export class FlyControls {
     this._moveYawVel = 0;
     this._movePitchVel = 0;
     this._manualCourseSteered = false;
+    this._headingHoldTimer = 0;
+    this._openGazeYaw = 0;
+    this._openGazePitch = 0;
+    this._magTmp = { fx: 0, fy: 0, fz: 0, minDist: 64 };
 
     this._drag = null;
     this._idle = 3;
@@ -706,25 +711,91 @@ export class FlyControls {
   }
 
   /**
-   * Soft proximity potential field around nearby walls so the camera glides silkily
-   * along narrow alleys/facades without harsh discrete contact stuttering.
+   * Smooth magnetic cushion field around nearby walls so the camera curves away
+   * with generous clearance before physical sphere contact ever occurs.
    */
   _applyWallProximityCushion(p, dt) {
     if (!this.collision || !this.collider || this.worldCurve >= 0.05) return;
     const rad = Math.max(0.4, this.colliderRadius || 2.2);
+    const spd = Math.hypot(this._vel.x, this._vel.z);
+
+    if (typeof this.collider.magneticFieldAt === 'function') {
+      const magRange = Math.max(22, Math.min(54, 18 + spd * 0.24 + rad * 3.0));
+      const mf = this.collider.magneticFieldAt(p.x, p.y, p.z, magRange, this.heightScale, this._magTmp);
+      const cushionR = Math.max(9.2, rad * 3.8);
+      const safeShell = Math.max(3.6, rad * 1.62);
+      const fLen = Math.hypot(mf.fx, mf.fz);
+      if (fLen > 1e-4 && mf.minDist < cushionR) {
+        const nx = mf.fx / fLen;
+        const nz = mf.fz / fLen;
+        const into = -(this._vel.x * nx + this._vel.z * nz); // > 0 when moving toward wall
+        const cushionT = (cushionR - mf.minDist) / cushionR;
+        const closeK = mf.minDist < safeShell ? (safeShell - mf.minDist) / safeShell : 0;
+        const vDirX = spd > 1e-3 ? this._vel.x / spd : 0;
+        const vDirZ = spd > 1e-3 ? this._vel.z / spd : 0;
+        const wallDirectlyAhead = spd > 0.5 && this.collider.hitsPoint(
+          p.x + vDirX * Math.max(6.0, rad * 3.0),
+          p.y,
+          p.z + vDirZ * Math.max(6.0, rad * 3.0),
+          rad * 1.12,
+          this.heightScale
+        );
+        if ((into > 0.25 && wallDirectlyAhead) || closeK > 0) {
+          // Cancel inward wall-slamming velocity when heading into a real wall & add smooth magnetic stand-off!
+          if (into > 0.25 && wallDirectlyAhead) {
+            const brake = Math.min(1, dt * (6.5 + 14.0 * Math.max(cushionT, Math.min(1, into / 35))));
+            this._vel.x += nx * into * brake;
+            this._vel.z += nz * into * brake;
+            // Redirect kinetic energy tangentially along the open canyon side instead of stalling against the facade!
+            const tx = -nz;
+            const tz = nx;
+            const tangDot = this._vel.x * tx + this._vel.z * tz;
+            const tangSign = Math.abs(tangDot) > 0.5 ? Math.sign(tangDot) : (this._avoidSide >= 0 ? 1 : -1);
+            const redirect = into * brake * 0.52 * cushionT;
+            this._vel.x += tx * tangSign * redirect;
+            this._vel.z += tz * tangSign * redirect;
+          }
+          if (closeK > 0) {
+            if (wallDirectlyAhead) {
+              const pushSpd = Math.min(28, (8 + spd * 0.28) * closeK * closeK);
+              const pStep = pushSpd * Math.min(1, dt * 8.0);
+              this._vel.x += nx * pStep;
+              this._vel.z += nz * pStep;
+            } else {
+              // Overdamped magnetic levitation centering (zero overshoot inside narrow canyon cracks!)
+              const fwdProj = nx * vDirX + nz * vDirZ;
+              const latX = nx - vDirX * fwdProj;
+              const latZ = nz - vDirZ * fwdProj;
+              const latLen = Math.hypot(latX, latZ);
+              if (latLen > 1e-4) {
+                const ux = latX / latLen;
+                const uz = latZ / latLen;
+                const curLatV = this._vel.x * ux + this._vel.z * uz;
+                const wantLatV = Math.min(6.0, fLen * 4.5 * closeK);
+                const dv = (wantLatV - curLatV) * Math.min(1, dt * 9.0);
+                this._vel.x += ux * dv;
+                this._vel.z += uz * dv;
+              }
+            }
+          }
+        }
+      }
+      if (mf.fy > 0.04 && this._vel.y < 14) {
+        this._vel.y += Math.min(24, mf.fy * 12) * dt;
+      }
+      return;
+    }
+
     const feelR = rad + Math.max(1.8, rad * 0.95);
     if (!this.collider.hitsPoint(p.x, p.y, p.z, feelR, this.heightScale)) return;
 
-    // Estimate smooth outward gradient via 4-axis symmetric probe
     const eps = Math.max(1.2, rad * 0.7);
-    let gx = 0;
-    let gz = 0;
     const hPx = this.collider.hitsPoint(p.x + eps, p.y, p.z, rad * 1.15, this.heightScale) ? 1 : 0;
     const hMx = this.collider.hitsPoint(p.x - eps, p.y, p.z, rad * 1.15, this.heightScale) ? 1 : 0;
     const hPz = this.collider.hitsPoint(p.x, p.y, p.z + eps, rad * 1.15, this.heightScale) ? 1 : 0;
     const hMz = this.collider.hitsPoint(p.x, p.y, p.z - eps, rad * 1.15, this.heightScale) ? 1 : 0;
-    gx = hMx - hPx;
-    gz = hMz - hPz;
+    let gx = hMx - hPx;
+    let gz = hMz - hPz;
     const gl = Math.hypot(gx, gz);
     if (gl > 1e-3) {
       gx /= gl;
@@ -788,6 +859,8 @@ export class FlyControls {
     this._smoothCourseRate = 0;
     this._freeYawOff = 0;
     this._freePitchOff = 0;
+    this._openGazeYaw = 0;
+    this._openGazePitch = 0;
     this.roll = 0;
     this._vel.set(0, 0, 0);
     this._avoidSide = 0;
@@ -799,6 +872,88 @@ export class FlyControls {
     this._avoidLiftVel = 0;
     this._outEuler.set(this.pitch, this.yaw, this.cameraRoll || 0, 'YXZ');
     this.camera.quaternion.setFromEuler(this._outEuler);
+  }
+
+  /**
+   * Smoothly steer course heading (used when double-clicking open sky with no raycast hit).
+   */
+  setCourseHeading(yaw, pitch = null, opts = {}) {
+    if (!Number.isFinite(yaw)) return;
+    if (!opts.keepRoute) {
+      this.routeQueue.length = 0;
+    }
+    if (opts.engageGlide !== false && !this.glide) {
+      this.setGlide(true);
+    }
+    const baseYaw = (this.freelook || (this.glide && this.autoLook)) ? this.moveYaw : this.yaw;
+    const nextYaw = baseYaw + wrapAngleDelta(yaw - baseYaw);
+    this._targetMoveYaw = nextYaw;
+    this._targetYaw = nextYaw;
+    if (Number.isFinite(pitch)) {
+      const clampedP = Math.max(-0.55, Math.min(0.55, pitch));
+      this._targetMovePitch = clampedP;
+      this._targetPitch = clampedP;
+    }
+    this._freeYawOff = 0;
+    this._freePitchOff = 0;
+    this._manualCourseSteered = true;
+    this._headingHoldTimer = opts.holdSeconds ?? 22.0;
+    this._idle = 0;
+  }
+
+  /**
+   * Computes a collision-safe air vantage point just short of a 3D raycast intersection
+   * so double-clicking a building/bridge/street approaches cleanly without colliding.
+   */
+  computeSafeDestinationFromHit(hitPoint, camPos = this.camera.position, standOff = 42) {
+    if (!hitPoint) return null;
+    const hx = hitPoint.x || 0;
+    const hy = hitPoint.y || 0;
+    const hz = hitPoint.z || 0;
+    const dx = camPos.x - hx;
+    const dy = camPos.y - hy;
+    const dz = camPos.z - hz;
+    const dist = Math.hypot(dx, dy, dz) || 1;
+    const back = Math.min(dist * 0.65, Math.max(28, standOff));
+    let wx = hx + (dx / dist) * back;
+    let wy = hy + (dy / dist) * back + 6;
+    let wz = hz + (dz / dist) * back;
+
+    const col = this.collider;
+    const rad = Math.max(2.2, this.colliderRadius || 2.2);
+    const safePad = rad + 18;
+    if (col) {
+      const gY = col.groundHeightAt ? col.groundHeightAt(wx, wz) : 0;
+      if (wy < gY + 18) wy = gY + 18;
+      if (typeof col.magneticFieldAt === 'function') {
+        const tmp = { fx: 0, fy: 0, fz: 0, minDist: safePad };
+        for (let iter = 0; iter < 5; iter++) {
+          col.magneticFieldAt(wx, wy, wz, safePad + 14, this.heightScale, tmp);
+          if (tmp.minDist >= safePad && !col.hitsPoint(wx, wy, wz, safePad * 0.75, this.heightScale)) break;
+          const fl = Math.hypot(tmp.fx, tmp.fz);
+          if (fl > 1e-4) {
+            const step = Math.max(8, safePad - tmp.minDist + 4);
+            wx += (tmp.fx / fl) * step;
+            wz += (tmp.fz / fl) * step;
+          } else {
+            wy += 12;
+          }
+          const gIter = col.groundHeightAt ? col.groundHeightAt(wx, wz) : 0;
+          if (wy < gIter + 18) wy = gIter + 18;
+        }
+      } else if (col.hitsPoint(wx, wy, wz, safePad, this.heightScale)) {
+        const top = col.maxHeightNear(wx, wz, safePad) * this.heightScale;
+        wy = Math.max(wy, top + 16);
+      }
+    }
+    return {
+      x: wx,
+      y: wy,
+      z: wz,
+      lookX: hx,
+      lookY: hy,
+      lookZ: hz,
+    };
   }
 
   setGlide(on) {
@@ -903,18 +1058,93 @@ export class FlyControls {
     const dz = tz - p.z;
     const dist = Math.hypot(dx, dy, dz);
     if (dist < 18) return true;
-    const checkLen = Math.min(dist * 0.76, 310);
+    const checkLen = Math.min(dist * 0.84, 340);
     const inv = 1 / dist;
     const ux = dx * inv;
     const uy = dy * inv;
     const uz = dz * inv;
-    for (let s = 1; s <= 5; s++) {
-      const d = (s / 5) * checkLen;
-      if (this.collider.hitsPoint(p.x + ux * d, p.y + uy * d, p.z + uz * d, 1.4, this.heightScale)) {
+    for (let s = 1; s <= 7; s++) {
+      const d = (s / 7) * checkLen;
+      if (this.collider.hitsPoint(p.x + ux * d, p.y + uy * d, p.z + uz * d, 4.2, this.heightScale)) {
         return false;
       }
     }
     return true;
+  }
+
+  /**
+   * Steers camera gaze gently away from building walls & facade grazing so the lens
+   * always looks down open canyon gaps, plazas, and sky spaces rather than into glass/brick.
+   */
+  _computeOpenGazeOffset(p, baseYaw, basePitch, dt) {
+    const decay = Math.exp(-dt * 2.4);
+    if (!this.collision || !this.collider || this.worldCurve >= 0.05 || this._drag) {
+      this._openGazeYaw *= decay;
+      this._openGazePitch *= decay;
+      return;
+    }
+
+    const cp = Math.cos(basePitch);
+    const sp = Math.sin(basePitch);
+    const probeRay = (yawOff, pitchOff, dist, pad) => {
+      const y = baseYaw + yawOff;
+      const pt = Math.max(-0.85, Math.min(0.85, basePitch + pitchOff));
+      const cPt = Math.cos(pt);
+      return this._probeRayClearance(
+        p.x, p.y, p.z,
+        -Math.sin(y) * cPt, Math.sin(pt), -Math.cos(y) * cPt,
+        dist, pad
+      );
+    };
+
+    const centerClear = this._probeRayClearance(
+      p.x, p.y, p.z,
+      -Math.sin(baseYaw) * cp, sp, -Math.cos(baseYaw) * cp,
+      135, 5.2
+    );
+    const cheekL = probeRay(0.22, 0, 75, 4.0);
+    const cheekR = probeRay(-0.22, 0, 75, 4.0);
+
+    let wantOffYaw = 0;
+    let wantOffPitch = 0;
+
+    if (centerClear < 0.78 || cheekL < 0.30 || cheekR < 0.30) {
+      const candYaws = [0, 0.20, -0.20, 0.40, -0.40, 0.62, -0.62, 0.86, -0.86];
+      let bestYaw = 0;
+      let bestScore = -1;
+      for (let i = 0; i < candYaws.length; i++) {
+        const cy = candYaws[i];
+        const mainC = i === 0 ? centerClear : probeRay(cy, 0, 210, 5.2);
+        if (mainC < 0.25) continue;
+        // Favor wide empty gaps (check left/right shoulders of candidate gaze slot!)
+        const shL = probeRay(cy + 0.14, 0, 145, 4.0);
+        const shR = probeRay(cy - 0.14, 0, 145, 4.0);
+        const slotWidth = mainC * 0.56 + shL * 0.22 + shR * 0.22;
+        const contPenalty = 1.0 / (1.0 + Math.abs(cy - this._openGazeYaw) * 0.55 + Math.abs(cy) * 0.32);
+        const score = Math.pow(slotWidth, 2.2) * contPenalty;
+        if (score > bestScore) {
+          bestScore = score;
+          bestYaw = cy;
+        }
+      }
+      const wallUrgency = Math.max(
+        Math.max(0, (0.78 - centerClear) / 0.78),
+        Math.max(0, (0.30 - Math.min(cheekL, cheekR)) / 0.30) * 0.65
+      );
+      wantOffYaw = bestYaw * Math.min(1, wallUrgency * 1.25);
+
+      // If horizontal canyon is tight all around, gently lift gaze toward open sky gap
+      if (bestScore < 0.28) {
+        const upClear = probeRay(bestYaw * 0.5, 0.24, 180, 4.5);
+        if (upClear > centerClear + 0.15) {
+          wantOffPitch = 0.20 * wallUrgency;
+        }
+      }
+    }
+
+    const alpha = 1 - Math.exp(-dt * 2.6);
+    this._openGazeYaw += (wantOffYaw - this._openGazeYaw) * alpha;
+    this._openGazePitch += (wantOffPitch - this._openGazePitch) * alpha;
   }
 
   _pickNextAutoLookPoi(p) {
@@ -931,24 +1161,22 @@ export class FlyControls {
     }
 
     // Experienced Drone DP Rhythm:
-    // In Mode 1 (Balanced Drone DP), hold serene, rock-steady forward flight composure for 2 out of every 3 beats
-    // (~10.5s each) so the camera glides straight and never scans back-and-forth without reason!
-    // In dedicated spotter Modes 2/3, alternate every reveal with a calm forward beat (~6.4s).
+    // Alternate calm open-canyon forward composure with gentle, motivated glances toward nearby POIs!
     const finalRouteStop = this.routeQueue.length > 0 ? this.routeQueue[this.routeQueue.length - 1] : null;
     const nearRouteDest = finalRouteStop && Math.hypot((finalRouteStop.lookX ?? finalRouteStop.x) - p.x, (finalRouteStop.lookZ ?? finalRouteStop.z) - p.z) < 760;
     if (!nearRouteDest && gMode !== 4 && this._gazeBeatCount > 1) {
-      const restBeat = gMode === 1 ? (this._gazeBeatCount % 3 !== 1) : (this._gazeBeatCount % 2 === 0);
+      const restBeat = (this._gazeBeatCount % 2 === 0);
       if (restBeat) {
         this._gazeKind = 'forward';
-        this._autoLookDuration = gMode === 1 ? 10.5 : 6.4;
+        this._autoLookDuration = gMode === 1 ? 6.8 : 6.0;
         return null;
       }
     }
 
     const candidates = [];
-    // Mode 1 uses a calm forward cone (0.72 rad = 41 deg) so balanced flight never cranks sideways;
+    // Mode 1 uses a natural forward-hemisphere cone (0.96 rad = 55 deg) for nearby POIs;
     // dedicated Modes 2 (Sites) & 3 (Projections) keep wide forward-hemisphere entry (1.28..1.36 rad).
-    const maxEntryYaw = gMode === 1 ? 0.72 : (gMode === 3 ? 1.36 : 1.28);
+    const maxEntryYaw = gMode === 1 ? 0.96 : (gMode === 3 ? 1.36 : 1.28);
     const nowPhase = this._autoLookPhase || 0;
 
     const continuityWeight = (brg) => {
@@ -985,29 +1213,30 @@ export class FlyControls {
 
     // 2. Hero Landmarks, Architecture, Bridges, Harbor & Park (`poiList`)
     if ((gMode === 1 || gMode === 2) && Array.isArray(this.poiList)) {
-      const maxSiteDist = gMode === 1 ? 680 : 2400;
+      const maxSiteDist = gMode === 1 ? 740 : 2400;
       for (const poi of this.poiList) {
         if (!poi || !Number.isFinite(poi.x) || !Number.isFinite(poi.z)) continue;
         if (this._autoLookPoi && poi.name === this._autoLookPoi.name && this.poiList.length > 1) continue;
         const dx = poi.x - p.x;
         const dz = poi.z - p.z;
         const dist = Math.hypot(dx, dz);
-        if (dist < 58 || dist > maxSiteDist) continue;
+        if (dist < 36 || dist > maxSiteDist) continue;
         const brg = Math.atan2(-dx, -dz);
         const relYaw = Math.abs(wrapAngleDelta(brg - this.moveYaw));
         if (relYaw > maxEntryYaw) continue;
         const lookY = poi.lookY ?? ((poi.y || 80) * 0.65);
         const clear = this._hasGazeSightline(p, poi.x, lookY, poi.z) ? 1.0 : 0.04;
         if (gMode === 1 && clear < 0.5) continue;
-        // Gentle 16-32 deg forward-quarter aerial reveal sweet spot
-        const sweetCenter = gMode === 1 ? 0.34 : 0.56;
-        const sweetSpot = 0.72 + 0.68 * Math.exp(-Math.pow((relYaw - sweetCenter) / 0.40, 2));
-        const score = (1.35 / (140 + dist)) * sweetSpot * (poi.priority || 1.0)
+        // Gentle forward-quarter aerial reveal + extra pull toward nearby unoccluded POIs
+        const sweetCenter = gMode === 1 ? 0.36 : 0.56;
+        const sweetSpot = 0.72 + 0.68 * Math.exp(-Math.pow((relYaw - sweetCenter) / 0.44, 2));
+        const nearBoost = 1.0 + 0.85 * Math.exp(-dist / 240);
+        const score = (1.55 / (115 + dist)) * nearBoost * sweetSpot * (poi.priority || 1.0)
           * continuityWeight(brg) * recencyWeight(poi.name) * clear * (gMode === 2 ? 1.65 : 1.0);
         candidates.push({
           poi: { ...poi, lookY, gazeKind: 'site' },
           score,
-          dur: 9.2 + (dist < 420 ? 2.2 : 1.2),
+          dur: 8.8 + (dist < 420 ? 1.8 : 1.0),
         });
       }
     }
@@ -1192,11 +1421,11 @@ export class FlyControls {
     //  - `steerHorizon` (225m..340m): triggers smooth course adjustment well in advance without
     //    falsely reacting to buildings half a kilometer away down a clear avenue!
     //  - `gapHorizon` (280m..540m): scores candidate cracks/avenues by deep downrange openness!
-    const steerHorizon = Math.max(225, Math.min(340, 185 + speed * 1.15));
-    const lookAhead = Math.max(280, Math.min(540, 240 + speed * 1.75));
-    // Exact passable radius (`2.95m` -> any >=6m crack is passable!) vs outer comfort sensor
-    const passPad = rad + 0.75;
-    const comfortPad = Math.max(rad + 3.0, Math.min(18, rad * 3.5));
+    const steerHorizon = Math.max(250, Math.min(430, 195 + speed * 1.55));
+    const lookAhead = Math.max(300, Math.min(580, 250 + speed * 1.85));
+    // Generous magnetic clearance envelope + exact passable crack width (threads 7.8m canyons!)
+    const passPad = rad + 0.95;
+    const comfortPad = Math.max(rad + 6.0, Math.min(20, rad * 4.0));
 
     const hLen = Math.hypot(moveDir.x, moveDir.z) || 1;
     const hx = moveDir.x / hLen;
@@ -1218,11 +1447,11 @@ export class FlyControls {
     let parallelSlotOffset = 0;
     let foundParallelSlot = false;
 
-    // Parallel Canyon-Slot Seeker: if direct ray (`fwdPass <= 0.80`) grazes one wall of a narrow
-    // two-sided building crack right ahead, check parallel laterally-shifted rays (`±1.8m, ±3.6m, ±5.6m`).
+    // Parallel Canyon-Slot Seeker: if direct ray (`fwdPass <= 0.90`) grazes one wall of a narrow
+    // two-sided building crack right ahead, check parallel laterally-shifted rays (`±0.9m..±5.6m`).
     // Only triggers when BOTH left and right canyon walls flank the slot (`wallL < 0.85 && wallR < 0.85`).
-    if (fwdPass <= 0.80) {
-      const slotShifts = [-1.8, 1.8, -3.6, 3.6, -5.6, 5.6];
+    if (fwdPass <= 0.90) {
+      const slotShifts = [-0.9, 0.9, -1.8, 1.8, -3.6, 3.6, -5.6, 5.6];
       for (let k = 0; k < slotShifts.length; k++) {
         const s = slotShifts[k];
         const sx = p.x + rx * s;
@@ -1374,10 +1603,10 @@ export class FlyControls {
           } else if (this._avoidSide === 0) {
             this._avoidSide = 1;
           }
-          // Smooth proportional steering with zero step-jump discontinuity near chosenAng == 0!
-          const minNudge = fwdPass < 0.52 ? (this._avoidSide * 0.12 * (0.52 - fwdPass)) : 0;
-          const desiredRate = (chosenAng * 1.12 + minNudge) / Math.pow(turnK, 0.58);
-          const maxAvoidTurn = 0.44 / Math.pow(turnK, 0.52);
+          // Decisive smooth proportional steering scaled with urgency so high-speed flight never slams into walls!
+          const minNudge = fwdPass < 0.55 ? (this._avoidSide * 0.20 * (0.55 - fwdPass)) : 0;
+          const desiredRate = (chosenAng * 1.25 + minNudge) / Math.pow(turnK, 0.42);
+          const maxAvoidTurn = (0.62 + 0.34 * urgency) / Math.pow(turnK, 0.42);
           wantYawRate = Math.max(-maxAvoidTurn, Math.min(maxAvoidTurn, desiredRate)) * urgency * latBlend;
         }
       }
@@ -1385,6 +1614,50 @@ export class FlyControls {
       // Slow decay on `_avoidActive` (~0.9s tail) prevents instant goal snap-back oscillation at tower corners!
       this._avoidSide *= Math.exp(-dt * 1.1);
       this._avoidActive *= Math.exp(-dt * 1.15);
+    }
+
+    // Approach-Weighted 3D Magnetic Repulsion Field (`collider.magneticFieldAt`):
+    // - Exerts ZERO force when cruising parallel along a clear avenue >= 9m from side buildings
+    //   (preserving rock-steady straight flight with zero lateral wobble).
+    // - Whenever velocity approaches a building (`approach > 0`) OR clearance drops inside `safeShell`,
+    //   smoothly bends heading & velocity away from walls and centers between opposing facades!
+    if (typeof this.collider.magneticFieldAt === 'function') {
+      const magRange = Math.max(34, Math.min(66, 26 + speed * 0.28 + rad * 3.0));
+      const mf = this.collider.magneticFieldAt(p.x, p.y, p.z, magRange, this.heightScale, this._magTmp);
+      const fLen = Math.hypot(mf.fx, mf.fz);
+      const safeShell = Math.max(6.2, rad * 2.6);
+      if (fLen > 1e-4) {
+        const nx = mf.fx / fLen;
+        const nz = mf.fz / fLen;
+        const approachCos = -(hx * nx + hz * nz); // > 0 when heading has an inward component toward wall
+        const closeK = mf.minDist < safeShell ? (safeShell - mf.minDist) / safeShell : 0;
+        const fwdBlockedK = Math.max(0, Math.min(1, (0.94 - fwdPass) / 0.28));
+        const approachGate = Math.max(0, (approachCos - 0.08) / 0.92) * fwdBlockedK;
+        if ((fwdPass > 0.85 || foundParallelSlot) && closeK > 0) {
+          // Inside an open passable slot/canyon: smoothly center laterally between walls with zero yaw S-turn!
+          const fRight = mf.fx * rx + mf.fz * rz;
+          const slideSpd = Math.max(-10, Math.min(10, fRight * (4.5 + speed * 0.06) * closeK)) / Math.sqrt(smoothK);
+          p.x += rx * slideSpd * dt;
+          p.z += rz * slideSpd * dt;
+        } else if (!foundParallelSlot) {
+          const magEngage = Math.max(closeK * fwdBlockedK, approachGate);
+          if (magEngage > 0.01) {
+            const fRight = mf.fx * rx + mf.fz * rz;
+            let magYaw = (-fRight * (0.42 + 0.35 * magEngage)) / Math.pow(turnK, 0.38);
+            // If heading nearly straight into a flat facade (`|fRight|` tiny), break symmetry cleanly toward `_avoidSide`!
+            if (Math.abs(fRight) < fLen * 0.22 && approachGate > 0.28) {
+              const symSign = this._avoidSide !== 0 ? Math.sign(this._avoidSide) : 1;
+              magYaw += symSign * fLen * approachGate * 0.42 / Math.pow(turnK, 0.38);
+            }
+            const magCap = (0.72 + 0.28 * magEngage) / Math.pow(turnK, 0.38);
+            wantYawRate = Math.max(-magCap, Math.min(magCap, wantYawRate + magYaw * magEngage));
+            this._avoidActive = Math.max(this._avoidActive || 0, Math.min(1, magEngage * 0.85));
+          }
+        }
+      }
+      if (mf.fy > 0.05 && fwdPass < 0.90 && (mf.minDist < safeShell || moveDir.y < 0.08)) {
+        wantLift += mf.fy * 9.5;
+      }
     }
 
     // 2nd-order cascaded low-pass filter on angular & vertical avoidance rates (ultra-cinematic C2 arc!)
@@ -1492,7 +1765,12 @@ export class FlyControls {
         this._manualCourseSteered = true;
       }
 
-      if (this._manualCourseSteered && this._idle > 1.2 && this.routeQueue.length === 0) {
+      if (this._headingHoldTimer > 0) {
+        this._headingHoldTimer = Math.max(0, this._headingHoldTimer - clampedDt);
+      }
+      const holdOpenHeading = this._headingHoldTimer > 0 && this.routeQueue.length === 0;
+
+      if (this._manualCourseSteered && !holdOpenHeading && this._idle > 1.2 && this.routeQueue.length === 0) {
         this._manualCourseSteered = false;
         if (this.autopilotLoop.length >= 3) {
           this._syncNearestLoopParam(true);
@@ -1505,6 +1783,7 @@ export class FlyControls {
       // Priority: 1) one-shot routeQueue -> 2) closed editable `autopilotLoop` -> 3) fallback `glideTarget`
       let activeGoal = null;
       if (this.routeQueue.length > 0) {
+        this._headingHoldTimer = 0;
         activeGoal = this.routeQueue[0];
         const wp = this.routeQueue[0];
         const distWp = Math.hypot(wp.x - p.x, (wp.y - p.y) * 0.6, wp.z - p.z);
@@ -1523,7 +1802,7 @@ export class FlyControls {
         } else if (!wp.via && this.routeQueue.length === 1 && this._routeStopOnArrive && distWp < 320) {
           routeArrivalSlowdown = Math.max(0.18, distWp / 320);
         }
-      } else if (this._idle > 1.4) {
+      } else if (!holdOpenHeading && this._idle > 1.4) {
         if (this.autopilotLoop.length >= 3) {
           activeGoal = this._advanceAutopilotLoopCarrot(clampedDt, this.glideSpeed * spdMul);
         } else {
@@ -1636,8 +1915,8 @@ export class FlyControls {
           // so the forward flight path always stays anchored in frame; dedicated Modes 2/3 allow fuller framing!
           const leadK = Math.max(0.35, Math.min(1.0, this.leadFraming ?? 0.82));
           const isVerticalShot = this._gazeKind === 'canyon_down' || this._gazeKind === 'spire_up';
-          const modeYawCap = this.gazeMode === 1 ? 0.42 : 1.22;
-          const modeLeadMul = this.gazeMode === 1 ? (isVerticalShot ? 0.25 : 0.62) : (isVerticalShot ? 0.65 : 1.0);
+          const modeYawCap = this.gazeMode === 1 ? 0.50 : 1.22;
+          const modeLeadMul = this.gazeMode === 1 ? (isVerticalShot ? 0.25 : 0.68) : (isVerticalShot ? 0.65 : 1.0);
           const framedRelYaw = Math.max(-modeYawCap, Math.min(modeYawCap, relYaw * leadK * modeLeadMul));
           const clampedPitch = Math.max(-1.05, Math.min(0.86, rawPitch * (isVerticalShot ? 0.96 : 0.88)));
 
@@ -1647,6 +1926,40 @@ export class FlyControls {
         } else {
           this._targetYaw = this.moveYaw + turnLeadYaw * safetyFocus + this._freeYawOff;
           this._targetPitch = horizonPitch + this._freePitchOff;
+        }
+
+        // Open-gap gaze deflection: never stare into or scrape gaze along building walls — favor empty canyon gaps!
+        this._computeOpenGazeOffset(p, this._targetYaw, this._targetPitch, clampedDt);
+        this._targetYaw += this._openGazeYaw;
+        this._targetPitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this._targetPitch + this._openGazePitch));
+      }
+    }
+
+    // Gentle, natural C2 veer-back toward the city skyline when flying beyond outer city limits
+    const limR = Math.max(1200, this.cityLimitRadius || 3600);
+    const softR = limR * 0.88;
+    const rXZ = Math.hypot(p.x, p.z);
+    if (rXZ > softR && this.worldCurve < 0.05 && !this._drag) {
+      const routeGoal = this.routeQueue.length > 0 ? this.routeQueue[0] : null;
+      const routeFurtherOut = routeGoal && Math.hypot(routeGoal.x, routeGoal.z) > rXZ - 60;
+      if (!routeFurtherOut) {
+        const curCourseYaw = decoupled ? this._targetMoveYaw : this._targetYaw;
+        const hx = -Math.sin(curCourseYaw);
+        const hz = -Math.cos(curCourseYaw);
+        const outDot = (hx * p.x + hz * p.z) / rXZ;
+        if (outDot > -0.35) {
+          const veerT = Math.min(1, (rXZ - softR) / Math.max(450, limR * 0.42));
+          const veerPull = quintic01(veerT) * (0.14 + 0.34 * Math.max(0, outDot + 0.35));
+          // Slight tangential bias gives a graceful wide return arc rather than a sharp hairpin
+          const homeYaw = Math.atan2(p.x, p.z);
+          const dHome = wrapAngleDelta(homeYaw - curCourseYaw);
+          const arcSign = Math.abs(dHome) > 2.5 ? (this._avoidSide >= 0 ? 1 : -1) : Math.sign(dHome || 1);
+          const maxVeerStep = (0.48 * veerPull / Math.pow(turnK, 0.45)) * clampedDt;
+          const veerStep = Math.abs(dHome) > 2.5
+            ? arcSign * maxVeerStep
+            : Math.max(-maxVeerStep, Math.min(maxVeerStep, dHome * 0.85));
+          this._targetMoveYaw += veerStep;
+          if (!decoupled) this._targetYaw += veerStep;
         }
       }
     }
